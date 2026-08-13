@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { createProjectFromInput } from '@/lib/projects/createProject';
+
+describe('createProjectFromInput', () => {
+  it('creates a minimal project with a deterministic initial GOAL node', () => {
+    const project = createProjectFromInput(
+      {
+        name: 'Find a new job',
+        goal: 'Find a higher-paying backend/AI role by November.',
+        description: 'Focus on backend and applied AI roles.',
+        deadline: '2026-11-01',
+      },
+      '2026-08-11T12:00:00.000Z'
+    );
+
+    expect(project).toMatchObject({
+      id: 'project_find-a-new-job_1786449600000',
+      title: 'Find a new job',
+      goal: 'Find a higher-paying backend/AI role by November.',
+      deadline: '2026-11-01',
+      one_sentence_context: 'Focus on backend and applied AI roles.',
+      sources: [],
+      edges: [],
+      history: [],
+      active_question: null,
+    });
+    expect(project.nodes).toEqual([
+      expect.objectContaining({
+        id: 'goal_project_find-a-new-job_1786449600000',
+        type: 'GOAL',
+        text: 'Find a higher-paying backend/AI role by November.',
+        status: 'OPEN',
+        created_by: 'user',
+        source_refs: [],
+      }),
+    ]);
+  });
+});

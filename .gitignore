@@ -1,0 +1,121 @@
+# Dependencies
+/node_modules/
+**/node_modules/
+
+# Build output and generated caches
+/.next/
+**/.next/
+/out/
+**/dist/
+**/build/
+**/coverage/
+**/.turbo/
+**/.cache/
+**/.eslintcache
+**/.stylelintcache
+**/.vitest/
+/test-results/
+/playwright-report/
+/blob-report/
+*.tsbuildinfo
+
+# Environment files and local secrets
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+/.secrets/
+/secrets.local/
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+credentials*.json
+client_secret*.json
+*service-account*.json
+*service_account*.json
+application_default_credentials.json
+oauth-token*.json
+oauth_tokens*.json
+
+# Local application data and user content
+/.gapwise-data/
+/uploads/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Python and Google ADK local state
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.coverage
+**/htmlcov/
+/agent-service/.adk/
+/agent-service/app/.adk/
+/agent-service/.google-agents-cli/
+/agent-service/.agents-cli-scripts/
+/agent-service/.saved_chats/
+/agent-service/artifacts/
+/.agents-cli-scripts/
+/artifacts/
+
+# Local Google and Firebase tooling
+/.gcloud/
+/.config/gcloud/
+/.firebase/
+/.vercel/
+/.netlify/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Infrastructure state can contain secrets
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Logs and runtime files
+*.log
+*.log.*
+*.pid
+*.pid.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local editor, OS, and AI tooling
+.DS_Store
+Thumbs.db
+**/.idea/
+**/.vscode/
+*.swp
+*.swo
+*~
+/.agents/
+/.claude/
+/.codex/
+/.cursor/
+/skills-lock.json
+
+# Temporary local scaffolding and scratch files
+/write_files.py
+/tmp/
+/temp/
+*.tmp
+*.temp

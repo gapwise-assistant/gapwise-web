@@ -1,0 +1,127 @@
+import { Project } from '@/types/clarity';
+import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { createGoldenDemoProject } from '@/lib/demo/seed';
+import { FirestoreStorageProvider } from '@/lib/storage/firestore';
+import { MockStorageProvider } from '@/lib/storage/mock';
+import { StorageMode, StorageProvider } from '@/lib/storage/types';
+import { collectionsToGeneralContext, generalContextToCollections } from '@/lib/storage/projectMapper';
+import { mergeProjectsForEverything, resolveScope } from '@/lib/scope/projectScope';
+import { createLocalDemoProjects } from '@/lib/demo/localFixtures';
+import { isDemoMode } from '@/lib/runtime/demoMode';
+
+let provider: StorageProvider | null = null;
+
+export function getStorageMode(): StorageMode {
+  if (isDemoMode()) return 'mock';
+  return process.env.USE_FIRESTORE === 'false' ? 'mock' : 'firestore';
+}
+
+export function getStorageProvider(): StorageProvider {
+  if (provider) return provider;
+  provider = getStorageMode() === 'firestore' ? new FirestoreStorageProvider() : new MockStorageProvider();
+  return provider;
+}
+
+export function resetStorageProviderForTests(): void {
+  provider = null;
+}
+
+export async function listProjects(userId: string): Promise<Project[]> {
+  const storage = getStorageProvider();
+  const existing = await storage.listProjects(userId);
+  if (existing.length) return existing;
+
+  const seeded = isDemoMode() ? createLocalDemoProjects() : [createGoldenDemoProject()];
+  for (const project of seeded) {
+    await storage.saveProject(userId, project);
+  }
+  return seeded;
+}
+
+export async function getActiveProjectId(userId: string): Promise<string | null> {
+  return getStorageProvider().getActiveProjectId(userId);
+}
+
+export async function setActiveProjectId(userId: string, projectId: string): Promise<void> {
+  await getStorageProvider().setActiveProjectId(userId, projectId);
+}
+
+export async function getAppScope(userId: string): Promise<AppScope> {
+  return getStorageProvider().getAppScope(userId);
+}
+
+export async function setAppScope(userId: string, scope: AppScope): Promise<void> {
+  await getStorageProvider().setAppScope(userId, scope);
+}
+
+export async function loadProjectState(userId: string): Promise<{ projects: Project[]; activeProjectId: string; scope: AppScope }> {
+  const projects = await listProjects(userId);
+  const storedActiveProjectId = await getActiveProjectId(userId);
+  const storedScope = await getAppScope(userId);
+  const scope = resolveScope(storedScope, projects);
+  const activeProject =
+    projects.find((item) => item.id === (scope.type === 'project' ? scope.projectId : storedActiveProjectId)) ??
+    projects.find((item) => item.status !== 'archived') ??
+    projects[0];
+
+  if (scope.type !== storedScope.type || (scope.type === 'project' && storedScope.type === 'project' && scope.projectId !== storedScope.projectId)) {
+    await setAppScope(userId, EVERYTHING_SCOPE);
+  }
+  return { projects, activeProjectId: activeProject.id, scope };
+}
+
+export async function loadGeneralContext(userId: string): Promise<Project> {
+  const storage = getStorageProvider();
+  const [nodes, sources] = await Promise.all([storage.getNodes(userId), storage.getSources(userId)]);
+  return collectionsToGeneralContext({ nodes, sources });
+}
+
+export async function loadProjectForScope(userId: string, projectId?: string): Promise<{ project: Project; scope: AppScope }> {
+  const projects = await listProjects(userId);
+  if (projectId) {
+    const selected = projects.find((project) => project.id === projectId);
+    if (selected) return { project: selected, scope: { type: 'project', projectId } };
+  }
+  const generalContext = await loadGeneralContext(userId);
+  return { project: mergeProjectsForEverything(projects, generalContext), scope: EVERYTHING_SCOPE };
+}
+
+export async function saveGeneralContext(userId: string, project: Project): Promise<Project> {
+  const storage = getStorageProvider();
+  const collections = generalContextToCollections(userId, project);
+  const [existingNodes, existingSources] = await Promise.all([storage.getNodes(userId), storage.getSources(userId)]);
+  const nextNodeIds = new Set(collections.nodes.map((node) => node.id));
+  const nextSourceIds = new Set(collections.sources.map((source) => source.id));
+
+  await Promise.all([
+    ...existingNodes
+      .filter((node) => node.scope === 'global' && !node.projectId && !nextNodeIds.has(node.id))
+      .map((node) => storage.deleteNode(userId, node.id)),
+    ...existingSources
+      .filter((source) => source.scope === 'global' && !source.projectId && !nextSourceIds.has(source.id))
+      .map((source) => storage.deleteSource(userId, source.id)),
+    ...collections.nodes.map((node) => storage.saveNode(userId, node)),
+    ...collections.sources.map((source) => storage.saveSource(userId, source)),
+  ]);
+  return project;
+}
+
+export async function loadProject(userId: string, projectId?: string): Promise<Project> {
+  const storage = getStorageProvider();
+  const existing = await storage.getProject(userId, projectId);
+  if (existing) return existing;
+
+  const seeded = createGoldenDemoProject();
+  await storage.saveProject(userId, seeded);
+  return seeded;
+}
+
+export async function saveProject(userId: string, project: Project): Promise<Project> {
+  await getStorageProvider().saveProject(userId, project);
+  return project;
+}
+
+export async function resetDemoProject(userId: string): Promise<Project> {
+  await getStorageProvider().resetDemoData(userId);
+  return loadProject(userId);
+}

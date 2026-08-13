@@ -1,0 +1,168 @@
+import { AskResult, AskSource } from '@/lib/ask/adkClient';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
+import { loadProjectForScope } from '@/lib/storage';
+import { ContextPack } from '@/types/contextPack';
+import { createLocalDemoProjects, demoCalendarEvents } from '@/lib/demo/localFixtures';
+import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
+import { memoriesFromProfile } from '@/lib/memory/store';
+import { EVERYTHING_SCOPE } from '@/types/scope';
+import type { Project } from '@/types/clarity';
+import { contextualSuggestionsFromPack } from '@/lib/ask/suggestions';
+
+interface LocalAskContextParams {
+  userId: string;
+  projectId?: string;
+  query: string;
+  includeBroadContext?: boolean;
+}
+
+async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ project: Project; pack: ContextPack }> {
+  try {
+    const loaded = await loadProjectForScope(params.userId, params.projectId);
+    const memories = await loadDurableMemories(params.userId, DEFAULT_USER_PROFILE);
+    return {
+      project: loaded.project,
+      pack: await buildContextPackForUser({
+        userId: params.userId,
+        query: params.query,
+        project: loaded.project,
+        profile: DEFAULT_USER_PROFILE,
+        durableMemories: memories,
+        includeBroadContext: params.includeBroadContext,
+        scope: loaded.scope,
+      }),
+    };
+  } catch (error) {
+    const fixtures = createLocalDemoProjects();
+    const project = fixtures.find((item) => item.id === params.projectId) ?? fixtures[0];
+    const now = new Date();
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Gapswise demo Ask] Local context unavailable; using deterministic fixtures.', {
+        error: error instanceof Error ? error.message : 'Unknown local context error',
+      });
+    }
+    return {
+      project,
+      pack: buildContextPack({
+        userId: params.userId,
+        query: params.query,
+        project,
+        profile: DEFAULT_USER_PROFILE,
+        durableMemories: memoriesFromProfile(DEFAULT_USER_PROFILE),
+        includeBroadContext: params.includeBroadContext,
+        calendarCommitments: calendarEventsToCommitmentNodes(demoCalendarEvents(now), now, 10),
+        scope: params.projectId ? { type: 'project', projectId: project.id } : EVERYTHING_SCOPE,
+      }),
+    };
+  }
+}
+
+function sourcesFromPack(pack: ContextPack): AskSource[] {
+  const evidence: AskSource[] = [...pack.provenanceSources, ...pack.relevantEvidence].map((source) => ({
+    id: source.source_id,
+    title: source.filename,
+    excerpt: source.excerpt,
+    score: source.score,
+    kind: 'source',
+    supports: source.supports,
+    reason: source.supports?.length ? `Supports: ${source.supports.slice(0, 2).join(' · ')}` : 'Matched the local context.',
+  }));
+  const graph: AskSource[] = [
+    ...pack.activeGoals,
+    ...pack.unresolvedGaps,
+    ...pack.recentDecisions,
+    ...pack.contradictions,
+  ].filter((node) => !node.source_refs.length).map((node) => ({
+    id: node.id,
+    title: `${node.type.replaceAll('_', ' ')} in Gapswise`,
+    excerpt: node.text,
+    kind: 'graph',
+    supports: [node.text],
+    reason: node.why_it_matters?.[0] ?? 'Stored in the local understanding graph.',
+  }));
+  const memories: AskSource[] = pack.userPreferences.map((memory) => ({
+    id: memory.id,
+    title: `Remembered ${memory.category.replaceAll('_', ' ')}`,
+    excerpt: memory.text,
+    kind: 'memory',
+    supports: [memory.text],
+    reason: memory.why_remembered,
+  }));
+  const calendar: AskSource[] = pack.upcomingCommitments
+    .filter((node) => node.source_refs.some((sourceId) => sourceId.startsWith('gcal_demo_')))
+    .map((node) => ({
+      id: node.id,
+      title: 'Demo Calendar',
+      excerpt: node.text,
+      kind: 'calendar',
+      supports: [node.text],
+      reason: 'Deterministic local Calendar fixture.',
+    }));
+  return Array.from(new Map([...evidence, ...graph, ...memories, ...calendar].map((source) => [source.id, source])).values()).slice(0, 8);
+}
+
+function eventSummary(pack: ContextPack): string {
+  if (!pack.upcomingCommitments.length) return 'There are no upcoming demo commitments in this scope.';
+  return pack.upcomingCommitments.slice(0, 3).map((event) => {
+    const title = event.text.match(/^Google Calendar event: ([^.]+)\./)?.[1] ?? event.text;
+    const start = event.text.match(/Starts ([^.]+)\./)?.[1];
+    return `- **${title}**${start ? ` — ${new Date(start).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}`;
+  }).join('\n');
+}
+
+function deterministicAnswer(message: string, pack: ContextPack, projectTitle: string, projectGoal: string): string {
+  const query = message.toLowerCase();
+  const gap = pack.unresolvedGaps[0];
+  const goal = pack.activeGoals[0];
+  const assumption = pack.contradictions.find((node) => node.type === 'ASSUMPTION');
+  if (/coming up|calendar|schedule|upcoming/.test(query)) {
+    return `## Coming up\n\n${eventSummary(pack)}\n\nThese are local demo Calendar fixtures.`;
+  }
+  if (/what do you know|about this project|summari[sz]e/.test(query)) {
+    return `## ${projectTitle}\n\n**Goal:** ${goal?.text ?? projectGoal}\n\n${gap ? `**Still unclear:** ${gap.text}` : 'There are no open questions in the selected scope.'}\n\nGapswise is answering from the currently selected local scope.`;
+  }
+  if (/assumption/.test(query)) {
+    return assumption
+      ? `## Assumption to validate\n\n${assumption.text}\n\nConfirm this before it drives an expensive decision.`
+      : 'No open assumption is currently prominent in this scope.';
+  }
+  if (/focus|attention|neglect|decide next/.test(query)) {
+    return gap
+      ? `## What to focus on\n\nYour highest-value unresolved question is:\n\n**${gap.text}**\n\n${gap.why_it_matters?.[0] ?? 'Answering it would reduce uncertainty around your active goal.'}`
+      : `## What to focus on\n\nKeep moving the active goal forward: **${goal?.text ?? projectGoal}**.`;
+  }
+  return `## Current understanding\n\nYour active direction is **${goal?.text ?? projectGoal}**.${gap ? `\n\nThe clearest unresolved question is **${gap.text}**.` : ''}`;
+}
+
+export async function askGapswiseLocally(params: {
+  userId: string;
+  message: string;
+  sessionId?: string;
+  projectId?: string;
+}): Promise<AskResult> {
+  const { project, pack } = await loadLocalAskContext({
+    userId: params.userId,
+    projectId: params.projectId,
+    query: params.message,
+  });
+  return {
+    answer: deterministicAnswer(params.message, pack, project.title, project.goal),
+    sessionId: params.sessionId?.trim() || `demo_${params.projectId ?? 'everything'}_${Date.now()}`,
+    sources: sourcesFromPack(pack),
+  };
+}
+
+export async function generateLocalAskSuggestions(params: {
+  userId: string;
+  projectId?: string;
+}): Promise<ReturnType<typeof contextualSuggestionsFromPack>> {
+  const { pack } = await loadLocalAskContext({
+    userId: params.userId,
+    projectId: params.projectId,
+    query: 'What important questions, risks, commitments, and missing information should I consider next?',
+    includeBroadContext: true,
+  });
+  return contextualSuggestionsFromPack(pack);
+}

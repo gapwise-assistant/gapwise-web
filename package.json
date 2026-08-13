@@ -1,0 +1,37 @@
+{
+  "name": "gapwise",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start -p ${PORT:-3000}",
+    "lint": "npm run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "vitest run",
+    "test:google:firestore": "GOOGLE_CLOUD_PROJECT=gapwise-505217 FIRESTORE_DATABASE_ID='(default)' node scripts/firestore-smoke.mjs",
+    "test:google:storage": "GOOGLE_CLOUD_PROJECT=gapwise-505217 CLOUD_STORAGE_BUCKET=gapwise-505217-context node scripts/storage-smoke.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.22.0",
+    "@google/genai": "^2.16.0",
+    "firebase-admin": "^14.2.0",
+    "googleapis": "^174.0.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

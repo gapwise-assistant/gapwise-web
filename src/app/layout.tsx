@@ -1,0 +1,37 @@
+import type { Metadata } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  manifest: '/manifest.webmanifest',
+  title: 'Gapswise | Find the Question That Unlocks the Next Decision',
+  description:
+    'Gapswise is a persistent collaborative thinking agent that turns your messy context into a live map of knowns, decisions, assumptions, and unknowns — then finds the highest-value question you should answer next.',
+  keywords: [
+    'Gapswise',
+    'Collaborative Partner Agent',
+    'Clarity Graph',
+    'Uncertainty Prioritization Engine',
+    'Gemini 3.5 Flash',
+    'Google ADK',
+  ],
+};
+
+export const viewport = {
+  themeColor: '#0891b2',
+  width: 'device-width',
+  initialScale: 1,
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en" className="dark h-full antialiased">
+      <body className="min-h-full bg-slate-950 text-slate-100 selection:bg-cyan-500 selection:text-slate-950">
+        {children}
+      </body>
+    </html>
+  );
+}

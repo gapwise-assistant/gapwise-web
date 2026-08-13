@@ -1,0 +1,296 @@
+import { Project } from '@/types/clarity';
+import { ContextPack, DurableMemory } from '@/types/contextPack';
+import { AttentionCandidate } from '@/types/attention';
+import { buildContextPack } from '@/lib/retrieval/contextPack';
+import { rankGaps } from '@/lib/tools/graphTools';
+import { withAttentionScore } from '@/lib/attention/scoring';
+import { projectForReasoning } from '@/lib/context/sourceState';
+
+function includesAny(text: string, terms: string[]): boolean {
+  const lower = text.toLowerCase();
+  return terms.some((term) => lower.includes(term));
+}
+
+function hasPriority(memories: DurableMemory[], terms: string[]): boolean {
+  return memories.some((memory) => !memory.forgotten_at && memory.category === 'current_priorities' && includesAny(memory.text, terms));
+}
+
+function dueSoon(project: Project): boolean {
+  if (!project.deadline) return false;
+  const days = (new Date(project.deadline).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+  return days <= 21;
+}
+
+function nodeTimestamp(nodeText: string, label: 'Starts' | 'Ends'): number {
+  const match = nodeText.match(new RegExp(`${label} ([^.]+)\\.`));
+  if (!match) return 0;
+  const time = new Date(match[1]).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sourceDetail(node: { why_it_matters?: string[] }, prefix: string): string | undefined {
+  return node.why_it_matters?.find((item) => item.startsWith(prefix))?.slice(prefix.length).trim();
+}
+
+function calendarEventTitle(text: string): string {
+  const match = text.match(/^Google Calendar event: ([^.]+)\./);
+  return match?.[1] ?? 'Calendar commitment';
+}
+
+function isCalendarCommitment(node: ContextPack['upcomingCommitments'][number]): boolean {
+  return node.source_refs.some((ref) => ref.startsWith('gcal_')) || node.why_it_matters?.includes('Source: Google Calendar') === true;
+}
+
+function calendarUrgency(startTime: number, endTime: number, nowTime: number): number {
+  if (endTime > nowTime && startTime > 0 && startTime <= nowTime) return 1;
+  if (startTime === 0) return 0.35;
+  const hoursUntilStart = (startTime - nowTime) / (60 * 60 * 1000);
+  if (hoursUntilStart <= 2) return 0.98;
+  if (hoursUntilStart <= 12) return 0.86;
+  if (hoursUntilStart <= 24) return 0.76;
+  if (hoursUntilStart <= 48) return 0.64;
+  if (hoursUntilStart <= 14 * 24) return 0.32;
+  return 0.12;
+}
+
+function isUsefulCalendarCommitment(text: string, startTime: number, endTime: number, nowTime: number): boolean {
+  if (endTime > nowTime && startTime > 0 && startTime <= nowTime) return true;
+  if (startTime === 0) return false;
+  const hoursUntilStart = (startTime - nowTime) / (60 * 60 * 1000);
+  if (hoursUntilStart <= 48) return true;
+  return includesAny(text, ['meeting', 'demo', 'interview', 'deadline', 'review', 'call', 'appointment']);
+}
+
+export function generateAttentionCandidates(params: {
+  userId: string;
+  project: Project;
+  memories: DurableMemory[];
+  contextPack?: ContextPack;
+  now?: Date;
+}): AttentionCandidate[] {
+  const { userId, project, memories } = params;
+  const reasoningProject = projectForReasoning(project);
+  const now = params.now ?? new Date();
+  const nowTime = now.getTime();
+  const candidates: AttentionCandidate[] = [];
+  const incomePriority = hasPriority(memories, ['financial', 'income', 'salary', 'stability', 'money']);
+  const noFrontendPreference = memories.some((memory) =>
+    !memory.forgotten_at && /do not|don't|avoid/.test(memory.text.toLowerCase()) && /frontend/.test(memory.text.toLowerCase())
+  );
+
+  params.contextPack?.upcomingCommitments
+    .filter(isCalendarCommitment)
+    .forEach((commitment) => {
+      const startTime = nodeTimestamp(commitment.text, 'Starts');
+      const endTime = nodeTimestamp(commitment.text, 'Ends') || startTime;
+      if (endTime !== 0 && endTime <= nowTime) return;
+      if (!isUsefulCalendarCommitment(commitment.text, startTime, endTime, nowTime)) return;
+
+      const title = calendarEventTitle(commitment.text);
+      const urgency = calendarUrgency(startTime, endTime, nowTime);
+      const start = sourceDetail(commitment, 'Start:') ?? '';
+      const end = sourceDetail(commitment, 'End:') ?? '';
+      const sourceRef = commitment.source_refs[0];
+
+      candidates.push(
+        withAttentionScore({
+          id: `rec_calendar_${commitment.id}`,
+          kind: 'commitment',
+          title: startTime > 0 && startTime <= nowTime ? `Stay with ${title}` : `Prepare for ${title}`,
+          reason: `Source: Google Calendar${start ? `, ${start}` : ''}${end ? ` to ${end}` : ''}.`,
+          next_action: startTime > 0 && startTime <= nowTime
+            ? 'Focus on the current commitment and capture any follow-up decision afterward.'
+            : `Review what you need before ${title}.`,
+          source_node_ids: [commitment.id],
+          source_ids: sourceRef ? [sourceRef] : [],
+          context_pack: params.contextPack!,
+          status: 'active',
+          factors: {
+            goal_alignment: urgency >= 0.98
+              ? 0.98
+              : includesAny(commitment.text, ['gapswise', 'demo', 'project', 'meeting']) ? 0.86 : 0.42,
+            impact: urgency >= 0.98 ? 0.95 : urgency >= 0.76 ? 0.82 : 0.35,
+            urgency,
+            actionability: urgency >= 0.64 ? 0.92 : 0.48,
+            evidence_confidence: 0.95,
+            unresolved_risk: urgency >= 0.98 ? 0.55 : urgency >= 0.76 ? 0.32 : 0.12,
+            momentum: urgency >= 0.98 ? 0.9 : urgency >= 0.64 ? 0.78 : 0.35,
+            estimated_effort: urgency >= 0.98 ? 0.08 : urgency >= 0.64 ? 0.12 : 0.4,
+          },
+        })
+      );
+    });
+
+  reasoningProject.sources.forEach((source) => {
+    const sourceText = `${source.filename} ${source.content}`;
+    if (includesAny(sourceText, ['recruiter', 'salary', 'paying', 'better-paying', 'role'])) {
+      const frontendRole = includesAny(sourceText, ['frontend', 'front-end']);
+      if (frontendRole && noFrontendPreference) return;
+      const contextPack = buildContextPack({
+        userId,
+        query: sourceText,
+        project,
+        profile: {
+          answer_density: 'concise',
+          question_frequency: 'moderate',
+          challenge_level: 'high',
+          evidence_preference: 'research_first',
+          brainstorm_style: 'diverge_then_converge',
+          uncertainty_style: 'explicit',
+        },
+        durableMemories: memories,
+      });
+      candidates.push(
+        withAttentionScore({
+          id: `rec_recruiter_${source.id}`,
+          kind: 'opportunity',
+          title: 'Reply to the recruiter opportunity',
+          reason: incomePriority
+            ? 'A recruiter signal matches your confirmed financial-stability priority.'
+            : 'A recruiter signal may be an opportunity worth deciding on.',
+          next_action: 'Draft a short reply and decide whether the role fits your current priorities.',
+          source_node_ids: source.derived_node_ids,
+          source_ids: [source.id],
+          context_pack: contextPack,
+          status: 'active',
+          factors: {
+            goal_alignment: incomePriority ? 0.98 : 0.55,
+            impact: incomePriority ? 0.95 : 0.85,
+            urgency: incomePriority ? 0.88 : 0.72,
+            actionability: 0.9,
+            evidence_confidence: 0.9,
+            unresolved_risk: incomePriority ? 0.65 : 0.35,
+            momentum: 0.75,
+            estimated_effort: 0.18,
+          },
+        })
+      );
+    }
+
+    if (includesAny(sourceText, ['cv', 'resume']) && includesAny(sourceText, ['missing', 'last updated', 'latest agentic ai', 'gapswise'])) {
+      const contextPack = buildContextPack({
+        userId,
+        query: sourceText,
+        project,
+        profile: {
+          answer_density: 'concise',
+          question_frequency: 'moderate',
+          challenge_level: 'high',
+          evidence_preference: 'research_first',
+          brainstorm_style: 'diverge_then_converge',
+          uncertainty_style: 'explicit',
+        },
+        durableMemories: memories,
+      });
+      candidates.push(
+        withAttentionScore({
+          id: `rec_cv_${source.id}`,
+          kind: 'opportunity',
+          title: 'Update your CV with recent AI work',
+          reason: 'A selected Drive file suggests your CV is missing the latest agentic AI project evidence.',
+          next_action: 'Add Gapswise and recent agentic AI work to the CV before sharing it.',
+          source_node_ids: source.derived_node_ids,
+          source_ids: [source.id],
+          context_pack: contextPack,
+          status: 'active',
+          factors: {
+            goal_alignment: 0.78,
+            impact: 0.7,
+            urgency: 0.58,
+            actionability: 0.82,
+            evidence_confidence: 0.82,
+            unresolved_risk: 0.35,
+            momentum: 0.65,
+            estimated_effort: 0.45,
+          },
+        })
+      );
+    }
+  });
+
+  rankGaps(reasoningProject).slice(0, 5).forEach((gap) => {
+    const node = reasoningProject.nodes.find((item) => item.id === gap.node_id);
+    const relatedMeeting = reasoningProject.sources.find((source) => includesAny(source.content, ['meeting', 'demo tomorrow', 'tomorrow']));
+    const contextPack = buildContextPack({
+      userId,
+      query: gap.question,
+      project: reasoningProject,
+      profile: {
+        answer_density: 'concise',
+        question_frequency: 'moderate',
+        challenge_level: 'high',
+        evidence_preference: 'research_first',
+        brainstorm_style: 'diverge_then_converge',
+        uncertainty_style: 'explicit',
+      },
+      durableMemories: memories,
+    });
+    candidates.push(
+      withAttentionScore({
+        id: `rec_gap_${gap.node_id}`,
+        kind: relatedMeeting ? 'preparation' : 'gap',
+        title: relatedMeeting ? 'Prepare around the unresolved demo gap' : 'Resolve the top clarity gap',
+        reason: gap.reasons[0] ?? 'This uncertainty affects the next decision.',
+        next_action: gap.question,
+        source_node_ids: [gap.node_id, ...gap.blocked_decision_ids],
+        source_ids: node?.source_refs ?? [],
+        context_pack: contextPack,
+        status: 'active',
+        factors: {
+          goal_alignment: 0.9,
+          impact: gap.downstream_impact,
+          urgency: relatedMeeting || dueSoon(project) ? 0.9 : gap.urgency,
+          actionability: gap.answerability,
+          evidence_confidence: node?.source_refs.length ? 0.75 : 0.45,
+          unresolved_risk: gap.uncertainty,
+          momentum: project.history.length ? 0.75 : 0.55,
+          estimated_effort: gap.interruption_cost + 0.15,
+        },
+      })
+    );
+  });
+
+  reasoningProject.nodes
+    .filter((node) => node.type === 'RISK' && node.status === 'OPEN')
+    .forEach((node) => {
+      const contextPack = buildContextPack({
+        userId,
+        query: node.text,
+        project,
+        profile: {
+          answer_density: 'concise',
+          question_frequency: 'moderate',
+          challenge_level: 'high',
+          evidence_preference: 'research_first',
+          brainstorm_style: 'diverge_then_converge',
+          uncertainty_style: 'explicit',
+        },
+        durableMemories: memories,
+      });
+      candidates.push(
+        withAttentionScore({
+          id: `rec_risk_${node.id}`,
+          kind: 'risk',
+          title: 'Reduce a live project risk',
+          reason: node.text,
+          next_action: `Decide a mitigation for: ${node.text}`,
+          source_node_ids: [node.id],
+          source_ids: node.source_refs,
+          context_pack: contextPack,
+          status: 'active',
+          factors: {
+            goal_alignment: 0.8,
+            impact: node.impact,
+            urgency: dueSoon(project) ? 0.78 : 0.55,
+            actionability: 0.65,
+            evidence_confidence: node.source_refs.length ? 0.7 : 0.4,
+            unresolved_risk: 1 - node.confidence,
+            momentum: 0.45,
+            estimated_effort: 0.45,
+          },
+        })
+      );
+    });
+
+  return candidates;
+}
