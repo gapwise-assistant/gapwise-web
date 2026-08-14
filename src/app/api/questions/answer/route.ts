@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { answerQuestion } from '@/lib/questions/answerQuestion';
+import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
@@ -11,6 +11,15 @@ const requestSchema = z.object({
   nodeId: z.string().trim().min(1),
   answer: z.string().trim().min(1).max(5000),
   projectId: z.string().trim().min(1).optional(),
+});
+
+const editRequestSchema = z.object({
+  userId: z.string().trim().min(1).optional(),
+  projectId: z.string().trim().min(1),
+  historyTimestamp: z.string().datetime(),
+  question: z.string().trim().min(1).max(5000),
+  previousAnswer: z.string().trim().min(1).max(5000),
+  answer: z.string().trim().min(1).max(5000),
 });
 
 function errorResponse(error: unknown) {
@@ -35,6 +44,20 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ...result,
       message: 'Understanding updated. This question is now resolved.',
+    });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = editRequestSchema.parse(await request.json());
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    const result = await editAnsweredQuestion({ ...body, userId });
+    return NextResponse.json({
+      ...result,
+      message: 'Answer updated. Gapswise understanding was refreshed.',
     });
   } catch (error) {
     return errorResponse(error);

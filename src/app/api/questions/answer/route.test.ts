@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
-import { answerQuestion } from '@/lib/questions/answerQuestion';
-import { POST } from './route';
+import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
+import { PATCH, POST } from './route';
 
-vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn() }));
+vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn(), editAnsweredQuestion: vi.fn() }));
 
 function request(body: unknown): Request {
   return new Request('http://localhost/api/questions/answer', {
@@ -45,5 +45,33 @@ describe('POST /api/questions/answer', () => {
     const response = await POST(request({ userId: 'demo-user', nodeId: 'unknown_target_user', answer: ' ' }));
     expect(response.status).toBe(400);
     expect(answerQuestion).not.toHaveBeenCalled();
+  });
+
+  it('updates an existing answered question through PATCH', async () => {
+    const context = createGoldenDemoProject();
+    vi.mocked(editAnsweredQuestion).mockResolvedValue({
+      ownerType: 'project',
+      projectId: context.id,
+      context,
+      historyTimestamp: '2026-08-11T10:00:00.000Z',
+    });
+
+    const response = await PATCH(request({
+      userId: 'demo-user',
+      projectId: context.id,
+      historyTimestamp: '2026-08-11T10:00:00.000Z',
+      question: 'What is the primary user?',
+      previousAnswer: 'Independent builders.',
+      answer: 'Technical founders.',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(editAnsweredQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'demo-user',
+      answer: 'Technical founders.',
+    }));
+    await expect(response.json()).resolves.toMatchObject({
+      message: 'Answer updated. Gapswise understanding was refreshed.',
+    });
   });
 });

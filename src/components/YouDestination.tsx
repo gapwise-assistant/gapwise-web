@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Archive, ChevronRight, Edit3, FileText, HelpCircle, MessageCircle, MoreHorizontal, Plus } from 'lucide-react';
+import { Archive, ChevronRight, Edit3, FileText, HelpCircle, MoreHorizontal, Plus } from 'lucide-react';
 import { ClarityNode, Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { groupProjectSummaries } from '@/lib/projects/projectSummaries';
@@ -10,6 +10,9 @@ import { MyWorldView } from '@/components/MyWorldView';
 import { ClarityGraphCanvas } from '@/components/ClarityGraphCanvas';
 import { currentPriorities, userLevelUnresolvedQuestions } from '@/lib/you/sections';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
+import { answeredQuestionHistory } from '@/lib/questions/history';
+import type { AnsweredQuestion } from '@/lib/questions/history';
+import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { AppScope } from '@/types/scope';
 
 interface ScopeDestinationProps {
@@ -24,9 +27,9 @@ interface ScopeDestinationProps {
   onOpenNewProject: () => void;
   onUpdateProject: (updated: Project) => void;
   onAnswerQuestion: (node: ClarityNode) => void;
+  onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToContext: () => void;
   onNavigateToSource: (sourceId: string) => void;
-  onNavigateToAsk: () => void;
 }
 
 type ScopeSection = 'overview' | 'projects' | 'priorities' | 'unclear' | 'world';
@@ -55,9 +58,9 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onOpenNewProject,
   onUpdateProject,
   onAnswerQuestion,
+  onEditAnsweredQuestion,
   onNavigateToContext,
   onNavigateToSource,
-  onNavigateToAsk,
 }) => {
   const [section, setSection] = useState<ScopeSection>('overview');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
@@ -76,6 +79,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
         .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact)),
     [project.nodes]
   );
+  const answeredQuestions = useMemo(() => answeredQuestionHistory(project), [project]);
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);
   const highestQuestion = useMemo(() => {
     if (project.active_question) {
@@ -83,15 +87,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     }
     return projectQuestions[0] ?? null;
   }, [projectQuestions, project.active_question]);
-  const recentDecisions = useMemo(
-    () =>
-      project.nodes
-        .filter((node) => node.type === 'DECISION')
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-        .slice(0, 3),
-    [project.nodes]
-  );
-
   useEffect(() => {
     if (projectFocusKey > 0) {
       setSection('projects');
@@ -154,6 +149,11 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     if (reasons.length) return reasons.join(' · ');
     if (node.type === 'ASSUMPTION') return 'Project direction and decision confidence';
     return 'Next project decision';
+  };
+
+  const answeredDateLabel = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? 'Previously answered' : `Answered ${date.toLocaleDateString()}`;
   };
 
   const renderProjectCard = (summary: ProjectCardSummary) => (
@@ -478,41 +478,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h3 className="text-sm font-extrabold text-slate-100">Recent decisions</h3>
-          <div className="mt-4 space-y-3">
-            {recentDecisions.length ? recentDecisions.map((decision) => (
-              <p key={decision.id} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
-                {decision.text}
-              </p>
-            )) : (
-              <p className="text-sm text-slate-500">No project decisions recorded yet.</p>
-            )}
-          </div>
-        </article>
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h3 className="text-sm font-extrabold text-slate-100">Primary actions</h3>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onNavigateToContext}
-              className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950"
-            >
-              <Plus className="h-4 w-4" />
-              Add context
-            </button>
-            <button
-              type="button"
-              onClick={onNavigateToAsk}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-bold text-slate-200 hover:text-cyan-300"
-            >
-              <MessageCircle className="h-4 w-4" />
-              Ask Gapswise
-            </button>
-          </div>
-        </article>
-      </section>
+      <ProjectSettingsPanel project={project} onUpdateProject={onUpdateProject} />
     </div>
   );
 
@@ -556,6 +522,51 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           No open project questions right now.
         </div>
       )}
+      <section className="space-y-4 border-t border-slate-800 pt-6">
+        <div>
+          <h3 className="text-lg font-extrabold text-slate-100">Previously answered</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Questions you answered and the understanding Gapswise recorded afterward.
+          </p>
+        </div>
+        {answeredQuestions.length ? (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {answeredQuestions.map((item) => (
+              <article key={`${item.timestamp}-${item.question}`} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-400">Answered</p>
+                  <p className="text-xs text-slate-500">{answeredDateLabel(item.timestamp)}</p>
+                </div>
+                <h4 className="mt-3 text-base font-extrabold text-slate-100">{item.question}</h4>
+                <div className="mt-4 space-y-3 text-sm">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Your answer</p>
+                    <p className="mt-1 whitespace-pre-wrap text-slate-300">{item.answer}</p>
+                  </div>
+                  {item.graph_diff_summary && (
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">What changed</p>
+                      <p className="mt-1 text-slate-400">{item.graph_diff_summary}</p>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEditAnsweredQuestion(item, project.id)}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300"
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                  Edit answer
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-sm text-slate-500">
+            No answered questions yet.
+          </div>
+        )}
+      </section>
     </section>
   );
 

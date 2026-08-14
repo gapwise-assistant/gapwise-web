@@ -1792,3 +1792,33 @@ Disconnected preferences, knowns, and evidence are available through a compact
 collapsible `Other context (N)` area instead of a large permanent side panel.
 Graph data, reasoning, persistence, provenance, scope, and the optional 3D
 view remain unchanged.
+
+## 13. Answered Questions History
+
+The project Scope > Questions view keeps open questions and previously answered
+questions separate. The answered section reads the existing persisted
+`Project.history` records, so it shows the original question, the user's answer,
+the answer date, and the graph-change summary when available. It displays every
+record for the selected project, newest first, without creating a second history
+store or changing resolved-node behavior.
+
+Answered question cards also provide `Edit answer`. Editing uses
+`PATCH /api/questions/answer` with the existing project and history timestamp,
+updates the matching persisted answer record, and updates the linked user-created
+`DECISION` node in place. This prevents old and new answers from competing in
+the project graph. The same clarity recalculation and project persistence path
+used by normal question answers runs after an edit.
+
+Today question cards now request one structured AI answer-suggestion response
+for the visible unresolved questions (up to three) through the existing ADK and
+Context Pack flow. Each suggestion contains an evidence-aware draft answer and
+a project-specific explanation of why the question matters. When evidence is
+missing, the model must say what is missing rather than inventing an answer.
+Demo mode and temporary agent failures retain a cautious deterministic fallback
+without inventing context.
+
+The project Scope overview now includes the existing project edit panel for
+name, goal, description, deadline, and archive controls. The overview no
+longer includes separate Recent decisions or Primary actions panels; decisions
+remain available through Questions and Graph, while capture and Ask remain in
+their top-level destinations.

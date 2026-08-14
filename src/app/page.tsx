@@ -353,12 +353,30 @@ export default function Home() {
     });
   }, [projects]);
 
+  const openAnsweredQuestion = useCallback((item: Project['history'][number], projectId: string) => {
+    setAnswerTarget({
+      question: item.question,
+      initialAnswer: item.answer,
+      historyTimestamp: item.timestamp,
+      projectId,
+      mode: 'edit',
+    });
+  }, []);
+
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
+    const isEditing = answerTarget.mode === 'edit';
     const response = await authFetch('/api/questions/answer', {
-      method: 'POST',
+      method: isEditing ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.stringify(isEditing ? {
+        userId,
+        projectId: answerTarget.projectId,
+        historyTimestamp: answerTarget.historyTimestamp,
+        question: answerTarget.question,
+        previousAnswer: answerTarget.initialAnswer,
+        answer,
+      } : {
         userId,
         nodeId: answerTarget.nodeId,
         answer,
@@ -540,12 +558,12 @@ export default function Home() {
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
             onAnswerQuestion={openGraphQuestion}
+            onEditAnsweredQuestion={openAnsweredQuestion}
             onNavigateToContext={() => setActiveTab('context')}
             onNavigateToSource={(sourceId) => {
               setContextEntry({ sourceId, tab: 'recent' });
               setActiveTab('context');
             }}
-            onNavigateToAsk={() => setActiveTab('ask')}
           />
         )}
         {activeTab === 'settings' && (

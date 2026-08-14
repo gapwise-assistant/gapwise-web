@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
-import { answerQuestion } from '@/lib/questions/answerQuestion';
+import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
+import { resolveGap } from '@/lib/tools/graphTools';
 
 vi.mock('@/lib/storage', () => ({
   listProjects: vi.fn(),
@@ -69,5 +70,39 @@ describe('answerQuestion', () => {
       nodeId: node.id,
       answer: 'A duplicate answer.',
     })).rejects.toThrow('already been resolved');
+  });
+
+  it('edits the persisted answer and its decision node in place', async () => {
+    const owner = createGoldenDemoProject();
+    const answered = resolveGap(
+      owner,
+      'unknown_target_user',
+      'The primary user is an independent hackathon builder.'
+    );
+    const historyItem = answered.history.at(-1)!;
+    vi.mocked(listProjects).mockResolvedValue([answered]);
+
+    const result = await editAnsweredQuestion({
+      userId: 'demo-user',
+      projectId: answered.id,
+      historyTimestamp: historyItem.timestamp,
+      question: historyItem.question,
+      previousAnswer: historyItem.answer,
+      answer: 'The primary user is a focused technical founder.',
+    });
+
+    expect(result.context.history.at(-1)).toMatchObject({
+      question: historyItem.question,
+      answer: 'The primary user is a focused technical founder.',
+    });
+    expect(result.context.nodes).toContainEqual(expect.objectContaining({
+      type: 'DECISION',
+      text: 'The primary user is a focused technical founder.',
+    }));
+    expect(result.context.nodes).not.toContainEqual(expect.objectContaining({
+      type: 'DECISION',
+      text: 'The primary user is an independent hackathon builder.',
+    }));
+    expect(saveProject).toHaveBeenCalledWith('demo-user', result.context);
   });
 });

@@ -2,6 +2,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { resolveGap } from '@/lib/tools/graphTools';
+import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { Project } from '@/types/clarity';
 
 export interface AnswerQuestionResult {
@@ -10,6 +11,13 @@ export interface AnswerQuestionResult {
   context: Project;
   resolvedNodeId: string;
   createdNodeId: string;
+}
+
+export interface EditAnsweredQuestionResult {
+  ownerType: 'project';
+  projectId: string;
+  context: Project;
+  historyTimestamp: string;
 }
 
 function assertAnswerable(project: Project, nodeId: string) {
@@ -74,4 +82,68 @@ export async function answerQuestion(params: {
   }
 
   throw new StorageError('This unresolved question was not found for the requested user and scope.', 'VALIDATION_ERROR');
+}
+
+function findAnswerDecision(project: Project, question: string, previousAnswer: string) {
+  const gap = project.nodes.find(
+    (node) =>
+      node.text === question &&
+      node.status === 'RESOLVED' &&
+      (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
+  );
+  if (gap) {
+    const edge = project.edges.find((item) => item.type === 'resolves' && item.target === gap.id);
+    const decision = edge ? project.nodes.find((node) => node.id === edge.source) : undefined;
+    if (decision?.type === 'DECISION') return decision;
+  }
+
+  return project.nodes.find(
+    (node) => node.type === 'DECISION' && node.created_by === 'user' && node.text === previousAnswer
+  );
+}
+
+export async function editAnsweredQuestion(params: {
+  userId: string;
+  projectId: string;
+  historyTimestamp: string;
+  question: string;
+  previousAnswer: string;
+  answer: string;
+}): Promise<EditAnsweredQuestionResult> {
+  const projects = await listProjects(params.userId);
+  const owner = projects.find((project) => project.id === params.projectId);
+  if (!owner) {
+    throw new StorageError('This answered question was not found for the requested user and project.', 'VALIDATION_ERROR');
+  }
+
+  const updated = JSON.parse(JSON.stringify(owner)) as Project;
+  const historyItem = updated.history.find(
+    (item) =>
+      item.timestamp === params.historyTimestamp &&
+      item.question === params.question &&
+      item.answer === params.previousAnswer
+  );
+  if (!historyItem) {
+    throw new StorageError('This answered question was not found in the requested project.', 'VALIDATION_ERROR');
+  }
+
+  const now = new Date().toISOString();
+  const decision = findAnswerDecision(updated, historyItem.question, historyItem.answer);
+  if (decision) {
+    decision.text = params.answer;
+    decision.updated_at = now;
+  }
+  historyItem.answer = params.answer;
+  historyItem.graph_diff_summary = `Resolved "${historyItem.question}" -> DECISION: "${params.answer}"`;
+  updated.clarity_score = calculateClarityScore(updated);
+  updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
+  updated.updated_at = now;
+
+  await saveProject(params.userId, updated);
+  return {
+    ownerType: 'project',
+    projectId: owner.id,
+    context: updated,
+    historyTimestamp: historyItem.timestamp,
+  };
 }

@@ -9,6 +9,7 @@ import { FeedbackEvent, FeedbackRating } from '@/types/feedback';
 import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
 import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
 import { buildComingUp, buildTodayQuestions, TodayQuestion } from '@/lib/today/sections';
+import { localQuestionSuggestions, TodayQuestionSuggestion } from '@/lib/today/questionPlans';
 import { RecommendationCard } from '@/components/RecommendationCard';
 import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
@@ -32,6 +33,8 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<TodayQuestion | null>(null);
+  const [questionSuggestions, setQuestionSuggestions] = useState<Record<string, TodayQuestionSuggestion>>({});
+  const [questionSuggestionSource, setQuestionSuggestionSource] = useState<'gapswise-agent' | 'local-context'>('local-context');
   const [hiddenStatuses, setHiddenStatuses] = useState<Record<string, RecommendationStatus>>({});
   const [hiddenQuestionIds, setHiddenQuestionIds] = useState<string[]>([]);
 
@@ -71,6 +74,49 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     .slice(0, 5);
   const questions = buildTodayQuestions({ project, brief, hiddenQuestionIds });
   const comingUp = buildComingUp(brief);
+  const questionPlanKey = JSON.stringify(questions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })));
+
+  React.useEffect(() => {
+    if (!questions.length) {
+      setQuestionSuggestions({});
+      setQuestionSuggestionSource('local-context');
+      return;
+    }
+
+    const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(questions).map((suggestion) => [suggestion.questionId, suggestion]));
+    setQuestionSuggestions(fallbackSuggestions);
+    setQuestionSuggestionSource('local-context');
+    const controller = new AbortController();
+    const scopeProjectId = scope.type === 'project' ? scope.projectId : undefined;
+    const scopeLabel = scope.type === 'project' ? project.title : 'Everything';
+
+    authFetch('/api/today/question-plans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+        scopeLabel,
+        questions: questions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })),
+      }),
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Today question plans unavailable');
+        return response.json();
+      })
+      .then((body) => {
+        const suggestions = Array.isArray(body.suggestions) ? body.suggestions as TodayQuestionSuggestion[] : [];
+        setQuestionSuggestions(Object.fromEntries(suggestions.map((suggestion) => [suggestion.questionId, suggestion])));
+        setQuestionSuggestionSource(body.generatedBy === 'gapswise-agent' ? 'gapswise-agent' : 'local-context');
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // The deterministic fallback remains visible when real AI is unavailable.
+      });
+
+    return () => controller.abort();
+  }, [userId, project.id, project.title, project.updated_at, scope.type, scope.type === 'project' ? scope.projectId : '', questionPlanKey]);
 
   const handleFeedback = (
     recommendationId: string,
@@ -159,6 +205,16 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               <article key={question.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
                 <h3 className="text-sm font-bold leading-snug text-slate-100">{question.question}</h3>
                 <p className="text-xs text-slate-400">{question.reason}</p>
+                {questionSuggestions[question.id] && (
+                  <div className="rounded-lg border border-cyan-900/70 bg-cyan-950/20 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300">
+                      {questionSuggestionSource === 'gapswise-agent' ? 'AI answer suggestion' : 'Suggested answer'}
+                    </p>
+                    <p className="mt-2 text-xs leading-relaxed text-slate-200">{questionSuggestions[question.id].suggestedAnswer}</p>
+                    <p className="mt-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Why this matters</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">{questionSuggestions[question.id].whyItMatters}</p>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
