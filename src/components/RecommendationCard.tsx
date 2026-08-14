@@ -17,9 +17,11 @@ interface RecommendationCardProps {
   question?: TodayQuestion;
   questionSuggestion?: TodayQuestionSuggestion;
   questionSuggestionSource?: 'gapswise-agent' | 'local-context' | 'local-fallback';
+  decisionNodeId?: string;
   onOpenWhy: (recommendation: AttentionCandidate) => void;
   onOpenQuestionWhy?: (question: TodayQuestion) => void;
   onAnswerQuestion?: (question: TodayQuestion) => void;
+  onReviewDecision?: (nodeId: string) => void;
   onFeedback: (recommendationId: string, rating: FeedbackRating, status: RecommendationStatus | null, explanation?: string) => void;
 }
 
@@ -31,9 +33,11 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   question,
   questionSuggestion,
   questionSuggestionSource,
+  decisionNodeId,
   onOpenWhy,
   onOpenQuestionWhy,
   onAnswerQuestion,
+  onReviewDecision,
   onFeedback,
 }) => {
   const showAnswerSuggestion = Boolean(
@@ -87,6 +91,15 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
             className="min-h-11 rounded-lg bg-cyan-500 px-3 py-2 font-bold text-slate-950 sm:min-h-0 sm:py-1.5"
           >
             Done
+          </button>
+        )}
+        {decisionNodeId && onReviewDecision && (
+          <button
+            type="button"
+            onClick={() => onReviewDecision(decisionNodeId)}
+            className="min-h-11 rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 font-semibold text-indigo-200 hover:border-indigo-500 sm:min-h-0 sm:py-1.5"
+          >
+            Review decision
           </button>
         )}
         <div>

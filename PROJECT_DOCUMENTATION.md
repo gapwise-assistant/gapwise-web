@@ -1913,3 +1913,42 @@ Project name, goal, description, deadline, and archive controls were removed
 from Settings. Project editing is available only from the selected project in
 Workspace through its shared `Edit project` modal. No OAuth, storage, memory,
 or project persistence behavior changed.
+
+## 18. Stable Decision Map Interaction
+
+The 2D graph is a deterministic Decision Map and now keeps one stable SVG
+coordinate system for lane backgrounds, relationships, labels, and node cards.
+Normal wheel or trackpad scrolling is allowed to scroll the page and does not
+zoom the map. Intentional desktop zoom is available through the visible `+`
+and `-` controls, with a bounded zoom range, a percentage reset control, and a
+Fit action. Ctrl/Cmd plus wheel remains available for users who prefer a
+keyboard-assisted zoom gesture.
+
+Dragging the empty map background pans the map. Clicking a node selects it and
+opens its existing details/provenance behavior. Nodes cannot be repositioned
+accidentally; the explicit `Arrange` mode must be enabled first. The same
+guard applies to the optional 3D view. Focus paths, node details, page scroll,
+and ordinary resize events do not automatically fit or re-layout the current
+viewport. The graph instructions now describe the intentional controls rather
+than suggesting that ordinary scrolling zooms the page.
+
+## 19. Decision Workspace
+
+`src/lib/decisions/workspace.ts` builds a focused decision view from existing
+project nodes, directed relationships, source provenance, and stored history.
+It can be opened from Today decision cards, a project question that blocks a
+decision, and the selected DECISION node in the graph. The view shows the
+decision, explicit options when the graph or related sources record them,
+supporting evidence, constraints, assumptions, risks, remaining blockers, and
+named sources. It only shows a recommendation when at least two explicit
+options have source-backed evidence with a measurable confidence difference;
+otherwise it explains what is still missing.
+
+Confirming a decision updates the existing DECISION node rather than creating a
+duplicate. It preserves source references, adds only existing support
+relationships that are explicitly `supports` or `informs`, records a history
+entry, recalculates the existing clarity score, and refreshes the active gap.
+The user can explicitly mark connected UNKNOWN or ASSUMPTION records resolved;
+that creates a `resolves` relationship and preserves the old record. The page
+persists project decisions through the existing project storage path, while
+user-level decisions use the existing general-context persistence path.

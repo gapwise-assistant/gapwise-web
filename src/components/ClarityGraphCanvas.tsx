@@ -19,6 +19,7 @@ const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationG
 interface ClarityGraphCanvasProps {
   project: Project;
   onSelectNode: (node: ClarityNode) => void;
+  onReviewDecision?: (node: ClarityNode) => void;
   onSelectSource?: (sourceId: string) => void;
   focusNodeId?: string | null;
 }
@@ -60,6 +61,7 @@ function readableStatus(status: ClarityNode['status']): string {
 export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   project,
   onSelectNode,
+  onReviewDecision,
   onSelectSource,
   focusNodeId,
 }) => {
@@ -303,6 +305,15 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                   <span className="text-xs font-semibold text-slate-400">Connected relationships</span>
                   {relationshipReasons(project, selectedNode.id).length > 0 ? relationshipReasons(project, selectedNode.id).map((relationship) => <p key={relationship} className="text-xs leading-relaxed text-slate-300">{relationship}</p>) : <p className="text-xs text-slate-500">No relationships recorded yet.</p>}
                 </div>
+                {selectedNode.type === 'DECISION' && onReviewDecision && (
+                  <button
+                    type="button"
+                    onClick={() => onReviewDecision(selectedNode)}
+                    className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500"
+                  >
+                    Review decision
+                  </button>
+                )}
                 <div className="space-y-2 border-t border-slate-800 pt-3">
                   <span className="text-xs font-semibold text-slate-400">Supporting sources</span>
                   {selectedNode.source_refs.length > 0 ? selectedNode.source_refs.map((sourceId) => {

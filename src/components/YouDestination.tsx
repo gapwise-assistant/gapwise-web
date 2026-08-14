@@ -15,6 +15,7 @@ import type { AnsweredQuestion } from '@/lib/questions/history';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture } from '@/lib/projects/projectOverview';
+import { findDecisionForNode } from '@/lib/decisions/workspace';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -28,6 +29,7 @@ interface ScopeDestinationProps {
   onOpenNewProject: () => void;
   onUpdateProject: (updated: Project) => void;
   onAnswerQuestion: (node: ClarityNode) => void;
+  onReviewDecision: (nodeId: string) => void;
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToContext: () => void;
   onNavigateToSource: (sourceId: string) => void;
@@ -68,6 +70,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onOpenNewProject,
   onUpdateProject,
   onAnswerQuestion,
+  onReviewDecision,
   onEditAnsweredQuestion,
   onNavigateToContext,
   onNavigateToSource,
@@ -500,6 +503,15 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
               >
                 Answer
               </button>
+              {findDecisionForNode(project, node.id) && (
+                <button
+                  type="button"
+                  onClick={() => onReviewDecision(findDecisionForNode(project, node.id)?.id ?? '')}
+                  className="mt-4 ml-2 rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200"
+                >
+                  Review decision
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -631,7 +643,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
       {projectSection === 'graph' && (
-        <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />
+        <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />
       )}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -684,7 +696,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
-      {projectSection === 'graph' && <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">{sourceCards}</section>
       )}

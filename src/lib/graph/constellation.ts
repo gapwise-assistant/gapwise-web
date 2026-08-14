@@ -85,9 +85,10 @@ export function calculateDecisionMapMetrics(
 
   const secondaryCount = graph.nodes.filter((node) => isDecisionMapSecondaryNode(node, graph)).length;
   const secondaryHeight = secondaryCount > 0 ? 100 + secondaryCount * 160 : 0;
+  const width = secondaryCount > 0 ? DECISION_MAP_WIDTH : 1340;
 
   return {
-    width: DECISION_MAP_WIDTH,
+    width,
     height: Math.max(cursor + 28, secondaryHeight + 56),
     laneY,
   };

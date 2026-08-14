@@ -21,11 +21,12 @@ import { loadMemoriesFromBrowser, memoriesFromProfile, saveMemoriesToBrowser } f
 import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/lib/personalization/feedbackStore';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
-import { emptyGeneralContext, projectForScope, resolveScope } from '@/lib/scope/projectScope';
+import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
+import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
 
 type AppTab = AppDestination;
@@ -203,6 +204,7 @@ export default function Home() {
   const [storageMessage, setStorageMessage] = useState('');
   const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'documents' | 'add' } | null>(null);
   const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
+  const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
 
   // Load project from persistent storage on mount and user switch
@@ -353,6 +355,38 @@ export default function Home() {
       projectId: owner?.id,
     });
   }, [projects]);
+
+  const openDecisionWorkspace = useCallback((nodeId: string) => {
+    const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId))
+      ?? (generalContext.nodes.some((node) => node.id === nodeId) ? generalContext : undefined);
+    if (owner) setDecisionTarget({ projectId: owner.id, nodeId });
+  }, [generalContext, projects]);
+
+  const decisionProject = useMemo(() => {
+    if (!decisionTarget) return null;
+    if (decisionTarget.projectId === GENERAL_CONTEXT_ID) return generalContext;
+    return projects.find((candidate) => candidate.id === decisionTarget.projectId) ?? null;
+  }, [decisionTarget, generalContext, projects]);
+
+  const saveDecision = useCallback((updated: Project) => {
+    if (updated.id === GENERAL_CONTEXT_ID) {
+      setGeneralContext(updated);
+      persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
+        setStorageMessage(savedToApi ? '' : 'Decision saved locally. General context API was unavailable.');
+      });
+      return;
+    }
+    updateProject(updated);
+  }, [updateProject, userId]);
+
+  const viewDecisionGraph = useCallback((nodeId: string) => {
+    const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
+    if (!owner) return;
+    handleSelectProject(owner.id);
+    setReasoningPathRequest({ projectId: owner.id, nodeId });
+    setDecisionTarget(null);
+    setActiveTab('scope');
+  }, [handleSelectProject, projects]);
 
   const openAnsweredQuestion = useCallback((item: Project['history'][number], projectId: string) => {
     setAnswerTarget({
@@ -505,6 +539,7 @@ export default function Home() {
               if (node) openGraphQuestion(node);
               else setActiveTab('ask');
             }}
+            onReviewDecision={openDecisionWorkspace}
             onNavigateToSource={(sourceId) => {
               setContextEntry({ sourceId, tab: 'recent' });
               setActiveTab('context');
@@ -569,6 +604,7 @@ export default function Home() {
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
             onAnswerQuestion={openGraphQuestion}
+            onReviewDecision={openDecisionWorkspace}
             onEditAnsweredQuestion={openAnsweredQuestion}
             onNavigateToContext={() => setActiveTab('context')}
             onNavigateToSource={(sourceId) => {
@@ -634,6 +670,20 @@ export default function Home() {
             setAnswerTarget(null);
           } : undefined}
           onClose={() => setAnswerTarget(null)}
+        />
+      )}
+      {decisionTarget && decisionProject && (
+        <DecisionWorkspace
+          project={decisionProject}
+          targetNodeId={decisionTarget.nodeId}
+          onClose={() => setDecisionTarget(null)}
+          onConfirm={saveDecision}
+          onNavigateToSource={(sourceId) => {
+            setContextEntry({ sourceId, tab: 'recent' });
+            setDecisionTarget(null);
+            setActiveTab('context');
+          }}
+          onViewGraph={viewDecisionGraph}
         />
       )}
       <TracePanel userId={userId} />

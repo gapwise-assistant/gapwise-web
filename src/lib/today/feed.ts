@@ -10,6 +10,7 @@ export interface TodayFeedItem {
   title: string;
   description: string;
   question?: TodayQuestion;
+  decisionNodeId?: string;
 }
 
 function sourceNodes(recommendation: AttentionCandidate, project: Project): ClarityNode[] {
@@ -66,6 +67,23 @@ function matchingQuestion(recommendation: AttentionCandidate, questions: TodayQu
   return node ? todayQuestionFromNode(project, node) : undefined;
 }
 
+function linkedDecisionNodeId(recommendation: AttentionCandidate, project: Project): string | undefined {
+  const nodes = sourceNodes(recommendation, project);
+  const directDecision = nodes.find((node) => node.type === 'DECISION');
+  if (directDecision) return directDecision.id;
+
+  const question = questionNode(nodes);
+  if (!question) return undefined;
+  const edge = project.edges.find((candidate) =>
+    ['blocks', 'depends_on', 'affects'].includes(candidate.type) &&
+    (candidate.source === question.id || candidate.target === question.id) &&
+    project.nodes.some((node) => node.id === (candidate.source === question.id ? candidate.target : candidate.source) && node.type === 'DECISION')
+  );
+  if (!edge) return undefined;
+  const otherId = edge.source === question.id ? edge.target : edge.source;
+  return project.nodes.find((node) => node.id === otherId && node.type === 'DECISION')?.id;
+}
+
 function underlyingKey(itemType: TodayItemType, recommendation: AttentionCandidate, project: Project): string {
   const nodes = sourceNodes(recommendation, project);
   const primaryNode = itemType === 'QUESTION' ? questionNode(nodes) : actionableNode(nodes);
@@ -93,6 +111,7 @@ export function buildTodayFeed(
       title: displayTitle(recommendation, itemType, project),
       description: displayDescription(recommendation, itemType),
       question: itemType === 'QUESTION' ? matchingQuestion(recommendation, questions, project) : undefined,
+      decisionNodeId: linkedDecisionNodeId(recommendation, project),
     });
   });
 

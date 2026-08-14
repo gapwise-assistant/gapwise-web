@@ -28,11 +28,12 @@ interface TodayProps {
   onUpdateProfile?: (profile: import('@/types/clarity').UserMemoryProfile) => void;
   profile?: import('@/types/clarity').UserMemoryProfile;
   onAnswerQuestion?: (question: TodayQuestion) => void;
+  onReviewDecision?: (nodeId: string) => void;
   onNavigateToSource?: (sourceId: string) => void;
   onViewReasoningPath?: (nodeId: string) => void;
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onNavigateToSource, onViewReasoningPath }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
@@ -208,11 +209,13 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                 title={item.title}
                 description={item.description}
                 question={item.question}
+                decisionNodeId={item.decisionNodeId}
                 questionSuggestion={item.question ? questionSuggestions[item.question.id] : undefined}
                 questionSuggestionSource={questionSuggestionSource}
                 onOpenWhy={setSelectedRecommendation}
                 onOpenQuestionWhy={setSelectedQuestion}
                 onAnswerQuestion={onAnswerQuestion}
+                onReviewDecision={onReviewDecision}
                 onFeedback={handleFeedback}
               />
             ))}

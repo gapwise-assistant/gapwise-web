@@ -3,7 +3,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber';
 import { Html, Line, OrbitControls } from '@react-three/drei';
-import { Scan } from 'lucide-react';
+import { Minus, Pencil, Plus, Scan } from 'lucide-react';
 import * as THREE from 'three';
 import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
 import {
@@ -78,6 +78,7 @@ function edgeIsHighlighted(
 interface Node3DProps {
   node: ClarityNode;
   position: [number, number, number];
+  editMode: boolean;
   muted: boolean;
   highlighted: boolean;
   labelVisible: boolean;
@@ -90,6 +91,7 @@ interface Node3DProps {
 function Node3D({
   node,
   position,
+  editMode,
   muted,
   highlighted,
   labelVisible,
@@ -115,6 +117,7 @@ function Node3D({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     dragged.current = false;
+    if (!editMode) return;
     setIsDragging(true);
     onDragStateChange(true);
     const normal = event.camera.getWorldDirection(new THREE.Vector3());
@@ -199,10 +202,12 @@ interface GraphSceneProps {
   selectedNodeId: string | null;
   focusMode: boolean;
   pathMode: boolean;
+  editMode: boolean;
+  onEditModeChange: (enabled: boolean) => void;
   onSelectNode: (node: ClarityNode) => void;
 }
 
-function GraphScene({ project, selectedNodeId, focusMode, pathMode, onSelectNode }: GraphSceneProps) {
+function GraphScene({ project, selectedNodeId, focusMode, pathMode, editMode, onSelectNode }: GraphSceneProps) {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [draggedPositions, setDraggedPositions] = useState<Record<string, ConstellationPoint>>({});
   const [isDragging, setIsDragging] = useState(false);
@@ -276,6 +281,7 @@ function GraphScene({ project, selectedNodeId, focusMode, pathMode, onSelectNode
             key={node.id}
             node={node}
             position={tuple(point)}
+            editMode={editMode}
             muted={muted}
             highlighted={highlighted}
             labelVisible={labelVisible}
@@ -300,6 +306,10 @@ interface PanState {
   startY: number;
   moved: boolean;
 }
+
+const MIN_2D_ZOOM = 0.7;
+const MAX_2D_ZOOM = 1.6;
+const ZOOM_STEP = 0.1;
 
 const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
   'blocks',
@@ -351,7 +361,15 @@ function edgeGeometry(
   };
 }
 
-function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelectNode }: GraphSceneProps) {
+function Constellation2D({
+  project,
+  selectedNodeId,
+  focusMode,
+  pathMode,
+  editMode,
+  onEditModeChange,
+  onSelectNode,
+}: GraphSceneProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const panRef = useRef<PanState | null>(null);
   const suppressClickRef = useRef(false);
@@ -440,19 +458,31 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
     }
   };
 
+  const setClampedZoom = (nextZoom: number) => {
+    setZoom(Math.max(MIN_2D_ZOOM, Math.min(MAX_2D_ZOOM, nextZoom)));
+  };
+
+  const fitToView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
   return (
     <div className="relative h-full w-full">
       <svg
         ref={svgRef}
         viewBox={`0 0 ${metrics.width} ${metrics.height}`}
-        className="h-full w-full touch-none select-none"
+        className="h-full w-full touch-pan-y select-none"
+        style={{ touchAction: 'pan-y' }}
         role="img"
         aria-label="Interactive two-dimensional Gapswise decision map"
         onWheel={(event) => {
+          if (!event.ctrlKey && !event.metaKey) return;
           event.preventDefault();
-          setZoom((current) => Math.max(0.55, Math.min(1.8, current + (event.deltaY > 0 ? -0.08 : 0.08))));
+          setClampedZoom(zoom + (event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP));
         }}
         onPointerDown={(event) => {
+          if (event.button !== 0) return;
           const point = localPoint(event);
           panRef.current = { mode: 'canvas', startX: point.x, startY: point.y, moved: false };
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -462,6 +492,10 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
           suppressClickRef.current = panRef.current?.moved ?? false;
           panRef.current = null;
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          panRef.current = null;
+          suppressClickRef.current = false;
         }}
       >
         <defs>
@@ -484,7 +518,7 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
             </marker>
           ))}
         </defs>
-        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`} style={{ transition: 'transform 160ms ease-out' }}>
           <rect width={metrics.width} height={metrics.height} fill="url(#decision-map-grid)" opacity="0.8" />
           <g>
             {DECISION_MAP_LANES.map((lane) => {
@@ -592,6 +626,10 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                   className="constellation-node-enter overflow-visible"
                   onPointerDown={(event) => {
                     event.stopPropagation();
+                    if (!editMode) {
+                      suppressClickRef.current = false;
+                      return;
+                    }
                     const local = localPoint(event);
                     panRef.current = { mode: 'node', nodeId: node.id, startX: local.x, startY: local.y, moved: false };
                     svgRef.current?.setPointerCapture(event.pointerId);
@@ -608,7 +646,7 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                   }}
                 >
                   <div
-                    className={`h-full w-full cursor-grab overflow-hidden rounded-xl border p-2.5 text-left shadow-lg transition active:cursor-grabbing ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
+                    className={`h-full w-full ${editMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} overflow-hidden rounded-xl border p-2.5 text-left shadow-lg transition ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
                     style={{ borderColor: `${color}${highlighted || isGoal ? 'ee' : '99'}`, backgroundColor: secondary ? '#08111ecc' : `${color}22` }}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -640,6 +678,10 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                   className="constellation-node-enter overflow-visible"
                   onPointerDown={(event) => {
                     event.stopPropagation();
+                    if (!editMode) {
+                      suppressClickRef.current = false;
+                      return;
+                    }
                     const local = localPoint(event);
                     panRef.current = { mode: 'node', nodeId: node.id, startX: local.x, startY: local.y, moved: false };
                     svgRef.current?.setPointerCapture(event.pointerId);
@@ -656,7 +698,7 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                   }}
                 >
                   <div
-                    className={`h-full w-full cursor-grab rounded-xl border p-3 text-left shadow-lg transition active:cursor-grabbing ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
+                    className={`h-full w-full ${editMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} rounded-xl border p-3 text-left shadow-lg transition ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
                     style={{ borderColor: `${color}${highlighted || isGoal ? 'ee' : '99'}`, backgroundColor: `${color}22` }}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -673,18 +715,56 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
           })}
         </g>
       </svg>
-      <button
-        type="button"
-        onClick={() => {
-          setZoom(1);
-          setPan({ x: 0, y: 0 });
-        }}
-        className="absolute left-3 top-3 inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-slate-700/90 bg-slate-950/90 p-2 text-slate-200 shadow-lg backdrop-blur transition hover:border-cyan-600 hover:text-cyan-300"
-        aria-label="Fit decision map to view"
-        title="Fit to view"
-      >
-        <Scan className="h-4 w-4" />
-      </button>
+      <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-slate-700/90 bg-slate-950/90 p-1 text-slate-200 shadow-lg backdrop-blur">
+        <button
+          type="button"
+          onClick={() => setClampedZoom(zoom - ZOOM_STEP)}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
+          aria-label="Zoom out"
+          title="Zoom out"
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setZoom(1)}
+          className="min-w-14 rounded-md px-2 text-center text-[11px] font-bold tabular-nums text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
+          aria-label="Reset zoom to 100 percent"
+          title="Reset zoom"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          type="button"
+          onClick={() => setClampedZoom(zoom + ZOOM_STEP)}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
+          aria-label="Zoom in"
+          title="Zoom in"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={fitToView}
+          className="inline-flex h-9 items-center gap-1 rounded-md px-2 text-[11px] font-bold text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
+          aria-label="Fit decision map to view"
+          title="Fit to view"
+        >
+          <Scan className="h-4 w-4" />
+          <span>Fit</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onEditModeChange(!editMode)}
+          className={`inline-flex h-9 items-center gap-1 rounded-md px-2 text-[11px] font-bold transition ${editMode ? 'bg-cyan-900/70 text-cyan-200' : 'text-slate-300 hover:bg-slate-800 hover:text-cyan-300'}`}
+          aria-label={editMode ? 'Disable arrange mode' : 'Enable arrange mode'}
+          aria-pressed={editMode}
+          title={editMode ? 'Disable arrange mode' : 'Arrange nodes'}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">{editMode ? 'Arranging' : 'Arrange'}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -698,6 +778,8 @@ export default function ConstellationGraph({
   expanded = false,
   onSelectNode,
 }: ConstellationGraphProps) {
+  const [editMode, setEditMode] = useState(false);
+
   return (
     <div className={`relative overflow-hidden rounded-xl border border-cyan-950/80 bg-[#040b17] ${expanded ? 'h-full min-h-0' : 'h-[520px] sm:h-[600px]'}`}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(14,116,144,0.16),transparent_42%)]" />
@@ -714,6 +796,8 @@ export default function ConstellationGraph({
             selectedNodeId={selectedNodeId}
             focusMode={focusMode}
             pathMode={pathMode}
+            editMode={editMode}
+            onEditModeChange={setEditMode}
             onSelectNode={onSelectNode}
           />
         </Canvas>
@@ -723,11 +807,32 @@ export default function ConstellationGraph({
           selectedNodeId={selectedNodeId}
           focusMode={focusMode}
           pathMode={pathMode}
+          editMode={editMode}
+          onEditModeChange={setEditMode}
           onSelectNode={onSelectNode}
         />
       )}
+      {dimension === '3d' && (
+        <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-slate-700/90 bg-slate-950/90 p-1 text-slate-200 shadow-lg backdrop-blur">
+          <button
+            type="button"
+            onClick={() => setEditMode((current) => !current)}
+            className={`inline-flex h-9 items-center gap-1 rounded-md px-2 text-[11px] font-bold transition ${editMode ? 'bg-cyan-900/70 text-cyan-200' : 'text-slate-300 hover:bg-slate-800 hover:text-cyan-300'}`}
+            aria-label={editMode ? 'Disable arrange mode' : 'Enable arrange mode'}
+            aria-pressed={editMode}
+            title={editMode ? 'Disable arrange mode' : 'Arrange nodes'}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            <span>{editMode ? 'Arranging' : 'Arrange'}</span>
+          </button>
+        </div>
+      )}
       <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
-        <span>{dimension === '3d' ? 'Drag to orbit · scroll to zoom · drag a node to reposition' : 'Drag to pan · scroll to zoom · drag a node to reposition'}</span>
+        <span>
+          {dimension === '3d'
+            ? `Drag to orbit · scroll to zoom${editMode ? ' · arrange mode on' : ''}`
+            : `Drag background to pan · Use + / − to zoom${editMode ? ' · arrange mode on' : ''}`}
+        </span>
         <span className="text-cyan-400/80">{project.nodes.length} nodes · {project.edges.length} relationships</span>
       </div>
     </div>
