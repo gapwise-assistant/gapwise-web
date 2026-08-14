@@ -13,6 +13,13 @@ export interface PrecomputedSourceNode {
   relationship?: EdgeType;
 }
 
+export interface PrecomputedRelationship {
+  sourceNodeIndex: number;
+  targetNodeId: string;
+  type: EdgeType;
+  confidence?: number;
+}
+
 export interface IngestSourceInput {
   sourceId?: string;
   filename: string;
@@ -32,6 +39,7 @@ export interface IngestSourceInput {
   relevance?: ContextSource['relevance'];
   discardedAt?: string;
   derivedNodes?: PrecomputedSourceNode[];
+  relationships?: PrecomputedRelationship[];
 }
 
 export function makeId(prefix: string): string {
@@ -86,6 +94,44 @@ function mergeUnique(values: string[] | undefined, additions: string[] | undefin
   return merged.length ? merged : undefined;
 }
 
+function reconciliationNote(
+  relationship: EdgeType,
+  sourceFilename: string,
+  targetText: string
+): string | undefined {
+  if (relationship === 'contradicts') {
+    return `Questioned by newer evidence from ${sourceFilename}: ${targetText}`;
+  }
+  if (relationship === 'supersedes') {
+    return `Superseded by newer evidence from ${sourceFilename}: ${targetText}`;
+  }
+  if (relationship === 'resolves') {
+    return `Resolved by newer evidence from ${sourceFilename}: ${targetText}`;
+  }
+  return undefined;
+}
+
+function applyRelationshipState(
+  target: ClarityNode,
+  relationship: EdgeType,
+  sourceId: string,
+  sourceFilename: string,
+  now: string
+): void {
+  target.source_refs = Array.from(new Set([...target.source_refs, sourceId]));
+  const note = reconciliationNote(relationship, sourceFilename, target.text);
+  if (note) target.why_it_matters = mergeUnique(target.why_it_matters, [note]);
+  target.updated_at = now;
+
+  if (relationship === 'contradicts' && ['KNOWN', 'ASSUMPTION', 'DECISION', 'EVIDENCE'].includes(target.type)) {
+    target.status = 'DEFERRED';
+  }
+  if (relationship === 'supersedes') target.status = 'DEPRECATED';
+  if (relationship === 'resolves' && ['UNKNOWN', 'ASSUMPTION'].includes(target.type)) {
+    target.status = 'RESOLVED';
+  }
+}
+
 export async function ingestContextSource(
   project: Project,
   input: IngestSourceInput,
@@ -96,13 +142,28 @@ export async function ingestContextSource(
   const sourceId = input.sourceId ?? makeId('src');
   const content = input.content.trim();
   const previousSource = updated.sources.find((source) => source.id === sourceId);
+  const previousDerivedNodeIds = new Set(previousSource?.derived_node_ids ?? []);
+  const shouldCreateNode = Boolean(content) && (input.processingStatus ?? (content ? 'completed' : 'failed')) !== 'failed';
   if (previousSource) {
-    updated.nodes = updated.nodes.filter((node) => !previousSource.derived_node_ids.includes(node.id));
+    if (shouldCreateNode) {
+      previousDerivedNodeIds.forEach((nodeId) => {
+        const previousNode = updated.nodes.find((node) => node.id === nodeId);
+        if (!previousNode) return;
+        const hasOtherActiveSource = previousNode.source_refs.some((ref) =>
+          ref !== sourceId && updated.sources.some((source) => source.id === ref && !source.discarded_at)
+        );
+        if (hasOtherActiveSource) return;
+        previousNode.status = 'DEPRECATED';
+        previousNode.why_it_matters = mergeUnique(previousNode.why_it_matters, [
+          `Retained as historical context after ${input.filename} was re-analyzed.`,
+        ]);
+        previousNode.updated_at = now;
+      });
+    }
     updated.sources = updated.sources.filter((source) => source.id !== sourceId);
   }
   const nodeType = inferNodeType(content);
   const processingStatus = input.processingStatus ?? (content ? 'completed' : 'failed');
-  const shouldCreateNode = Boolean(content) && processingStatus !== 'failed';
   const derivedNodes = input.derivedNodes ?? [];
 
   const newSource: ContextSource = {
@@ -149,6 +210,7 @@ export async function ingestContextSource(
         existingNode.impact = Math.max(existingNode.impact, node.impact ?? node.confidence);
         existingNode.why_it_matters = mergeUnique(existingNode.why_it_matters, node.whyItMatters);
         existingNode.updated_at = now;
+        if (previousDerivedNodeIds.has(existingNode.id)) existingNode.status = statusForNodeType(existingNode.type);
         nodeIds.push(existingNode.id);
         return;
       }
@@ -174,25 +236,49 @@ export async function ingestContextSource(
 
     newSource.derived_node_ids = nodeIds;
 
-    nodesToProcess.forEach((node, index) => {
-      if (!node.relationship || !node.relatedNodeIds?.length) return;
-      const relationship = node.relationship;
-      const nodeId = nodeIds[index];
-      node.relatedNodeIds.forEach((relatedNodeId) => {
-        if (relatedNodeId === nodeId || !updated.nodes.some((candidate) => candidate.id === relatedNodeId)) return;
-        const exists = updated.edges.some((edge) =>
-          edge.source === nodeId && edge.target === relatedNodeId && edge.type === relationship
-        );
-        if (!exists) {
-          updated.edges.push({
-            id: makeId('edge_context'),
-            source: nodeId,
-            target: relatedNodeId,
-            type: relationship,
-            confidence: node.confidence,
-          });
+    const relationships: PrecomputedRelationship[] = [
+      ...(input.relationships ?? []),
+      ...nodesToProcess.flatMap((node, sourceNodeIndex) =>
+        node.relationship && node.relatedNodeIds?.length
+          ? node.relatedNodeIds.map((targetNodeId) => ({
+              sourceNodeIndex,
+              targetNodeId,
+              type: node.relationship as EdgeType,
+              confidence: node.confidence,
+            }))
+          : []
+      ),
+    ];
+
+    relationships.forEach((relationship) => {
+      const sourceNodeId = nodeIds[relationship.sourceNodeIndex];
+      const targetNodeId = relationship.targetNodeId.startsWith('new:')
+        ? nodeIds[Number(relationship.targetNodeId.slice(4))]
+        : relationship.targetNodeId;
+      if (!sourceNodeId || !targetNodeId) return;
+      const targetNode = updated.nodes.find((candidate) => candidate.id === targetNodeId);
+      if (sourceNodeId === targetNodeId) {
+        if (targetNode && relationship.type === 'resolves') {
+          applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
         }
-      });
+        return;
+      }
+      if (!updated.nodes.some((candidate) => candidate.id === targetNodeId)) return;
+      const confidence = relationship.confidence ?? nodesToProcess[relationship.sourceNodeIndex]?.confidence ?? 0;
+      if (confidence < 0.6) return;
+      const exists = updated.edges.some((edge) =>
+        edge.source === sourceNodeId && edge.target === targetNodeId && edge.type === relationship.type
+      );
+      if (!exists) {
+        updated.edges.push({
+          id: makeId('edge_context'),
+          source: sourceNodeId,
+          target: targetNodeId,
+          type: relationship.type,
+          confidence,
+        });
+      }
+      if (targetNode) applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
     });
   }
 

@@ -112,5 +112,6 @@ describe('Ask contextual suggestions', () => {
     expect(message).toContain('exactly 6');
     expect(message).toContain('When is my birthday?');
     expect(message).toContain('Never phrase a user-personal question as "When is your birthday?"');
+    expect(message).toContain('A sparse Context Pack or a pack with no exact phrase match is still a valid result');
   });
 });

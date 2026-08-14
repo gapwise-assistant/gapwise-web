@@ -70,6 +70,57 @@ describe('Today sections', () => {
     expect(questions[0].provenance).toMatch(/src_|Graph node/);
   });
 
+  it('explains why a question matters through graph relationships', () => {
+    const project = createGoldenDemoProject();
+    const question = {
+      id: 'unknown_budget_today',
+      type: 'UNKNOWN' as const,
+      text: 'What is the trip budget?',
+      status: 'OPEN' as const,
+      confidence: 0.35,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: '2026-08-11T10:00:00Z',
+      updated_at: '2026-08-11T10:00:00Z',
+    };
+    const decision = {
+      id: 'decision_hotels_today',
+      type: 'DECISION' as const,
+      text: 'Which hotels should I book?',
+      status: 'RESOLVED' as const,
+      confidence: 0.8,
+      impact: 0.8,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: '2026-08-11T10:00:00Z',
+      updated_at: '2026-08-11T10:00:00Z',
+    };
+    project.nodes.push(question, decision);
+    project.edges.push({
+      id: 'edge_budget_blocks_hotels',
+      source: question.id,
+      target: decision.id,
+      type: 'blocks',
+      confidence: 0.9,
+    });
+    const contextPack = buildContextPack({
+      userId: 'demo-user',
+      query: 'trip budget',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      limits: { unresolvedGaps: 1, contradictions: 0 },
+    });
+
+    const questions = buildTodayQuestions({
+      project,
+      brief: briefWithContextPack(contextPack),
+      now: new Date('2026-08-11T20:00:00Z'),
+    });
+
+    expect(questions[0].reason).toContain('Blocks: "Which hotels should I book?"');
+  });
+
   it('adds a Calendar preparation question from Context Pack commitments', () => {
     const project = createGoldenDemoProject();
     const now = new Date('2026-08-11T20:00:00Z');

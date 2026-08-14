@@ -18,7 +18,19 @@ export interface AskResult {
   sources: AskSource[];
 }
 
-export class AskAgentError extends Error {}
+export type AskFailureStage = 'agent-auth' | 'agent-unavailable' | 'context-pack' | 'gemini';
+
+export class AskAgentError extends Error {
+  readonly stage: AskFailureStage;
+  readonly status?: number;
+
+  constructor(message: string, options?: { stage?: AskFailureStage; status?: number }) {
+    super(message);
+    this.name = 'AskAgentError';
+    this.stage = options?.stage ?? 'agent-unavailable';
+    this.status = options?.status;
+  }
+}
 
 const graphNodeSchema = z.object({
   id: z.string(),
@@ -79,13 +91,19 @@ async function agentRequestHeaders(): Promise<Record<string, string>> {
   if (process.env.GAPSWISE_AGENT_AUTH !== 'true') return {};
   const audience = agentBaseUrl();
   if (!audience.startsWith('https://')) {
-    throw new AskAgentError('Authenticated ADK calls require an HTTPS Cloud Run URL.');
+    throw new AskAgentError('Authenticated ADK calls require an HTTPS Cloud Run URL.', { stage: 'agent-auth' });
   }
   if (!agentIdentityHeadersPromise) {
     agentIdentityHeadersPromise = (async () => {
-      const auth = new GoogleAuth();
-      const client = await auth.getIdTokenClient(audience);
-      return client.getRequestHeaders(audience);
+      try {
+        const auth = new GoogleAuth();
+        const client = await auth.getIdTokenClient(audience);
+        return client.getRequestHeaders(audience);
+      } catch (error) {
+        throw new AskAgentError('Cloud Run identity-token creation failed for the ADK agent.', {
+          stage: 'agent-auth',
+        });
+      }
     })();
   }
   return agentIdentityHeadersPromise;
@@ -93,15 +111,36 @@ async function agentRequestHeaders(): Promise<Record<string, string>> {
 
 async function createSession(userId: string, projectId?: string): Promise<string> {
   const identityHeaders = await agentRequestHeaders();
-  const response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...identityHeaders },
-    body: JSON.stringify({ state: { product: 'Gapswise', ...(projectId ? { gapswise_project_id: projectId } : {}) } }),
-  });
-  if (!response.ok) {
-    throw new AskAgentError(`ADK session creation failed with status ${response.status}.`);
+  let response: Response;
+  try {
+    response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...identityHeaders },
+      body: JSON.stringify({
+        state: {
+          product: 'Gapswise',
+          gapswise_user_id: userId,
+          ...(projectId ? { gapswise_project_id: projectId } : {}),
+        },
+      }),
+    });
+  } catch (error) {
+    throw new AskAgentError('The deployed ADK agent could not be reached while creating a session.', {
+      stage: 'agent-unavailable',
+    });
   }
-  const body = await response.json() as { id?: string };
+  if (!response.ok) {
+    throw new AskAgentError(`ADK session creation failed with status ${response.status}.`, {
+      stage: 'agent-unavailable',
+      status: response.status,
+    });
+  }
+  let body: { id?: string };
+  try {
+    body = await response.json() as { id?: string };
+  } catch {
+    throw new AskAgentError('ADK session creation returned an invalid response.', { stage: 'agent-unavailable' });
+  }
   if (!body.id) throw new AskAgentError('ADK session creation returned no session id.');
   return body.id;
 }
@@ -123,19 +162,29 @@ function textFromAdkEvent(event: unknown): string[] {
 
 async function runAdkTurn(userId: string, sessionId: string, message: string): Promise<string> {
   const identityHeaders = await agentRequestHeaders();
-  const response = await fetch(`${agentBaseUrl()}/run_sse`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...identityHeaders },
-    body: JSON.stringify({
-      app_name: 'app',
-      user_id: userId,
-      session_id: sessionId,
-      new_message: { role: 'user', parts: [{ text: message }] },
-      streaming: true,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${agentBaseUrl()}/run_sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...identityHeaders },
+      body: JSON.stringify({
+        app_name: 'app',
+        user_id: userId,
+        session_id: sessionId,
+        new_message: { role: 'user', parts: [{ text: message }] },
+        streaming: true,
+      }),
+    });
+  } catch (error) {
+    throw new AskAgentError('The deployed ADK agent could not be reached while running Ask.', {
+      stage: 'agent-unavailable',
+    });
+  }
   if (!response.ok) {
-    throw new AskAgentError(`ADK run failed with status ${response.status}.`);
+    throw new AskAgentError(`ADK run failed with status ${response.status}.`, {
+      stage: 'agent-unavailable',
+      status: response.status,
+    });
   }
 
   const raw = await response.text();
@@ -150,7 +199,7 @@ async function runAdkTurn(userId: string, sessionId: string, message: string): P
       }
     });
   const answer = compactAdkTextChunks(textChunks);
-  if (!answer) throw new AskAgentError('ADK returned no user-visible answer.');
+  if (!answer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
   return answer;
 }
 
@@ -231,9 +280,25 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
       headers: { 'Content-Type': 'application/json', ...internalApiHeaders() },
       body: JSON.stringify({ userId, query, ...(projectId ? { projectId } : {}) }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.error('[Gapswise Ask]', {
+        stage: 'context-pack',
+        status: response.status,
+        hasProjectScope: Boolean(projectId),
+        queryLength: query.length,
+      });
+      return [];
+    }
     const parsed = contextPackResponseSchema.safeParse(await response.json());
-    if (!parsed.success) return [];
+    if (!parsed.success) {
+      console.error('[Gapswise Ask]', {
+        stage: 'context-pack',
+        reason: 'invalid-response-shape',
+        hasProjectScope: Boolean(projectId),
+        queryLength: query.length,
+      });
+      return [];
+    }
 
     const evidence = [
       ...parsed.data.contextPack.provenanceSources,
@@ -300,7 +365,13 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
           .map((source) => [source.id, source])
       ).values()
     ).slice(0, 8);
-  } catch {
+  } catch (error) {
+    console.error('[Gapswise Ask]', {
+      stage: 'context-pack',
+      reason: error instanceof Error ? error.name : 'unknown-error',
+      hasProjectScope: Boolean(projectId),
+      queryLength: query.length,
+    });
     return [];
   }
 }

@@ -75,6 +75,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       target: edge.target,
       type: edge.type,
       confidence: edge.confidence,
+      scope: 'project',
       status: 'ACTIVE',
       createdAt: updatedAt,
       updatedAt,
@@ -217,19 +218,23 @@ export function collectionsToProjects(collections: ProjectCollections): Project[
     .filter((project): project is Project => Boolean(project));
 }
 
-export function generalContextToCollections(userId: string, project: Project): Pick<ProjectCollections, 'nodes' | 'sources'> {
+export function generalContextToCollections(userId: string, project: Project): Pick<ProjectCollections, 'nodes' | 'edges' | 'sources'> {
   const collections = projectToCollections(userId, project);
   return {
     nodes: collections.nodes.map(({ projectId: _projectId, ...node }) => ({ ...node, scope: 'global' })),
+    edges: collections.edges.map(({ projectId: _projectId, ...edge }) => ({ ...edge, scope: 'global' })),
     sources: collections.sources.map(({ projectId: _projectId, ...source }) => ({ ...source, scope: 'global' })),
   };
 }
 
-export function collectionsToGeneralContext(collections: Pick<ProjectCollections, 'nodes' | 'sources'>): Project {
+type GeneralContextCollections = Pick<ProjectCollections, 'nodes' | 'sources'> & { edges?: FirestoreEdge[] };
+
+export function collectionsToGeneralContext(collections: GeneralContextCollections): Project {
   const context = emptyGeneralContext();
   const nodes = collections.nodes.filter((node) => node.scope === 'global' && !node.projectId);
+  const edges = (collections.edges ?? []).filter((edge) => edge.scope === 'global' && !edge.projectId);
   const sources = collections.sources.filter((source) => source.scope === 'global' && !source.projectId);
-  const updatedAt = [...nodes.map((node) => node.updatedAt), ...sources.map((source) => source.updatedAt)].sort().at(-1);
+  const updatedAt = [...nodes.map((node) => node.updatedAt), ...edges.map((edge) => edge.updatedAt), ...sources.map((source) => source.updatedAt)].sort().at(-1);
   return {
     ...context,
     updated_at: updatedAt ?? context.updated_at,
@@ -248,6 +253,13 @@ export function collectionsToGeneralContext(collections: Pick<ProjectCollections
       updated_at: node.updatedAt,
       x: node.x,
       y: node.y,
+    })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: edge.type,
+      confidence: edge.confidence,
     })),
     sources: sources.map((source) => ({
       id: source.id,

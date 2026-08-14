@@ -19,7 +19,8 @@ export type EdgeType =
   | 'informs'
   | 'resolves'
   | 'derived_from'
-  | 'supersedes';
+  | 'supersedes'
+  | 'affects';
 
 export interface SourceRef {
   id: string;

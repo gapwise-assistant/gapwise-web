@@ -166,6 +166,10 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'edges', edge);
   }
 
+  async deleteEdge(userId: string, edgeId: string): Promise<void> {
+    await this.collection(userId, 'edges').doc(edgeId).delete();
+  }
+
   async getSources(userId: string): Promise<FirestoreSource[]> {
     return this.list<FirestoreSource>(userId, 'sources');
   }

@@ -292,6 +292,13 @@ describe('MockStorageProvider', () => {
 
   it('maps general context into unassigned global records', () => {
     const context = emptyGeneralContext('2026-08-12T12:00:00.000Z');
+    context.edges.push({
+      id: 'edge_general_supports',
+      source: 'node_general_fact',
+      target: 'node_general_goal',
+      type: 'supports',
+      confidence: 0.9,
+    });
     context.sources.push({
       id: 'src_general_note',
       filename: 'general-note.txt',
@@ -304,7 +311,12 @@ describe('MockStorageProvider', () => {
     const collections = generalContextToCollections('demo-user', context);
     expect(collections.sources[0]).toMatchObject({ scope: 'global' });
     expect(collections.sources[0].projectId).toBeUndefined();
+    expect(collections.edges[0]).toMatchObject({ scope: 'global', type: 'supports' });
+    expect(collections.edges[0].projectId).toBeUndefined();
     expect(collectionsToGeneralContext(collections).sources[0].id).toBe('src_general_note');
+    expect(collectionsToGeneralContext(collections).edges).toEqual([
+      expect.objectContaining({ id: 'edge_general_supports', type: 'supports' }),
+    ]);
   });
 
   it('keeps general context isolated when the Golden Demo project is updated', async () => {

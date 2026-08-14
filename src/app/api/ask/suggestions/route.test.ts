@@ -86,7 +86,7 @@ describe('POST /api/ask/suggestions', () => {
     const response = await POST(jsonRequest({ userId: 'demo-user' }));
 
     expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({ error: 'ADK is unavailable.' });
+    await expect(response.json()).resolves.toEqual({ error: 'ADK is unavailable.', stage: 'agent-unavailable' });
   });
 
   it('rejects an invalid request', async () => {

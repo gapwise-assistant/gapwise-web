@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
+import { askGapswise, AskAgentError, type AskFailureStage } from '@/lib/ask/adkClient';
 import { generateLocalAskSuggestions } from '@/lib/ask/localDemoAdapter';
 import { buildSuggestionRequestMessage, parseSuggestedQuestions } from '@/lib/ask/suggestions';
 import { isDemoMode } from '@/lib/runtime/demoMode';
@@ -13,6 +13,19 @@ const suggestionsRequestSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   scopeLabel: z.string().trim().min(1).max(120).default('Everything'),
 });
+
+function failureStage(error: unknown): AskFailureStage {
+  const candidate = error instanceof AskAgentError || (error && typeof error === 'object' && 'stage' in error)
+    ? (error as { stage?: unknown }).stage
+    : undefined;
+  if (candidate === 'agent-auth' || candidate === 'agent-unavailable' || candidate === 'context-pack' || candidate === 'gemini') {
+    return candidate;
+  }
+  if (error instanceof AskAgentError) {
+    return 'agent-unavailable';
+  }
+  return 'gemini';
+}
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -54,7 +67,7 @@ export async function POST(request: Request) {
     });
     const suggestions = parseSuggestedQuestions(result.answer);
     if (!suggestions.top.length && !suggestions.other.length) {
-      throw new AskAgentError('Gapswise returned no contextual suggested questions.');
+      throw new AskAgentError('Gemini returned no structured contextual suggestions.', { stage: 'gemini' });
     }
     return NextResponse.json({
       topQuestions: suggestions.top,
@@ -62,9 +75,16 @@ export async function POST(request: Request) {
       generatedBy: 'gapswise-agent',
     });
   } catch (error) {
+    const stage = failureStage(error);
+    console.error('[Gapswise Ask suggestions]', {
+      stage,
+      error: error instanceof Error ? error.message : 'unknown-error',
+      hasProjectScope: Boolean(parsed.data.projectId),
+      scopeLabelLength: parsed.data.scopeLabel.length,
+    });
     const message = error instanceof AskAgentError
       ? error.message
       : 'Contextual suggestions are unavailable right now.';
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json({ error: message, stage }, { status: 502 });
   }
 }

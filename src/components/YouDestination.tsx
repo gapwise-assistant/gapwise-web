@@ -10,6 +10,7 @@ import { MyWorldView } from '@/components/MyWorldView';
 import { ClarityGraphCanvas } from '@/components/ClarityGraphCanvas';
 import { MemoryView } from '@/components/MemoryView';
 import { currentPriorities, userLevelUnresolvedQuestions } from '@/lib/you/sections';
+import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { AppScope } from '@/types/scope';
 
 interface YouDestinationProps {
@@ -186,8 +187,8 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
   };
 
   const questionEffectText = (node: ClarityNode) => {
-    const affectedEdges = project.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
-    if (affectedEdges.length) return `${affectedEdges.length} connected project item${affectedEdges.length === 1 ? '' : 's'}`;
+    const reasons = relationshipReasons(project, node.id);
+    if (reasons.length) return reasons.join(' · ');
     if (node.type === 'ASSUMPTION') return 'Project direction and decision confidence';
     return 'Next project decision';
   };

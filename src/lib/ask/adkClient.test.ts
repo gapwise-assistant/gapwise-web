@@ -91,6 +91,12 @@ describe('ADK Ask client', () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:8080/apps/app/users/demo-user/sessions',
+      expect.objectContaining({
+        body: expect.stringContaining('"gapswise_user_id":"demo-user"'),
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8080/apps/app/users/demo-user/sessions',
       expect.objectContaining({ body: expect.stringContaining('"gapswise_project_id":"project_hackathon"') })
     );
     expect(fetchMock).toHaveBeenCalledWith(

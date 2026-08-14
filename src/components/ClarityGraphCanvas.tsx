@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Filter, Sparkles, AlertCircle, Info, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { Project, ClarityNode, NodeType } from '@/types/clarity';
+import { relationshipReasons } from '@/lib/graph/relationshipContext';
 
 interface ClarityGraphCanvasProps {
   project: Project;
@@ -22,6 +23,12 @@ const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: strin
   NEXT_ACTION: { bg: 'bg-cyan-950/80', border: 'border-cyan-700/80', text: 'text-cyan-300', dot: 'bg-cyan-400' },
   PREFERENCE: { bg: 'bg-fuchsia-950/80', border: 'border-fuchsia-700/80', text: 'text-fuchsia-300', dot: 'bg-fuchsia-400' },
 };
+
+function readableStatus(status: ClarityNode['status']): string {
+  if (status === 'DEFERRED') return 'Questionable';
+  if (status === 'DEPRECATED') return 'Stale';
+  return status === 'RESOLVED' ? 'Resolved' : 'Open';
+}
 
 export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   project,
@@ -152,7 +159,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                     isSelected ? 'ring-2 ring-cyan-400 border-cyan-400 scale-[1.02]' : style.border
                   } ${isTopGap ? 'animate-pulse border-rose-400' : ''}`}
                 >
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                     <div className="flex items-center space-x-2">
                       <span className={`w-2 h-2 rounded-full ${style.dot}`} />
                       <span className={`text-[10px] uppercase font-bold tracking-wider ${style.text}`}>
@@ -169,6 +176,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                     {node.confidence < 0.6 && (
                       <span className="text-[10px] text-amber-400 font-medium">
                         {(node.confidence * 100).toFixed(0)}% conf
+                      </span>
+                    )}
+
+                    {(node.status === 'DEFERRED' || node.status === 'DEPRECATED') && (
+                      <span className="rounded-full border border-amber-800 bg-amber-950/80 px-2 py-0.5 text-[9px] font-bold text-amber-300">
+                        {readableStatus(node.status)}
                       </span>
                     )}
                   </div>
@@ -205,7 +218,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                 <span className={`px-2.5 py-1 text-xs font-bold rounded-lg ${nodeTypeColors[selectedNode.type].bg} ${nodeTypeColors[selectedNode.type].text} border ${nodeTypeColors[selectedNode.type].border}`}>
                   {selectedNode.type}
                 </span>
-                <span className="text-xs text-slate-400">Status: {selectedNode.status}</span>
+                <span className="text-xs text-slate-400">Status: {readableStatus(selectedNode.status)}</span>
               </div>
 
               <div>
@@ -240,6 +253,19 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                   </span>
                 </div>
               </div>
+
+              {relationshipReasons(project, selectedNode.id).length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-slate-800">
+                  <span className="text-xs font-semibold text-slate-400">Relationships:</span>
+                  <ul className="space-y-1">
+                    {relationshipReasons(project, selectedNode.id).map((relationship) => (
+                      <li key={relationship} className="text-xs text-slate-300">
+                        {relationship}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="space-y-2 pt-2 border-t border-slate-800">
                 <span className="text-xs font-semibold text-slate-400">Linked Sources:</span>

@@ -136,6 +136,10 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'edges', { ...edge, userId });
   }
 
+  async deleteEdge(userId: string, edgeId: string): Promise<void> {
+    await this.remove(userId, 'edges', edgeId);
+  }
+
   async getSources(userId: string): Promise<FirestoreSource[]> {
     return (await this.getUser(userId)).sources;
   }
@@ -213,7 +217,7 @@ export class MockStorageProvider implements StorageProvider {
     await this.writeDb(db);
   }
 
-  private async remove<K extends keyof Pick<MockDatabase['users'][string], 'nodes' | 'sources'>>(
+  private async remove<K extends keyof Pick<MockDatabase['users'][string], 'nodes' | 'edges' | 'sources'>>(
     userId: string,
     collection: K,
     id: string

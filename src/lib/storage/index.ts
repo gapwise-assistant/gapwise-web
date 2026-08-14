@@ -82,8 +82,12 @@ export async function loadProjectState(userId: string): Promise<{ projects: Proj
 
 export async function loadGeneralContext(userId: string): Promise<Project> {
   const storage = getStorageProvider();
-  const [nodes, sources] = await Promise.all([storage.getNodes(userId), storage.getSources(userId)]);
-  return collectionsToGeneralContext({ nodes, sources });
+  const [nodes, sources, edges] = await Promise.all([
+    storage.getNodes(userId),
+    storage.getSources(userId),
+    storage.getEdges(userId),
+  ]);
+  return collectionsToGeneralContext({ nodes, sources, edges });
 }
 
 export async function loadProjectForScope(userId: string, projectId?: string): Promise<{ project: Project; scope: AppScope }> {
@@ -99,9 +103,14 @@ export async function loadProjectForScope(userId: string, projectId?: string): P
 export async function saveGeneralContext(userId: string, project: Project): Promise<Project> {
   const storage = getStorageProvider();
   const collections = generalContextToCollections(userId, project);
-  const [existingNodes, existingSources] = await Promise.all([storage.getNodes(userId), storage.getSources(userId)]);
+  const [existingNodes, existingSources, existingEdges] = await Promise.all([
+    storage.getNodes(userId),
+    storage.getSources(userId),
+    storage.getEdges(userId),
+  ]);
   const nextNodeIds = new Set(collections.nodes.map((node) => node.id));
   const nextSourceIds = new Set(collections.sources.map((source) => source.id));
+  const nextEdgeIds = new Set(collections.edges.map((edge) => edge.id));
 
   await Promise.all([
     ...existingNodes
@@ -110,7 +119,11 @@ export async function saveGeneralContext(userId: string, project: Project): Prom
     ...existingSources
       .filter((source) => source.scope === 'global' && !source.projectId && !nextSourceIds.has(source.id))
       .map((source) => storage.deleteSource(userId, source.id)),
+    ...existingEdges
+      .filter((edge) => edge.scope === 'global' && !edge.projectId && !nextEdgeIds.has(edge.id))
+      .map((edge) => storage.deleteEdge(userId, edge.id)),
     ...collections.nodes.map((node) => storage.saveNode(userId, node)),
+    ...collections.edges.map((edge) => storage.saveEdge(userId, edge)),
     ...collections.sources.map((source) => storage.saveSource(userId, source)),
   ]);
   return project;

@@ -2,6 +2,7 @@ import { ClarityNode, Project } from '@/types/clarity';
 import { DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { relationshipReasons } from '@/lib/graph/relationshipContext';
 
 export interface TodayQuestion {
   id: string;
@@ -52,11 +53,12 @@ function bestContextPack(brief: DailyBrief): ContextPack | null {
   return packs.find((pack) => pack.upcomingCommitments.some(isCalendarNode)) ?? packs[0] ?? null;
 }
 
-function questionFromNode(node: ClarityNode): TodayQuestion {
+function questionFromNode(project: Project, node: ClarityNode): TodayQuestion {
+  const reasons = relationshipReasons(project, node.id, 2);
   return {
     id: `question_${node.id}`,
     question: node.text.endsWith('?') ? node.text : `What should we do about: ${node.text}?`,
-    reason: node.why_it_matters?.[0] ?? 'This unresolved item can affect the next decision.',
+    reason: [node.why_it_matters?.[0], ...reasons].filter(Boolean).slice(0, 2).join(' ') || 'This unresolved item can affect the next decision.',
     provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
     sourceNodeIds: [node.id],
   };
@@ -90,8 +92,8 @@ export function buildTodayQuestions(params: {
   const contextPack = bestContextPack(params.brief);
   const questions: TodayQuestion[] = [];
 
-  contextPack?.unresolvedGaps.forEach((node) => questions.push(questionFromNode(node)));
-  contextPack?.contradictions.forEach((node) => questions.push(questionFromNode(node)));
+  contextPack?.unresolvedGaps.forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
+  contextPack?.contradictions.forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
   contextPack?.upcomingCommitments.filter(isCalendarNode).forEach((node) => {
     const question = calendarQuestion(node, now);
     if (question) questions.push(question);
@@ -101,7 +103,7 @@ export function buildTodayQuestions(params: {
     reasoningProject.nodes
       .filter((node) => node.status === 'OPEN' && ['UNKNOWN', 'ASSUMPTION', 'RISK'].includes(node.type))
       .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact))
-      .forEach((node) => questions.push(questionFromNode(node)));
+      .forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
   }
 
   const seen = new Set<string>();

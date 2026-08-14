@@ -46,7 +46,7 @@ export const graphUpdateSchema = z.object({
     z.object({
       source: z.string().min(1),
       target: z.string().min(1),
-      type: z.enum(['supports', 'contradicts', 'depends_on', 'blocks', 'informs', 'resolves', 'derived_from', 'supersedes']),
+      type: z.enum(['supports', 'contradicts', 'depends_on', 'blocks', 'informs', 'resolves', 'derived_from', 'supersedes', 'affects']),
     })
   ),
 });

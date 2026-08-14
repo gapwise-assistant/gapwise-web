@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -27,6 +28,7 @@ from google.genai import types
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
@@ -67,7 +69,12 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
         return {"error": "GAPSWISE_APP_URL is not configured."}
 
     project_id = tool_context.state.get("gapswise_project_id")
-    resolved_user_id = resolve_gapswise_user_id(user_id)
+    session_user_id = tool_context.state.get("gapswise_user_id")
+    resolved_user_id = (
+        session_user_id.strip()
+        if isinstance(session_user_id, str) and session_user_id.strip()
+        else resolve_gapswise_user_id(user_id)
+    )
     if not resolved_user_id:
         return {"error": "A Gapswise user ID is required for this request."}
     request_body = {"userId": resolved_user_id, "query": query}
@@ -93,19 +100,45 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
 
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            return json.loads(response.read().decode("utf-8"))
+            result = json.loads(response.read().decode("utf-8"))
+            context_pack = result.get("contextPack") if isinstance(result, dict) else None
+            if isinstance(context_pack, dict):
+                logger.info(
+                    "Context Pack loaded for Ask: project_scope=%s active_goals=%d unresolved_gaps=%d evidence=%d provenance=%d",
+                    bool(project_id),
+                    len(context_pack.get("activeGoals", [])),
+                    len(context_pack.get("unresolvedGaps", [])),
+                    len(context_pack.get("relevantEvidence", [])),
+                    len(context_pack.get("provenanceSources", [])),
+                )
+            else:
+                logger.warning(
+                    "Context Pack returned an unexpected shape for Ask: project_scope=%s",
+                    bool(project_id),
+                )
+            return result
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8")
         try:
             detail = json.loads(body)
         except json.JSONDecodeError:
             detail = body
+        logger.error(
+            "Context Pack request failed for Ask: status=%s project_scope=%s",
+            error.code,
+            bool(project_id),
+        )
         return {
             "error": "Context Pack request failed.",
             "status": error.code,
             "detail": detail,
         }
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        logger.error(
+            "Context Pack request failed for Ask: error=%s project_scope=%s",
+            type(error).__name__,
+            bool(project_id),
+        )
         return {"error": "Context Pack request failed.", "detail": str(error)}
 
 
@@ -123,6 +156,10 @@ root_agent = Agent(
         "When asked to generate contextual suggested questions for the Ask screen, call get_context_pack first, "
         "then return exactly six requested JSON questions based only on that context: three highest-priority questions "
         "in top_questions and three useful but less urgent ideas in other_questions. Do not return generic questions. "
+        "A sparse Context Pack or a pack with no exact phrase match is still a valid result, not an error. "
+        "If any goals, gaps, evidence, decisions, preferences, or commitments are returned, use those details. "
+        "If every collection is empty, return cautious questions about the most important missing information for the current scope. "
+        "Never refuse, say that the Context Pack is empty, claim lack of access, or return an explanation instead of the requested JSON. "
         "Phrase suggested questions from the user's perspective: use first-person wording such as 'When is my birthday?' for user facts, never 'When is your birthday?' unless the user is explicitly asking about the AI. "
         "Use the supplied Gapswise user ID. A local demo fallback is allowed only when "
         "GAPSWISE_DEFAULT_USER_ID is explicitly configured. "

@@ -32,6 +32,7 @@ export interface FirestoreEdge extends BaseEntity {
   target: string;
   type: EdgeType;
   confidence?: number;
+  scope?: 'project' | 'global';
 }
 
 export interface FirestoreSource extends BaseEntity {
@@ -107,6 +108,7 @@ export interface StorageProvider {
 
   getEdges(userId: string): Promise<FirestoreEdge[]>;
   saveEdge(userId: string, edge: FirestoreEdge): Promise<void>;
+  deleteEdge(userId: string, edgeId: string): Promise<void>;
 
   getSources(userId: string): Promise<FirestoreSource[]>;
   saveSource(userId: string, source: FirestoreSource): Promise<void>;

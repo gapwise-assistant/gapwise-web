@@ -1627,3 +1627,43 @@ No authentication, scope, graph, AI, storage, Calendar, or deployment behavior
 was changed for this responsive pass. Desktop/browser-width verification is
 covered by the typecheck and production build; no browser automation dependency
 is currently installed in the repository.
+
+## 11. Graph Reconciliation During Context Ingestion
+
+Real-AI context ingestion now performs one structured Gemini analysis for each
+new, changed context item. The prompt receives the project goal, a compact set
+of important nodes, unresolved gaps, and their existing edges. Gemini can return
+source-backed nodes plus conservative relationships using:
+
+- `supports`
+- `contradicts`
+- `supersedes`
+- `resolves`
+- `depends_on`
+- `blocks`
+- `affects`
+- `informs`
+- `derived_from`
+
+Relationship output uses a returned-node index for the new source nodes and an
+existing node ID, or `new:<index>` for another node in the same response. Only
+relationships with confidence at least `0.6` and valid project-local endpoints
+are persisted. Unknown-question filtering keeps the relationship indexes aligned
+when generic or duplicate questions are rejected.
+
+Ingestion preserves graph history. Reprocessing a source retains its previous
+derived nodes and marks them `DEPRECATED`; they remain visible in the graph but
+are excluded from normal reasoning. `contradicts` marks older knowns,
+assumptions, decisions, or evidence as `DEFERRED` and records why. `supersedes`
+marks the older node stale, while `resolves` marks an existing unknown or
+assumption resolved. All affected nodes retain provenance to the newer source.
+
+The existing `Project.edges` representation remains the canonical graph. Edges
+are persisted in Firestore and the mock provider, including global edges used by
+the Everything scope. Global edge records use `scope: global`; project edges use
+`scope: project`, preserving user and project isolation.
+
+Project Questions, Today questions, and the Clarity Graph explain relationship
+paths in user-facing language such as `Blocks: "Which hotels should I book?"`,
+`Resolved by`, `Contradicted by`, or `Affected by`. The Clarity Score formula was
+not changed. Demo mode remains deterministic and does not call Gemini.

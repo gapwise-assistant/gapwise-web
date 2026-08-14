@@ -3,6 +3,7 @@ import { createProjectFromInput } from '@/lib/projects/createProject';
 import { calculateClarityScore } from '@/lib/prioritization';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { analyzeContextItem, processContextSource } from '@/lib/context/contextAnalysis';
+import { ingestContextSource } from '@/lib/context/ingestion';
 import { Project } from '@/types/clarity';
 
 function projectWithGoal(goal = 'Plan a 10 day Japan trip for October'): Project {
@@ -78,6 +79,145 @@ describe('AI context graph analysis', () => {
     expect(unknowns.map((node) => node.text)).toEqual(['What is the trip budget?']);
   });
 
+  it('reconciles new evidence with assumptions and unresolved questions', async () => {
+    const project = projectWithGoal('Plan a Japan trip and choose hotels responsibly.');
+    project.nodes.push(
+      {
+        id: 'assumption_hotel_area',
+        type: 'ASSUMPTION',
+        text: 'Hotels near Shinjuku are the best option.',
+        status: 'OPEN',
+        confidence: 0.8,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'user',
+        created_at: '2026-08-13T10:00:00.000Z',
+        updated_at: '2026-08-13T10:00:00.000Z',
+      },
+      {
+        id: 'unknown_trip_budget',
+        type: 'UNKNOWN',
+        text: 'What is my Japan trip budget?',
+        status: 'OPEN',
+        confidence: 0.7,
+        impact: 0.9,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-13T10:00:00.000Z',
+        updated_at: '2026-08-13T10:00:00.000Z',
+      }
+    );
+    const genAI = mockGenAI({
+      summary: 'New hotel research challenges the old area assumption and answers the budget question.',
+      nodes: [
+        { type: 'EVIDENCE', text: 'Comparable Kyoto hotels fit the available trip budget better.', confidence: 0.95, impact: 0.85 },
+      ],
+      relationships: [
+        { source_node_index: 0, target_node_id: 'assumption_hotel_area', type: 'contradicts', confidence: 0.95 },
+        { source_node_index: 0, target_node_id: 'unknown_trip_budget', type: 'resolves', confidence: 0.92 },
+      ],
+    });
+
+    const result = await processContextSource(project, input({
+      content: 'Hotel research shows Kyoto options fit the budget better than Shinjuku.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+    const assumption = result.project.nodes.find((node) => node.id === 'assumption_hotel_area');
+    const budget = result.project.nodes.find((node) => node.id === 'unknown_trip_budget');
+
+    expect(result.project.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target: 'assumption_hotel_area', type: 'contradicts', confidence: 0.95 }),
+      expect.objectContaining({ target: 'unknown_trip_budget', type: 'resolves', confidence: 0.92 }),
+    ]));
+    expect(assumption).toEqual(expect.objectContaining({ status: 'DEFERRED', source_refs: ['src_japan_notes'] }));
+    expect(assumption?.why_it_matters?.join(' ')).toContain('Questioned by newer evidence');
+    expect(budget).toEqual(expect.objectContaining({ status: 'RESOLVED', source_refs: ['src_japan_notes'] }));
+    expect(budget?.why_it_matters?.join(' ')).toContain('Resolved by newer evidence');
+  });
+
+  it('connects goal-relevant gaps to decisions without creating speculative edges', async () => {
+    const project = projectWithGoal('Plan a Japan trip.');
+    const goalId = project.nodes[0].id;
+    const genAI = mockGenAI({
+      summary: 'Budget is needed before hotel selection.',
+      nodes: [
+        { type: 'UNKNOWN', text: 'What is the trip budget?', confidence: 0.9, impact: 0.9 },
+        { type: 'DECISION', text: 'Which hotels should I book?', confidence: 0.9, impact: 0.85 },
+      ],
+      relationships: [
+        { source_node_index: 0, target_node_id: 'new:1', type: 'blocks', confidence: 0.93 },
+        { source_node_index: 1, target_node_id: goalId, type: 'affects', confidence: 0.9 },
+        { source_node_index: 0, target_node_id: 'missing_node', type: 'supports', confidence: 0.99 },
+      ],
+    });
+
+    const result = await processContextSource(project, input({
+      content: 'I need a budget before deciding which hotels to book.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+    const budget = result.project.nodes.find((node) => node.text === 'What is the trip budget?');
+    const decision = result.project.nodes.find((node) => node.text === 'Which hotels should I book?');
+
+    expect(result.project.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: budget?.id, target: decision?.id, type: 'blocks' }),
+      expect.objectContaining({ source: decision?.id, target: goalId, type: 'affects' }),
+    ]));
+    expect(result.project.edges.some((edge) => edge.target === 'missing_node')).toBe(false);
+  });
+
+  it('resolves an existing question when the new analysis repeats its meaning', async () => {
+    const project = projectWithGoal('Plan a Japan trip.');
+    project.nodes.push({
+      id: 'unknown_existing_budget',
+      type: 'UNKNOWN',
+      text: 'What is the trip budget?',
+      status: 'OPEN',
+      confidence: 0.4,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-13T10:00:00.000Z',
+      updated_at: '2026-08-13T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The note answers the existing budget question.',
+      nodes: [{ type: 'UNKNOWN', text: 'What is the trip budget?', confidence: 0.9, impact: 0.9 }],
+      relationships: [{ source_node_index: 0, target_node_id: 'unknown_existing_budget', type: 'resolves', confidence: 0.95 }],
+    });
+
+    const result = await processContextSource(project, input({
+      content: 'The trip budget is 3000 USD.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.filter((node) => node.text === 'What is the trip budget?')).toHaveLength(1);
+    expect(result.project.nodes.find((node) => node.id === 'unknown_existing_budget')).toEqual(
+      expect.objectContaining({ status: 'RESOLVED', source_refs: ['src_japan_notes'] })
+    );
+  });
+
+  it('preserves historical nodes when a source is reprocessed', async () => {
+    const project = projectWithGoal();
+    const first = await ingestContextSource(project, {
+      sourceId: 'src_reprocessed',
+      filename: 'changing-note.txt',
+      type: 'text',
+      content: 'The original hotel plan.',
+      derivedNodes: [{ type: 'KNOWN', text: 'The original hotel plan.', confidence: 0.8 }],
+    }, DEFAULT_USER_PROFILE);
+    const second = await ingestContextSource(first, {
+      sourceId: 'src_reprocessed',
+      filename: 'changing-note.txt',
+      type: 'text',
+      content: 'The updated hotel plan.',
+      derivedNodes: [{ type: 'KNOWN', text: 'The updated hotel plan.', confidence: 0.9 }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(second.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'The original hotel plan.', status: 'DEPRECATED' }),
+      expect.objectContaining({ text: 'The updated hotel plan.', status: 'RESOLVED' }),
+    ]));
+    expect(second.sources).toHaveLength(1);
+    expect(second.sources[0].derived_node_ids).toHaveLength(1);
+  });
+
   it('persists an advisory possibly-not-relevant flag without discarding the source', async () => {
     const genAI = mockGenAI({
       summary: 'A note that may belong to another project.',
@@ -119,14 +259,20 @@ describe('AI context graph analysis', () => {
   });
 
   it('keeps context analysis isolated to the project supplied to it', async () => {
-    const genAI = mockGenAI({ summary: 'Private project note.', nodes: [{ type: 'KNOWN', text: 'Private trip detail.', confidence: 0.9, impact: 0.6 }] });
     const projectA = projectWithGoal('Plan a Japan trip.');
     const projectB = projectWithGoal('Ship a hackathon project.');
+    projectB.nodes[0].id = 'goal_project_b_private';
+    const genAI = mockGenAI({
+      summary: 'Private project note.',
+      nodes: [{ type: 'KNOWN', text: 'Private trip detail.', confidence: 0.9, impact: 0.6 }],
+      relationships: [{ source_node_index: 0, target_node_id: projectB.nodes[0].id, type: 'supports', confidence: 0.99 }],
+    });
     const result = await processContextSource(projectA, input({ sourceId: 'src_private_a' }), DEFAULT_USER_PROFILE, { genAI });
 
     expect(result.project.sources.some((source) => source.id === 'src_private_a')).toBe(true);
     expect(projectB.sources).toEqual([]);
     expect(projectB.nodes).toHaveLength(1);
+    expect(result.project.edges).toEqual([]);
   });
 
   it('requests the configured structured graph schema and compact project state', async () => {

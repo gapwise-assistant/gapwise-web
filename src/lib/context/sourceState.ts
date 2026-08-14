@@ -19,7 +19,7 @@ export function nodeUsesActiveSource(project: Project, node: ClarityNode): boole
 }
 
 export function activeReasoningNodes(project: Project): ClarityNode[] {
-  return project.nodes.filter((node) => nodeUsesActiveSource(project, node));
+  return project.nodes.filter((node) => node.status !== 'DEPRECATED' && nodeUsesActiveSource(project, node));
 }
 
 export function projectForReasoning(project: Project): Project {
