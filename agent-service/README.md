@@ -105,6 +105,7 @@ Local development uses:
 
 ```text
 GAPSWISE_APP_URL=http://localhost:3000
+GAPSWISE_INTERNAL_API_SECRET=the-same-secret-as-the-next-js-app
 GAPSWISE_DEFAULT_USER_ID=demo-user
 GEMINI_MODEL=gemini-2.5-flash-lite
 GEMINI_EVAL_MODEL=gemini-2.5-flash-lite

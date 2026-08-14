@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { loadGeneralContext, saveGeneralContext } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { Project } from '@/types/clarity';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
 const saveSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   context: z.object({}).passthrough(),
 });
 
@@ -18,8 +19,7 @@ function jsonError(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.nextUrl.searchParams.get('userId')?.trim();
-    if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
+    const userId = await requireAuthenticatedUserId(request, request.nextUrl.searchParams.get('userId')?.trim());
     return NextResponse.json({ context: await loadGeneralContext(userId) });
   } catch (error) {
     return jsonError(error);
@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: Request) {
   try {
     const body = saveSchema.parse(await request.json());
-    const context = await saveGeneralContext(body.userId, body.context as unknown as Project);
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    const context = await saveGeneralContext(userId, body.context as unknown as Project);
     return NextResponse.json({ context });
   } catch (error) {
     return jsonError(error);

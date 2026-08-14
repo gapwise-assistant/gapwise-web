@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GoogleAuth } from 'google-auth-library';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
 
 export interface AskSource {
@@ -67,10 +68,34 @@ function gapswiseAppUrl(): string {
   return (process.env.GAPSWISE_APP_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 }
 
+function internalApiHeaders(): Record<string, string> {
+  const secret = process.env.GAPSWISE_INTERNAL_API_SECRET?.trim();
+  return secret ? { 'x-gapswise-internal-secret': secret } : {};
+}
+
+let agentIdentityHeadersPromise: Promise<Record<string, string>> | null = null;
+
+async function agentRequestHeaders(): Promise<Record<string, string>> {
+  if (process.env.GAPSWISE_AGENT_AUTH !== 'true') return {};
+  const audience = agentBaseUrl();
+  if (!audience.startsWith('https://')) {
+    throw new AskAgentError('Authenticated ADK calls require an HTTPS Cloud Run URL.');
+  }
+  if (!agentIdentityHeadersPromise) {
+    agentIdentityHeadersPromise = (async () => {
+      const auth = new GoogleAuth();
+      const client = await auth.getIdTokenClient(audience);
+      return client.getRequestHeaders(audience);
+    })();
+  }
+  return agentIdentityHeadersPromise;
+}
+
 async function createSession(userId: string, projectId?: string): Promise<string> {
+  const identityHeaders = await agentRequestHeaders();
   const response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...identityHeaders },
     body: JSON.stringify({ state: { product: 'Gapswise', ...(projectId ? { gapswise_project_id: projectId } : {}) } }),
   });
   if (!response.ok) {
@@ -97,9 +122,10 @@ function textFromAdkEvent(event: unknown): string[] {
 }
 
 async function runAdkTurn(userId: string, sessionId: string, message: string): Promise<string> {
+  const identityHeaders = await agentRequestHeaders();
   const response = await fetch(`${agentBaseUrl()}/run_sse`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...identityHeaders },
     body: JSON.stringify({
       app_name: 'app',
       user_id: userId,
@@ -202,7 +228,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
   try {
     const response = await fetch(`${gapswiseAppUrl()}/api/internal/context-pack`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...internalApiHeaders() },
       body: JSON.stringify({ userId, query, ...(projectId ? { projectId } : {}) }),
     });
     if (!response.ok) return [];

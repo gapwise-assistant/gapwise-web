@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { listProjects, loadProjectState, saveProject, setActiveProjectId, setAppScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
 const createProjectSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1),
   goal: z.string().trim().min(1),
   description: z.string().trim().optional(),
@@ -15,7 +16,7 @@ const createProjectSchema = z.object({
 });
 
 const updateActiveProjectSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   activeProjectId: z.string().trim().min(1).optional(),
   scope: z.discriminatedUnion('type', [
     z.object({ type: z.literal('everything') }),
@@ -48,17 +49,14 @@ function jsonError(error: unknown) {
   );
 }
 
-function readUserId(request: NextRequest): string {
+async function readUserId(request: NextRequest): Promise<string> {
   const userId = request.nextUrl.searchParams.get('userId')?.trim();
-  if (!userId) {
-    throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
-  }
-  return userId;
+  return requireAuthenticatedUserId(request, userId);
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = readUserId(request);
+    const userId = await readUserId(request);
     const state = await loadProjectState(userId);
     return NextResponse.json(state);
   } catch (error) {
@@ -69,11 +67,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = createProjectSchema.parse(await request.json());
+    const userId = await requireAuthenticatedUserId(request, body.userId);
     const project = createProjectFromInput(body);
-    await saveProject(body.userId, project);
+    await saveProject(userId, project);
     const scope = { type: 'project' as const, projectId: project.id };
-    await setAppScope(body.userId, scope);
-    const projects = await listProjects(body.userId);
+    await setAppScope(userId, scope);
+    const projects = await listProjects(userId);
     return NextResponse.json({ project, projects, activeProjectId: project.id, scope }, { status: 201 });
   } catch (error) {
     return jsonError(error);
@@ -83,16 +82,17 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = updateActiveProjectSchema.parse(await request.json());
-    const projects = await listProjects(body.userId);
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    const projects = await listProjects(userId);
     const requestedScope = body.scope ?? { type: 'project' as const, projectId: body.activeProjectId! };
     if (requestedScope.type === 'everything') {
-      await setAppScope(body.userId, requestedScope);
+      await setAppScope(userId, requestedScope);
       return NextResponse.json({ scope: requestedScope, projects });
     }
     const scopedProject = projects.find((project) => project.id === requestedScope.projectId);
     if (!scopedProject) throw new StorageError('Project does not exist for this user.', 'VALIDATION_ERROR');
-    await setAppScope(body.userId, requestedScope);
-    await setActiveProjectId(body.userId, requestedScope.projectId);
+    await setAppScope(userId, requestedScope);
+    await setActiveProjectId(userId, requestedScope.projectId);
     return NextResponse.json({ scope: requestedScope, activeProjectId: requestedScope.projectId, project: scopedProject, projects });
   } catch (error) {
     return jsonError(error);

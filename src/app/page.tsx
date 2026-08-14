@@ -21,84 +21,26 @@ import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/l
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { emptyGeneralContext, projectForScope, resolveScope } from '@/lib/scope/projectScope';
+import { authFetch } from '@/lib/auth/client';
+import { useAuth } from '@/components/AuthProvider';
+import { LoginScreen } from '@/components/LoginScreen';
 
 type AppTab = 'today' | 'ask' | 'context' | 'you';
 
-async function loadProjectFromAPI(userId: string): Promise<Project> {
-  try {
-    const res = await fetch(`/api/storage?userId=${encodeURIComponent(userId)}`);
-    if (!res.ok) throw new Error('Persistent storage API is not available');
-    const data = await res.json();
-    return data.project as Project;
-  } catch {
-    // Fallback to in-memory Golden Demo state
-    const stored = typeof window !== 'undefined'
-      ? localStorage.getItem(`gapwise_state_${userId}`)
-      : null;
-    if (stored) {
-      try {
-        const state = JSON.parse(stored);
-        if (state.contexts?.length) {
-          const ctx = state.contexts[0];
-          return {
-            ...GOLDEN_DEMO_PROJECT,
-            id: ctx.id,
-            title: ctx.title,
-            goal: ctx.goal,
-            status: ctx.status === 'ARCHIVED' ? 'archived' : 'active',
-            clarity_score: ctx.clarity_score || GOLDEN_DEMO_PROJECT.clarity_score,
-            nodes: state.nodes?.map((n: any) => ({
-              id: n.id, type: n.type, text: n.text, status: n.status,
-              confidence: n.confidence, impact: n.importance, priority: n.priority,
-              source_refs: n.sourceIds || [], why_it_matters: n.why_it_matters,
-              created_by: n.createdBy ?? 'agent', created_at: n.createdAt, updated_at: n.updatedAt,
-              x: n.x, y: n.y,
-            })) || GOLDEN_DEMO_PROJECT.nodes,
-            edges: state.edges?.map((e: any) => ({
-              id: e.id, source: e.source, target: e.target, type: e.type,
-            })) || GOLDEN_DEMO_PROJECT.edges,
-            sources: state.sources?.map((s: any) => ({
-              id: s.id, filename: s.filename, type: s.type, content: s.content,
-              extracted_at: s.extracted_at, derived_node_ids: s.derived_node_ids,
-            })) || GOLDEN_DEMO_PROJECT.sources,
-            history: state.conversations?.map((c: any) => ({
-              question: c.question, answer: c.answer,
-              timestamp: c.createdAt, graph_diff_summary: c.graph_diff_summary,
-            })) || [],
-          };
-        }
-      } catch {}
-    }
-    return JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT));
-  }
-}
-
-async function loadProjectsFromAPI(userId: string): Promise<{ projects: Project[]; activeProjectId?: string; scope: AppScope }> {
-  try {
-    const res = await fetch(`/api/projects?userId=${encodeURIComponent(userId)}`);
-    if (!res.ok) throw new Error('Projects API is not available');
-    const data = await res.json();
-    return {
-      projects: data.projects as Project[],
-      activeProjectId: data.activeProjectId as string | undefined,
-      scope: data.scope as AppScope ?? EVERYTHING_SCOPE,
-    };
-  } catch {
-    const fallbackProject = await loadProjectFromAPI(userId);
-    const fallbackActiveProjectId =
-      typeof window !== 'undefined' ? localStorage.getItem(`gapwise_active_project_${userId}`) ?? undefined : undefined;
-    const storedScope = typeof window !== 'undefined' ? localStorage.getItem(`gapwise_scope_${userId}`) : null;
-    return {
-      projects: [fallbackProject],
-      activeProjectId: fallbackActiveProjectId,
-      scope: storedScope ? JSON.parse(storedScope) as AppScope : EVERYTHING_SCOPE,
-    };
-  }
+async function loadProjectsFromAPI(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: AppScope }> {
+  const res = await authFetch(`/api/projects?userId=${encodeURIComponent(userId)}`);
+  if (!res.ok) throw new Error('Projects API is not available');
+  const data = await res.json();
+  return {
+    projects: data.projects as Project[],
+    activeProjectId: typeof data.activeProjectId === 'string' ? data.activeProjectId : null,
+    scope: data.scope as AppScope ?? EVERYTHING_SCOPE,
+  };
 }
 
 async function loadGeneralContextFromAPI(userId: string): Promise<Project> {
   try {
-    const response = await fetch(`/api/context/general?userId=${encodeURIComponent(userId)}`);
+    const response = await authFetch(`/api/context/general?userId=${encodeURIComponent(userId)}`);
     if (!response.ok) throw new Error('General context API is unavailable');
     return (await response.json()).context as Project;
   } catch {
@@ -108,7 +50,7 @@ async function loadGeneralContextFromAPI(userId: string): Promise<Project> {
 
 async function persistGeneralContextToAPI(userId: string, context: Project): Promise<boolean> {
   try {
-    const response = await fetch('/api/context/general', {
+    const response = await authFetch('/api/context/general', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, context }),
@@ -122,7 +64,7 @@ async function persistGeneralContextToAPI(userId: string, context: Project): Pro
 
 async function persistProjectToAPI(userId: string, project: Project): Promise<boolean> {
   try {
-    const res = await fetch('/api/storage', {
+    const res = await authFetch('/api/storage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, project }),
@@ -145,7 +87,7 @@ async function persistProjectToAPI(userId: string, project: Project): Promise<bo
 }
 
 async function createProjectViaAPI(userId: string, input: CreateProjectInput): Promise<{ project: Project; projects: Project[] }> {
-  const res = await fetch('/api/projects', {
+  const res = await authFetch('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, ...input }),
@@ -159,7 +101,7 @@ async function createProjectViaAPI(userId: string, input: CreateProjectInput): P
 
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
-    const res = await fetch('/api/projects', {
+    const res = await authFetch('/api/projects', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, scope }),
@@ -174,7 +116,7 @@ async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boole
 
 async function loadMemoriesFromAPI(userId: string, profile: UserMemoryProfile): Promise<DurableMemory[]> {
   try {
-    const res = await fetch(`/api/memory?userId=${encodeURIComponent(userId)}`);
+    const res = await authFetch(`/api/memory?userId=${encodeURIComponent(userId)}`);
     if (!res.ok) throw new Error('Durable memory API is not available');
     const data = await res.json();
     return data.memories as DurableMemory[];
@@ -185,7 +127,7 @@ async function loadMemoriesFromAPI(userId: string, profile: UserMemoryProfile): 
 
 async function persistMemoriesToAPI(userId: string, memories: DurableMemory[]): Promise<boolean> {
   try {
-    const res = await fetch('/api/memory', {
+    const res = await authFetch('/api/memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, memories }),
@@ -215,9 +157,10 @@ function persistProfileToLocalStorage(userId: string, profile: UserMemoryProfile
 }
 
 export default function Home() {
-  const [userId] = useState<string>(DEMO_USER_ID);
-  const [project, setProject] = useState<Project>(JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT)));
-  const [projects, setProjects] = useState<Project[]>([JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT))]);
+  const auth = useAuth();
+  const userId = auth.userId ?? DEMO_USER_ID;
+  const [project, setProject] = useState<Project>(() => emptyGeneralContext());
+  const [projects, setProjects] = useState<Project[]>([]);
   const [scope, setScope] = useState<AppScope>(EVERYTHING_SCOPE);
   const [generalContext, setGeneralContext] = useState<Project>(() => emptyGeneralContext());
   const [profile, setProfile] = useState<UserMemoryProfile>(DEFAULT_USER_PROFILE);
@@ -231,10 +174,11 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
   const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'connections' } | null>(null);
-  const [demoMode, setDemoMode] = useState(false);
+  const demoMode = auth.demoMode;
 
   // Load project from persistent storage on mount and user switch
   useEffect(() => {
+    if (!auth.isReady || !auth.userId) return;
     setIsLoading(true);
     setStorageMessage('');
     const loadedProfile = loadProfileFromLocalStorage(userId);
@@ -242,35 +186,28 @@ export default function Home() {
     setFeedbackEvents(loadFeedbackEvents(userId));
     loadMemoriesFromAPI(userId, loadedProfile).then(setMemories);
     Promise.all([loadProjectsFromAPI(userId), loadGeneralContextFromAPI(userId)]).then(([loaded, loadedGeneralContext]) => {
-      const nextProjects = loaded.projects.length ? loaded.projects : [JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT))];
+      const nextProjects = loaded.projects;
       const nextScope = resolveScope(loaded.scope, nextProjects);
       const selectedProject =
         (nextScope.type === 'project' ? nextProjects.find((item) => item.id === nextScope.projectId) : undefined) ??
         nextProjects.find((item) => item.id === loaded.activeProjectId) ??
         nextProjects.find((item) => item.status !== 'archived') ??
-        nextProjects[0];
+        nextProjects[0] ??
+        loadedGeneralContext;
       setProjects(nextProjects);
       setProject(selectedProject);
       setScope(nextScope);
       setGeneralContext(loadedGeneralContext);
       setIsLoading(false);
     }).catch(() => {
-      const fallback = JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT));
-      setProjects([fallback]);
-      setProject(fallback);
+      setProjects([]);
+      setProject(emptyGeneralContext());
       setScope(EVERYTHING_SCOPE);
       setGeneralContext(emptyGeneralContext());
-      setStorageMessage('Using local demo fallback. Cloud persistence is not connected.');
+      setStorageMessage('Projects could not be loaded from persistent storage.');
       setIsLoading(false);
     });
-  }, [userId]);
-
-  useEffect(() => {
-    fetch('/api/runtime')
-      .then((response) => response.ok ? response.json() : { demoMode: false })
-      .then((body) => setDemoMode(body.demoMode === true))
-      .catch(() => setDemoMode(false));
-  }, []);
+  }, [auth.isReady, auth.userId]);
 
   const scopedProject = useMemo(
     () => projectForScope(scope, projects, generalContext),
@@ -327,7 +264,7 @@ export default function Home() {
 
   const handleResetDemo = async () => {
     try {
-      await fetch('/api/storage', {
+      await authFetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, action: 'RESET' }),
@@ -373,7 +310,7 @@ export default function Home() {
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
-    const response = await fetch('/api/questions/answer', {
+    const response = await authFetch('/api/questions/answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -410,6 +347,18 @@ export default function Home() {
     setFeedbackEvents((current) => appendFeedbackEvent(userId, current, event));
   };
 
+  if (!auth.isReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-400">
+        Loading Gapswise...
+      </div>
+    );
+  }
+
+  if (!auth.userId) {
+    return <LoginScreen error={auth.error} />;
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -435,6 +384,8 @@ export default function Home() {
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
+        onSignOut={() => { void auth.signOut(); }}
+        accountLabel={auth.user?.displayName}
         demoMode={demoMode}
       />
 

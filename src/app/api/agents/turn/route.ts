@@ -4,6 +4,7 @@ import { runGapswiseOrchestrator } from '@/lib/agents/orchestrator';
 import { loadProject, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
       applyGraphUpdates?: boolean;
     };
 
-    userId = body.userId?.trim() ?? '';
+    userId = await requireAuthenticatedUserId(request, body.userId?.trim());
     const input = body.input?.trim();
     if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
     if (!input) throw new StorageError('Missing input.', 'VALIDATION_ERROR');

@@ -6,7 +6,13 @@ import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { getFirestoreClient } from '@/lib/firebase-admin';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
-import { getStorageMode, getStorageProvider, resetStorageProviderForTests } from '@/lib/storage';
+import {
+  getStorageMode,
+  getStorageProvider,
+  listProjects as listUserProjects,
+  loadProjectState,
+  resetStorageProviderForTests,
+} from '@/lib/storage';
 import { MockStorageProvider } from '@/lib/storage/mock';
 import { StorageError } from '@/lib/storage/types';
 import { collectionsToGeneralContext, generalContextToCollections } from '@/lib/storage/projectMapper';
@@ -14,6 +20,14 @@ import { emptyGeneralContext } from '@/lib/scope/projectScope';
 import { resolveGap } from '@/lib/tools/graphTools';
 
 const tempDirs: string[] = [];
+const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
+const originalStorageMode = process.env.USE_FIRESTORE;
+const originalMockStoragePath = process.env.GAPSWISE_MOCK_STORAGE_PATH;
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 async function makeProvider() {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'gapwise-storage-'));
@@ -23,7 +37,47 @@ async function makeProvider() {
 
 afterEach(async () => {
   resetStorageProviderForTests();
+  restoreEnv('GAPSWISE_DEMO_MODE', originalDemoMode);
+  restoreEnv('USE_FIRESTORE', originalStorageMode);
+  restoreEnv('GAPSWISE_MOCK_STORAGE_PATH', originalMockStoragePath);
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe('Project bootstrap', () => {
+  async function useIsolatedMockStorage(): Promise<MockStorageProvider> {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'gapwise-project-bootstrap-'));
+    tempDirs.push(dir);
+    process.env.USE_FIRESTORE = 'false';
+    process.env.GAPSWISE_MOCK_STORAGE_PATH = path.join(dir, 'db.json');
+    resetStorageProviderForTests();
+    return getStorageProvider() as MockStorageProvider;
+  }
+
+  it('keeps a new authenticated user empty outside demo mode', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    const storage = await useIsolatedMockStorage();
+
+    await expect(listUserProjects('firebase-user')).resolves.toEqual([]);
+    await expect(loadProjectState('firebase-user')).resolves.toEqual({
+      projects: [],
+      activeProjectId: null,
+      scope: { type: 'everything' },
+    });
+    await expect(storage.listProjects('firebase-user')).resolves.toEqual([]);
+  });
+
+  it('does not expose a previously auto-seeded Golden Demo to an authenticated user', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    const storage = await useIsolatedMockStorage();
+    await storage.saveProject('firebase-user', createGoldenDemoProject());
+
+    await expect(listUserProjects('firebase-user')).resolves.toEqual([]);
+    await expect(loadProjectState('firebase-user')).resolves.toMatchObject({
+      projects: [],
+      activeProjectId: null,
+      scope: { type: 'everything' },
+    });
+  });
 });
 
 describe('MockStorageProvider', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { RefreshCw, Target } from 'lucide-react';
+import { LogOut, RefreshCw, Target } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 
@@ -17,6 +17,8 @@ interface HeaderProps {
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
+  onSignOut: () => void;
+  accountLabel?: string;
   demoMode?: boolean;
 }
 
@@ -37,6 +39,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
+  onSignOut,
+  accountLabel,
   demoMode = false,
 }) => {
   const handleProjectSelect = (value: string) => {
@@ -131,13 +135,25 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onResetDemo}
-            title="DEMO_MODE: Reset to Golden Dataset"
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-400 hover:border-cyan-800/50 transition-colors"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          {demoMode && (
+            <button
+              onClick={onResetDemo}
+              title="Reset local demo data"
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-400 hover:border-cyan-800/50 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          )}
+          {!demoMode && (
+            <button
+              type="button"
+              onClick={onSignOut}
+              title={accountLabel ? `Sign out of ${accountLabel}` : 'Sign out'}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-300 hover:border-rose-800/50 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>

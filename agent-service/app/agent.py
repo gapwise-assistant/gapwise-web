@@ -29,7 +29,6 @@ from google.genai import types
 load_dotenv()
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
-DEFAULT_GAPSWISE_USER_ID = "demo-user"
 
 
 def get_configured_model() -> str:
@@ -46,13 +45,11 @@ def health_check() -> dict[str, str]:
 
 
 def resolve_gapswise_user_id(user_id: str) -> str:
-    """Map ADK/dev UI placeholder users to the Gapswise demo user."""
-    configured_user_id = os.environ.get(
-        "GAPSWISE_DEFAULT_USER_ID", DEFAULT_GAPSWISE_USER_ID
-    )
+    """Resolve a local placeholder only when an explicit fallback is configured."""
+    configured_user_id = os.environ.get("GAPSWISE_DEFAULT_USER_ID", "").strip()
     if user_id.strip() in {"", "default", "user"}:
         return configured_user_id
-    return user_id
+    return user_id.strip()
 
 
 def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dict:
@@ -70,7 +67,10 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
         return {"error": "GAPSWISE_APP_URL is not configured."}
 
     project_id = tool_context.state.get("gapswise_project_id")
-    request_body = {"userId": resolve_gapswise_user_id(user_id), "query": query}
+    resolved_user_id = resolve_gapswise_user_id(user_id)
+    if not resolved_user_id:
+        return {"error": "A Gapswise user ID is required for this request."}
+    request_body = {"userId": resolved_user_id, "query": query}
     if query.strip() == "__gapswise_ask_suggestions__":
         request_body["query"] = "What context should shape the Ask suggestions?"
         request_body["includeBroadContext"] = True
@@ -80,7 +80,14 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
     request = urllib.request.Request(
         f"{base_url}/api/internal/context-pack",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            **(
+                {"x-gapswise-internal-secret": os.environ["GAPSWISE_INTERNAL_API_SECRET"]}
+                if os.environ.get("GAPSWISE_INTERNAL_API_SECRET")
+                else {}
+            ),
+        },
         method="POST",
     )
 
@@ -117,8 +124,8 @@ root_agent = Agent(
         "then return exactly six requested JSON questions based only on that context: three highest-priority questions "
         "in top_questions and three useful but less urgent ideas in other_questions. Do not return generic questions. "
         "Phrase suggested questions from the user's perspective: use first-person wording such as 'When is my birthday?' for user facts, never 'When is your birthday?' unless the user is explicitly asking about the AI. "
-        'Use user_id "demo-user" for the local Gapswise demo unless the user explicitly provides '
-        "a different Gapswise user ID. "
+        "Use the supplied Gapswise user ID. A local demo fallback is allowed only when "
+        "GAPSWISE_DEFAULT_USER_ID is explicitly configured. "
         "The get_context_pack tool automatically applies the project scope stored in the current session. "
         "Use the returned Context Pack as the source of truth and do not invent missing context. "
         "Project scope controls which context is eligible, not whether a retrieved source is relevant to the user's question. "

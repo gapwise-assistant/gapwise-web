@@ -4,6 +4,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { loadDurableMemories, replaceDurableMemories } from '@/lib/memory/serverStore';
 import { StorageError } from '@/lib/storage/types';
 import { DurableMemory } from '@/types/contextPack';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
@@ -29,7 +30,7 @@ const memorySchema = z.object({
 });
 
 const replaceRequestSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   memories: z.array(memorySchema),
 });
 
@@ -56,17 +57,14 @@ function jsonError(error: unknown) {
   );
 }
 
-function readUserId(request: NextRequest): string {
+async function readUserId(request: NextRequest): Promise<string> {
   const userId = request.nextUrl.searchParams.get('userId')?.trim();
-  if (!userId) {
-    throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
-  }
-  return userId;
+  return requireAuthenticatedUserId(request, userId);
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = readUserId(request);
+    const userId = await readUserId(request);
     const memories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);
     return NextResponse.json({ memories });
   } catch (error) {
@@ -77,7 +75,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = replaceRequestSchema.parse(await request.json());
-    const memories = await replaceDurableMemories(body.userId, body.memories as DurableMemory[]);
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    const memories = await replaceDurableMemories(userId, body.memories as DurableMemory[]);
     return NextResponse.json({ memories });
   } catch (error) {
     return jsonError(error);

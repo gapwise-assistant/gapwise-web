@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { AuthProvider } from '@/components/AuthProvider';
 
 export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
@@ -30,7 +31,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark h-full antialiased">
       <body className="min-h-full bg-slate-950 text-slate-100 selection:bg-cyan-500 selection:text-slate-950">
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

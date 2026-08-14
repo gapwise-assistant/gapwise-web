@@ -6,31 +6,27 @@ import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
-
-function assertInternalAuth(request: Request): void {
-  const secret = process.env.ATTENTION_RUN_SECRET;
-  if (!secret) return;
-  const header = request.headers.get('authorization');
-  if (header !== `Bearer ${secret}`) {
-    throw new StorageError('Unauthorized attention run.', 'PERMISSION_DENIED');
-  }
-}
 
 export async function POST(request: Request) {
   const started = Date.now();
   let userId = 'unknown';
   try {
-    assertInternalAuth(request);
     const body = (await request.json()) as {
       userId?: string;
       period?: string;
       force?: boolean;
       projectId?: string;
     };
-    userId = body.userId?.trim() ?? '';
-    if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
+    const schedulerSecret = process.env.ATTENTION_RUN_SECRET?.trim();
+    if (schedulerSecret && request.headers.get('authorization') === `Bearer ${schedulerSecret}`) {
+      userId = body.userId?.trim() ?? '';
+      if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
+    } else {
+      userId = await requireAuthenticatedUserId(request, body.userId?.trim());
+    }
 
     const { project, scope } = await loadProjectForScope(userId, body.projectId?.trim() || undefined);
     const memories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);

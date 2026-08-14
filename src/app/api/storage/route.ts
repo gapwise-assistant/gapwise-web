@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadProject, resetDemoProject, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
@@ -23,17 +24,14 @@ function jsonError(error: unknown) {
   );
 }
 
-function readUserId(request: NextRequest): string {
+async function readUserId(request: NextRequest): Promise<string> {
   const userId = request.nextUrl.searchParams.get('userId')?.trim();
-  if (!userId) {
-    throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
-  }
-  return userId;
+  return requireAuthenticatedUserId(request, userId);
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = readUserId(request);
+    const userId = await readUserId(request);
     const project = await loadProject(userId);
     return NextResponse.json({ project });
   } catch (error) {
@@ -44,10 +42,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as { userId?: string; action?: string; project?: unknown };
-    const userId = body.userId?.trim();
-    if (!userId) {
-      throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
-    }
+    const userId = await requireAuthenticatedUserId(request, body.userId?.trim());
 
     if (body.action === 'RESET') {
       const project = await resetDemoProject(userId);

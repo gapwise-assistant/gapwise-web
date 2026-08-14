@@ -9,6 +9,7 @@ import { makeLocalDemoStorageUrl } from '@/lib/storage/assets';
 import { ConnectedContext } from '@/components/ConnectedContext';
 import { AppScope } from '@/types/scope';
 import { contextTargetForScope, GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
+import { authFetch } from '@/lib/auth/client';
 
 interface ContextInboxProps {
   project: Project;
@@ -213,9 +214,9 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           formData.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
         });
         formData.set('file', selectedFile);
-        response = await fetch('/api/context/ingest', { method: 'POST', body: formData });
+        response = await authFetch('/api/context/ingest', { method: 'POST', body: formData });
       } else {
-        response = await fetch('/api/context/ingest', {
+        response = await authFetch('/api/context/ingest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),

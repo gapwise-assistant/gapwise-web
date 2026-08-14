@@ -15,7 +15,9 @@
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",
     "@google/genai": "^2.16.0",
+    "firebase": "^12.17.1",
     "firebase-admin": "^14.2.0",
+    "google-auth-library": "^9.15.1",
     "googleapis": "^174.0.1",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",

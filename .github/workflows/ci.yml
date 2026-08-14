@@ -1,0 +1,77 @@
+name: Gapswise CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    env:
+      GAPSWISE_DEMO_MODE: 'false'
+      USE_FIRESTORE: 'false'
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci.invalid
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ci-project
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ci.invalid
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+      NEXT_PUBLIC_FIREBASE_APP_ID: ci:app
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build production bundle
+        run: npm run build
+
+  agent:
+    name: Agent checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.13'
+          enable-cache: true
+          cache-dependency-glob: agent-service/uv.lock
+
+      - name: Install agent dependencies
+        working-directory: agent-service
+        run: uv sync --frozen
+
+      - name: Run offline agent tests
+        working-directory: agent-service
+        run: uv run pytest tests/unit

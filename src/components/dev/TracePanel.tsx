@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
 import { TraceEvent } from '@/types/observability';
+import { authFetch } from '@/lib/auth/client';
 
 interface TracePanelProps {
   userId: string;
@@ -13,7 +14,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
   const [open, setOpen] = useState(false);
 
   const load = async () => {
-    const res = await fetch(`/api/dev/traces?userId=${encodeURIComponent(userId)}`);
+    const res = await authFetch(`/api/dev/traces?userId=${encodeURIComponent(userId)}`);
     const data = await res.json();
     setTraces(data.traces ?? []);
   };

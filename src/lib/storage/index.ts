@@ -3,9 +3,9 @@ import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { FirestoreStorageProvider } from '@/lib/storage/firestore';
 import { MockStorageProvider } from '@/lib/storage/mock';
-import { StorageMode, StorageProvider } from '@/lib/storage/types';
+import { StorageError, StorageMode, StorageProvider } from '@/lib/storage/types';
 import { collectionsToGeneralContext, generalContextToCollections } from '@/lib/storage/projectMapper';
-import { mergeProjectsForEverything, resolveScope } from '@/lib/scope/projectScope';
+import { emptyGeneralContext, mergeProjectsForEverything, resolveScope } from '@/lib/scope/projectScope';
 import { createLocalDemoProjects } from '@/lib/demo/localFixtures';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 
@@ -28,10 +28,15 @@ export function resetStorageProviderForTests(): void {
 
 export async function listProjects(userId: string): Promise<Project[]> {
   const storage = getStorageProvider();
-  const existing = await storage.listProjects(userId);
+  const stored = await storage.listProjects(userId);
+  const existing = isDemoMode()
+    ? stored
+    : stored.filter((project) => project.id !== createGoldenDemoProject().id);
   if (existing.length) return existing;
 
-  const seeded = isDemoMode() ? createLocalDemoProjects() : [createGoldenDemoProject()];
+  if (!isDemoMode()) return [];
+
+  const seeded = createLocalDemoProjects();
   for (const project of seeded) {
     await storage.saveProject(userId, project);
   }
@@ -54,11 +59,19 @@ export async function setAppScope(userId: string, scope: AppScope): Promise<void
   await getStorageProvider().setAppScope(userId, scope);
 }
 
-export async function loadProjectState(userId: string): Promise<{ projects: Project[]; activeProjectId: string; scope: AppScope }> {
+export async function loadProjectState(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: AppScope }> {
   const projects = await listProjects(userId);
   const storedActiveProjectId = await getActiveProjectId(userId);
   const storedScope = await getAppScope(userId);
   const scope = resolveScope(storedScope, projects);
+
+  if (!projects.length) {
+    if (storedScope.type !== 'everything') {
+      await setAppScope(userId, EVERYTHING_SCOPE);
+    }
+    return { projects: [], activeProjectId: null, scope: EVERYTHING_SCOPE };
+  }
+
   const activeProject =
     projects.find((item) => item.id === (scope.type === 'project' ? scope.projectId : storedActiveProjectId)) ??
     projects.find((item) => item.status !== 'archived') ??
@@ -107,12 +120,16 @@ export async function saveGeneralContext(userId: string, project: Project): Prom
 }
 
 export async function loadProject(userId: string, projectId?: string): Promise<Project> {
-  const storage = getStorageProvider();
-  const existing = await storage.getProject(userId, projectId);
+  const projects = await listProjects(userId);
+  const existing = projectId
+    ? projects.find((project) => project.id === projectId)
+    : projects.find((project) => project.status !== 'archived') ?? projects[0];
   if (existing) return existing;
 
+  if (!isDemoMode()) return emptyGeneralContext();
+
   const seeded = createGoldenDemoProject();
-  await storage.saveProject(userId, seeded);
+  await getStorageProvider().saveProject(userId, seeded);
   return seeded;
 }
 
@@ -122,6 +139,9 @@ export async function saveProject(userId: string, project: Project): Promise<Pro
 }
 
 export async function resetDemoProject(userId: string): Promise<Project> {
+  if (!isDemoMode()) {
+    throw new StorageError('Golden Demo reset is available only in demo mode.', 'VALIDATION_ERROR');
+  }
   await getStorageProvider().resetDemoData(userId);
   return loadProject(userId);
 }

@@ -11,6 +11,7 @@ import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
 import { StorageError } from '@/lib/storage/types';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project, UserMemoryProfile } from '@/types/clarity';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
@@ -26,7 +27,7 @@ const profileSchema = z.object({
 }).passthrough();
 
 const jsonSourceSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   projectId: z.string().trim().min(1),
   sourceId: z.string().trim().min(1),
   filename: z.string().trim().min(1).max(240),
@@ -132,7 +133,8 @@ export async function POST(request: Request) {
     return jsonError(error, statusForError(error));
   }
 
-  const { source } = parsed;
+  const userId = await requireAuthenticatedUserId(request, parsed.source.userId);
+  const source = { ...parsed.source, userId };
   let target: { project: Project; isGeneral: boolean };
   try {
     target = await loadTarget(source.userId, source.projectId);

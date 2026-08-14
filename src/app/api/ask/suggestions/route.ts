@@ -4,11 +4,12 @@ import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { generateLocalAskSuggestions } from '@/lib/ask/localDemoAdapter';
 import { buildSuggestionRequestMessage, parseSuggestedQuestions } from '@/lib/ask/suggestions';
 import { isDemoMode } from '@/lib/runtime/demoMode';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
 const suggestionsRequestSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   projectId: z.string().trim().min(1).optional(),
   scopeLabel: z.string().trim().min(1).max(120).default('Everything'),
 });
@@ -26,10 +27,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid suggestions request.', issues: parsed.error.issues }, { status: 400 });
   }
 
+  let userId: string;
+  try {
+    userId = await requireAuthenticatedUserId(request, parsed.data.userId);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
+  }
+
   try {
     if (isDemoMode()) {
       const groups = await generateLocalAskSuggestions({
-        userId: parsed.data.userId,
+        userId,
         projectId: parsed.data.projectId,
       });
       return NextResponse.json({
@@ -40,7 +48,7 @@ export async function POST(request: Request) {
     }
 
     const result = await askGapswise({
-      userId: parsed.data.userId,
+      userId,
       projectId: parsed.data.projectId,
       message: buildSuggestionRequestMessage(parsed.data.scopeLabel),
     });

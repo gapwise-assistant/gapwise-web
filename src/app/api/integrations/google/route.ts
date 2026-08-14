@@ -10,19 +10,18 @@ import {
   updateIntegrationState,
 } from '@/lib/google/state';
 import { isDemoMode } from '@/lib/runtime/demoMode';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
-function parseUserId(body: { userId?: string }) {
-  const userId = body.userId?.trim();
-  if (!userId) throw new Error('Missing userId.');
-  return userId;
-}
-
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const userId = url.searchParams.get('userId')?.trim();
-  if (!userId) return NextResponse.json({ error: 'Missing userId.' }, { status: 400 });
+  let userId: string;
+  try {
+    userId = await requireAuthenticatedUserId(request, url.searchParams.get('userId')?.trim());
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
+  }
   if (isDemoMode()) {
     updateIntegrationState(userId, createDemoConnectedState('calendar'));
     return NextResponse.json({ integrations: getIntegrationStates(userId), demoMode: true });
@@ -44,7 +43,7 @@ export async function POST(request: Request) {
       selectedLabels?: string[];
       selectedDriveIds?: string[];
     };
-    const userId = parseUserId(body);
+    const userId = await requireAuthenticatedUserId(request, body.userId?.trim());
 
     if (isDemoMode() && body.action === 'connect') {
       if (!body.name) throw new Error('Missing integration name.');

@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { answerQuestion } from '@/lib/questions/answerQuestion';
 import { StorageError } from '@/lib/storage/types';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
 const requestSchema = z.object({
-  userId: z.string().trim().min(1),
+  userId: z.string().trim().min(1).optional(),
   nodeId: z.string().trim().min(1),
   answer: z.string().trim().min(1).max(5000),
   projectId: z.string().trim().min(1).optional(),
@@ -29,7 +30,8 @@ function errorResponse(error: unknown) {
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const result = await answerQuestion(body);
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    const result = await answerQuestion({ ...body, userId });
     return NextResponse.json({
       ...result,
       message: 'Understanding updated. This question is now resolved.',

@@ -5,6 +5,7 @@ import { StorageError } from '@/lib/storage/types';
 import { DEMO_PDF_EXTRACTION } from '@/lib/demo/localFixtures';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { makeLocalDemoStorageUrl } from '@/lib/storage/assets';
+import { assertStorageUrlBelongsToUser, requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
@@ -34,12 +35,12 @@ function isPdf(file: File): boolean {
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-    const userId = String(formData.get('userId') ?? '').trim();
+    const requestedUserId = String(formData.get('userId') ?? '').trim();
     const sourceId = String(formData.get('sourceId') ?? '').trim();
     const filename = String(formData.get('filename') ?? '').trim();
     const file = formData.get('file');
 
-    if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
+    const userId = await requireAuthenticatedUserId(request, requestedUserId);
     if (!sourceId) throw new StorageError('Missing sourceId.', 'VALIDATION_ERROR');
     if (!filename) throw new StorageError('Missing filename.', 'VALIDATION_ERROR');
     if (!(file instanceof File)) throw new StorageError('Missing PDF file.', 'VALIDATION_ERROR');
@@ -97,6 +98,9 @@ export async function DELETE(request: Request) {
     const body = (await request.json()) as { storageUrl?: string };
     const storageUrl = body.storageUrl?.trim();
     if (!storageUrl) throw new StorageError('Missing storageUrl.', 'VALIDATION_ERROR');
+
+    const userId = await requireAuthenticatedUserId(request);
+    assertStorageUrlBelongsToUser(storageUrl, userId);
 
     if (isDemoMode()) {
       if (!storageUrl.startsWith('local-demo://')) {

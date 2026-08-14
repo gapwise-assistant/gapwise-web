@@ -1459,3 +1459,121 @@ generic exploratory query has no keyword match. Normal user retrieval keeps its
 existing semantic filtering, so unrelated sources are not added to ordinary Ask
 answers. Connector notes such as Calendar events remain in their existing
 upcoming-commitments path instead of flooding broad source evidence.
+
+## 7. Firebase Authentication
+
+The application now supports Google sign-in through Firebase Authentication.
+
+- `src/lib/auth/client.ts` initializes the Firebase Web SDK from
+  `NEXT_PUBLIC_FIREBASE_*` configuration, signs users in with Google, attaches
+  the current Firebase ID token to API requests, and signs users out.
+- `src/components/AuthProvider.tsx` loads the runtime mode, exposes the
+  authenticated UID to the app, and keeps the existing local `demo-user` only
+  when `GAPSWISE_DEMO_MODE=true`.
+- `src/components/LoginScreen.tsx` is shown in real mode until a user signs in.
+- `src/lib/auth/server.ts` verifies Firebase ID tokens with Firebase Admin and
+  derives the server-side `userId` from the verified `uid`. A client-supplied
+  user ID can only be used as a consistency check and cannot select another
+  user's data.
+- User-scoped storage remains under the existing `users/{userId}/...` paths;
+  no `demo-user` data is migrated automatically.
+- Authenticated users with no projects now remain empty in the `Everything`
+  scope and are prompted to create their first project. The reserved
+  `hackathon_demo` fixture is excluded outside explicit demo mode, including
+  copies written by the earlier first-user bootstrap.
+- Golden Demo seeding and reset controls are available only when
+  `GAPSWISE_DEMO_MODE=true`; real Firebase users never silently fall back to
+  demo project data when Firestore is empty or temporarily unavailable.
+- The trusted ADK service may call the internal Context Pack route using the
+  shared `GAPSWISE_INTERNAL_API_SECRET`. This secret is server-only and is not
+  a browser credential.
+- Calendar OAuth remains separate. Calendar OAuth start is authenticated by
+  the signed-in Firebase session, then its existing OAuth state/callback flow
+  stores Calendar tokens separately under the verified UID.
+
+Real-mode setup:
+
+1. Enable Google under Firebase Console → Authentication → Sign-in method.
+2. Add `localhost` and the deployed host to Firebase authorized domains.
+3. Create a Firebase Web App and copy its public configuration to
+   `.env.local` using `.env.example`.
+4. Set the same random `GAPSWISE_INTERNAL_API_SECRET` in the Next.js and
+   `agent-service/.env` files.
+5. Start Next.js and the ADK service, then open `http://localhost:3000`.
+
+The route tests use an explicit test-only identity fallback so existing route
+tests do not require live Firebase credentials. Deployed environments always
+require a verified Firebase ID token or the private server-to-server secret.
+
+## 8. Cloud Run Staging
+
+Staging is deployed in Google Cloud project `gapwise-505217`, region
+`us-central1`, with both services configured for minimum instances `0`:
+
+- Public web service: `gapswise-web`
+- Private ADK service: `gapswise-agent`
+- Web URL: `https://gapswise-web-r3zqs7f2gq-uc.a.run.app`
+- Agent URL: `https://gapswise-agent-r3zqs7f2gq-uc.a.run.app`
+
+The web service runs with the dedicated
+`gapswise-web-runtime@gapwise-505217.iam.gserviceaccount.com` identity. It
+uses ADC for Firestore, Cloud Storage, and Vertex AI, and reads the internal
+API secret and Calendar OAuth client secret from Secret Manager. The agent
+uses `gapswise-agent-runtime@gapwise-505217.iam.gserviceaccount.com` and is
+not publicly invokable.
+
+The web runtime is the only principal granted `roles/run.invoker` on the
+agent. When `GAPSWISE_AGENT_AUTH=true`, the server-side Ask client obtains a
+Google-signed identity token for the private agent URL. The agent then calls
+the web Context Pack route with `GAPSWISE_INTERNAL_API_SECRET`. The verified
+Firebase UID and selected project ID remain in the ADK session/request, so
+real staging calls are never normalized to `demo-user`.
+
+Staging runtime values include:
+
+- `GAPSWISE_DEMO_MODE=false`
+- `USE_FIRESTORE=true`
+- `GOOGLE_CLOUD_PROJECT=gapwise-505217`
+- `GOOGLE_CLOUD_LOCATION=global`
+- `GEMINI_MODEL=gemini-2.5-flash-lite`
+- `CLOUD_STORAGE_BUCKET=gapwise-505217-context`
+- `GAPSWISE_AGENT_AUTH=true`
+
+The staging Calendar callback is:
+
+`https://gapswise-web-r3zqs7f2gq-uc.a.run.app/api/integrations/google/calendar/callback`
+
+That exact URI must also be listed under the existing Google OAuth Web Client
+in Google Cloud Console → APIs & Services → Credentials. The existing
+localhost callback remains configured for local development.
+
+Firebase Authentication authorized domains include both Cloud Run hostnames:
+
+- `gapswise-web-r3zqs7f2gq-uc.a.run.app`
+- `gapswise-web-782439096411.us-central1.run.app`
+
+Authorized domains contain only hostnames, without `https://`, paths, or a
+trailing slash.
+
+Local demo mode remains independent: set `GAPSWISE_DEMO_MODE=true` and
+`USE_FIRESTORE=false`; it does not require Firebase login or Cloud Run.
+
+### Production configuration boundary
+
+Production configuration is deployed through the checked-in `cloudbuild.yaml`.
+It contains no secret values. Firebase browser configuration and the OAuth
+client ID are supplied as Cloud Build substitutions because Next.js inlines
+`NEXT_PUBLIC_*` values during the browser build. The internal API secret and
+Google OAuth client secret are referenced from Secret Manager using
+`--set-secrets`; their values never enter the repository, Docker build context,
+image arguments, or browser bundle.
+
+Cloud Run uses `gapswise-web-runtime` and `gapswise-agent-runtime` service
+identities with Application Default Credentials for Google APIs. No
+`GOOGLE_APPLICATION_CREDENTIALS` path or service-account JSON file is used in
+staging. `.env.local` and `agent-service/.env` remain local-development-only
+files and are ignored by Git, Docker, and Cloud Build upload contexts.
+
+The existing `roles/run.invoker` binding from the web runtime identity to the
+private agent is preserved during deployment. The Cloud Build runtime does not
+need permission to change IAM policy for every release.

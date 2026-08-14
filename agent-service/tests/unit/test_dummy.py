@@ -81,6 +81,7 @@ def test_get_context_pack_posts_to_next_endpoint(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setenv("GAPSWISE_APP_URL", "http://localhost:3000")
+    monkeypatch.setenv("GAPSWISE_INTERNAL_API_SECRET", "internal-test-secret")
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     result = get_context_pack("demo-user", "What am I neglecting?", FakeToolContext())
@@ -88,10 +89,40 @@ def test_get_context_pack_posts_to_next_endpoint(monkeypatch) -> None:
     assert captured == {
         "url": "http://localhost:3000/api/internal/context-pack",
         "timeout": 10,
-        "headers": {"Content-type": "application/json"},
+        "headers": {
+            "Content-type": "application/json",
+            "X-gapswise-internal-secret": "internal-test-secret",
+        },
         "body": {"userId": "demo-user", "query": "What am I neglecting?"},
     }
     assert result["contextPack"]["includedContextIds"] == ["node_goal"]
+
+
+def test_get_context_pack_adds_internal_server_secret(monkeypatch) -> None:
+    """Trusted ADK calls authenticate without exposing a browser token."""
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"contextPack": {}}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["headers"] = dict(request.header_items())
+        return FakeResponse()
+
+    monkeypatch.setenv("GAPSWISE_APP_URL", "http://localhost:3000")
+    monkeypatch.setenv("GAPSWISE_INTERNAL_API_SECRET", "internal-test-secret")
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    get_context_pack("firebase-user-123", "What am I neglecting?", FakeToolContext())
+
+    assert captured["headers"]["X-gapswise-internal-secret"] == "internal-test-secret"
 
 
 def test_get_context_pack_maps_adk_default_user_to_demo_user(monkeypatch) -> None:
@@ -134,6 +165,12 @@ def test_resolve_gapswise_user_id_preserves_explicit_users(monkeypatch) -> None:
 
     assert resolve_gapswise_user_id("demo-user-1") == "demo-user-1"
     assert resolve_gapswise_user_id("default") == "demo-user"
+
+
+def test_resolve_gapswise_user_id_does_not_invent_demo_user(monkeypatch) -> None:
+    monkeypatch.delenv("GAPSWISE_DEFAULT_USER_ID", raising=False)
+
+    assert resolve_gapswise_user_id("default") == ""
 
 
 def test_get_context_pack_applies_project_scope_from_session(monkeypatch) -> None:
@@ -247,6 +284,6 @@ def test_root_agent_keeps_health_tool_and_adds_context_pack_tool() -> None:
     assert "three highest-priority questions" in instruction
     assert "top_questions" in instruction
     assert "other_questions" in instruction
-    assert 'Use user_id "demo-user"' in instruction
+    assert "supplied Gapswise user ID" in instruction
     assert "directly answers the user's question" in instruction
     assert "never refuse only because the evidence does not match the project goal" in instruction

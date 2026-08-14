@@ -7,6 +7,7 @@ import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
+import { authFetch } from '@/lib/auth/client';
 
 interface AskGapswiseProps {
   userId: string;
@@ -70,7 +71,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
     setSuggestionsError('');
     setSuggestedPrompts({ top: [], other: [] });
 
-    fetch('/api/ask/suggestions', {
+    authFetch('/api/ask/suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -129,7 +130,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/ask', {
+      const response = await authFetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

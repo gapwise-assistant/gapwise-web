@@ -1,4 +1,5 @@
 import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
+import { getAuth as getFirebaseAuth, Auth } from 'firebase-admin/auth';
 import { Firestore, getFirestore, initializeFirestore } from 'firebase-admin/firestore';
 import { StorageError } from '@/lib/storage/types';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
@@ -62,4 +63,8 @@ export function getFirestoreClient(): Firestore {
   }
 
   return firestoreClient;
+}
+
+export function getFirebaseAdminAuth(): Auth {
+  return getFirebaseAuth(getFirebaseAdminApp());
 }

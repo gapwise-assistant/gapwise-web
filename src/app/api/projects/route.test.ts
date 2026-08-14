@@ -39,6 +39,23 @@ describe('/api/projects', () => {
     });
   });
 
+  it('returns an empty Everything state for a new authenticated user', async () => {
+    vi.mocked(loadProjectState).mockResolvedValue({
+      projects: [],
+      activeProjectId: null,
+      scope: { type: 'everything' },
+    });
+
+    const response = await GET(new NextRequest('http://localhost/api/projects?userId=new-user'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      projects: [],
+      activeProjectId: null,
+      scope: { type: 'everything' },
+    });
+  });
+
   it('creates a project and persists it through storage', async () => {
     vi.mocked(saveProject).mockImplementation(async (_userId, project) => project);
     vi.mocked(setAppScope).mockResolvedValue(undefined);

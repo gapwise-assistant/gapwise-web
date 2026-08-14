@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadProjectForScope } from '@/lib/storage';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { StorageError } from '@/lib/storage/types';
 
 export const runtime = 'nodejs';
 
 const contextPackRequestSchema = z.object({
-  userId: z.string().trim().min(1, 'userId is required'),
+  userId: z.string().trim().min(1).optional(),
   query: z.string().trim().min(1, 'query is required'),
   projectId: z.string().trim().min(1).optional(),
   includeBroadContext: z.boolean().optional(),
@@ -35,9 +37,17 @@ export async function POST(request: Request) {
     );
   }
 
-  const { project, scope } = await loadProjectForScope(parsed.data.userId, parsed.data.projectId);
+  let userId: string;
+  try {
+    userId = await requireAuthenticatedUserId(request, parsed.data.userId);
+  } catch (error) {
+    const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED' ? 403 : 401;
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status });
+  }
+
+  const { project, scope } = await loadProjectForScope(userId, parsed.data.projectId);
   const contextPack = await buildContextPackForUser({
-    userId: parsed.data.userId,
+    userId,
     query: parsed.data.query,
     project,
     profile: DEFAULT_USER_PROFILE,

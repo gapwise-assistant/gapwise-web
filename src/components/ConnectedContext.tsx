@@ -5,6 +5,7 @@ import { RefreshCw, ShieldCheck } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { GoogleIntegrationName, GoogleIntegrationState, GoogleWorkspaceSignals } from '@/types/google';
 import { IntegrationSettings } from '@/components/IntegrationSettings';
+import { authFetch } from '@/lib/auth/client';
 
 interface ConnectedContextProps {
   userId: string;
@@ -22,7 +23,7 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   const [demoMode, setDemoMode] = useState(false);
 
   const loadIntegrations = async () => {
-    const res = await fetch(`/api/integrations/google?userId=${encodeURIComponent(userId)}`);
+    const res = await authFetch(`/api/integrations/google?userId=${encodeURIComponent(userId)}`);
     const data = await res.json();
     setIntegrations(data.integrations ?? []);
     setDemoMode(data.demoMode === true);
@@ -33,7 +34,7 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   }, [userId]);
 
   const mutate = async (body: Record<string, unknown>) => {
-    const res = await fetch('/api/integrations/google', {
+    const res = await authFetch('/api/integrations/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, ...body }),
@@ -44,13 +45,21 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
     return data;
   };
 
-  const handleConnect = (name: GoogleIntegrationName) => {
+  const handleConnect = async (name: GoogleIntegrationName) => {
     if (name === 'calendar') {
       if (demoMode) {
         void mutate({ action: 'connect', name }).then(() => setMessage('Using local demo Calendar events.'));
         return;
       }
-      window.location.href = `/api/integrations/google/calendar/start?userId=${encodeURIComponent(userId)}`;
+      const response = await authFetch('/api/integrations/google/calendar/start', {
+        headers: { Accept: 'application/json' },
+      });
+      const data = await response.json();
+      if (!response.ok || typeof data.url !== 'string') {
+        setMessage(data.error ?? 'Google Calendar connection could not be started.');
+        return;
+      }
+      window.location.href = data.url;
       return;
     }
 

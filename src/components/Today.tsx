@@ -12,6 +12,7 @@ import { buildComingUp, buildTodayQuestions, TodayQuestion } from '@/lib/today/s
 import { RecommendationCard } from '@/components/RecommendationCard';
 import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
+import { authFetch } from '@/lib/auth/client';
 
 interface TodayProps {
   userId: string;
@@ -42,7 +43,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
 
   React.useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/attention/run', {
+    authFetch('/api/attention/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, force: true, ...(scope.type === 'project' ? { projectId: scope.projectId } : {}) }),

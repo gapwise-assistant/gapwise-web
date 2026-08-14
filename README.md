@@ -14,6 +14,19 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+### Google sign-in
+
+In real mode, Gapswise requires Firebase Authentication. In the Firebase
+console, enable **Authentication → Sign-in method → Google**, add your local
+host (for example `localhost`) under authorized domains, and create a Firebase
+Web App. Copy its web configuration into the `NEXT_PUBLIC_FIREBASE_*` values
+from `.env.example`.
+
+Set the same random `GAPSWISE_INTERNAL_API_SECRET` in the Next.js `.env.local`
+and `agent-service/.env`. It is used only for the trusted ADK-to-Next.js
+Context Pack request and must never be a `NEXT_PUBLIC_*` variable. Calendar
+OAuth remains a separate permission flow after app sign-in.
+
 ### Zero-cost local demo
 
 Use the local file-backed provider, deterministic Ask responses, demo Calendar,
@@ -86,3 +99,30 @@ node IDs are saved on the Context Source; later Context Pack retrieval uses the
 stored source and graph data instead of re-sending the PDF.
 
 No Gmail, Drive, or email write action runs silently. Calendar access is read-only.
+
+### Production configuration boundary
+
+Production does not read `.env.local`, `agent-service/.env`, service-account JSON
+files, or downloaded OAuth credentials. Deploy the two services with
+`cloudbuild.yaml` instead:
+
+```bash
+gcloud builds submit . \
+  --project=gapwise-505217 \
+  --config=cloudbuild.yaml \
+  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_GOOGLE_OAUTH_CLIENT_ID='...'
+```
+
+The Firebase values and OAuth client ID are public browser/build configuration
+and are supplied as Cloud Build substitutions. The internal API secret and
+OAuth client secret are attached to Cloud Run from Secret Manager. Firestore,
+Cloud Storage, and Vertex AI use the dedicated Cloud Run service identities and
+Application Default Credentials. Never place secret values in substitutions or
+build arguments.
+
+The deployment file intentionally omits `GAPSWISE_DEFAULT_USER_ID`; staging
+requests must carry the authenticated Firebase UID. The local agent example may
+set it to `demo-user` only for local demo development.
+
+The web runtime service account must already have `roles/run.invoker` on
+`gapswise-agent`; the existing staging binding is preserved by deployments.
