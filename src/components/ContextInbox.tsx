@@ -3,10 +3,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, Eye, FileArchive, FileText, Image, Info, Mic, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { ContextSource, Project, UserMemoryProfile } from '@/types/clarity';
-import { GoogleWorkspaceSignals } from '@/types/google';
 import { discardContextSource, makeId, restoreContextSource } from '@/lib/context/ingestion';
 import { makeLocalDemoStorageUrl } from '@/lib/storage/assets';
-import { ConnectedContext } from '@/components/ConnectedContext';
 import { AppScope } from '@/types/scope';
 import { contextTargetForScope, GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
@@ -21,10 +19,10 @@ interface ContextInboxProps {
   onUpdateProject: (updated: Project) => void;
   onUpdateGeneralContext: (updated: Project) => void;
   focusedSourceId?: string;
-  entryTab?: 'recent' | 'connections';
+  entryTab?: 'recent' | 'documents' | 'add';
 }
 
-type ContextTab = 'recent' | 'documents' | 'connections' | 'add';
+type ContextTab = 'recent' | 'documents' | 'add';
 
 const sourceTypeOptions: Array<{ type: ContextSource['type']; label: string; icon: React.ReactNode }> = [
   { type: 'text', label: 'Text', icon: <FileText className="w-3.5 h-3.5" /> },
@@ -248,18 +246,6 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   const handleRestoreSource = (sourceId: string) => {
     const owner = visibleProjects.find((item) => item.sources.some((source) => source.id === sourceId));
     if (owner) updateTargetProject(restoreContextSource(owner, sourceId, profile));
-  };
-
-  const handleImportWorkspaceSignals = (signals: GoogleWorkspaceSignals) => {
-    const updated: Project = JSON.parse(JSON.stringify(targetProject));
-    const existingIds = new Set(updated.sources.map((source) => source.id));
-    signals.derivedSources.forEach((source) => {
-      if (!existingIds.has(source.id)) {
-        updated.sources.push(source);
-      }
-    });
-    updated.updated_at = new Date().toISOString();
-    updateTargetProject(updated);
   };
 
   const openSourceDetails = (source: ContextSource) => setSelectedSource(source);
@@ -678,7 +664,6 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         {([
           ['recent', 'Recent'],
           ['documents', 'Documents'],
-          ['connections', 'Connections'],
           ['add', 'Add context'],
         ] as const).map(([id, label]) => (
           <button
@@ -733,14 +718,6 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             </div>
           )}
         </section>
-      )}
-
-      {activeTab === 'connections' && (
-        <ConnectedContext
-          userId={userId}
-          project={targetProject}
-          onImportSources={handleImportWorkspaceSignals}
-        />
       )}
 
       {activeTab === 'add' && renderAddContext()}

@@ -1,40 +1,36 @@
 'use client';
 
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Archive, ChevronRight, Edit3, FileText, HelpCircle, MessageCircle, MoreHorizontal, Plus } from 'lucide-react';
-import { ClarityNode, Project, UserMemoryProfile } from '@/types/clarity';
+import { ClarityNode, Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { groupProjectSummaries } from '@/lib/projects/projectSummaries';
 import type { ProjectCardSummary } from '@/lib/projects/projectSummaries';
 import { MyWorldView } from '@/components/MyWorldView';
 import { ClarityGraphCanvas } from '@/components/ClarityGraphCanvas';
-import { MemoryView } from '@/components/MemoryView';
 import { currentPriorities, userLevelUnresolvedQuestions } from '@/lib/you/sections';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { AppScope } from '@/types/scope';
 
-interface YouDestinationProps {
+interface ScopeDestinationProps {
   userId: string;
   project: Project;
   worldProject: Project;
   projects: Project[];
   scope: AppScope;
   projectFocusKey: number;
-  profile: UserMemoryProfile;
   memories: DurableMemory[];
   onSelectProject: (projectId: string) => void;
   onOpenNewProject: () => void;
   onUpdateProject: (updated: Project) => void;
-  onUpdateProfile: (updated: UserMemoryProfile) => void;
-  onUpdateMemories: (updated: DurableMemory[]) => void;
   onAnswerQuestion: (node: ClarityNode) => void;
   onNavigateToContext: () => void;
   onNavigateToSource: (sourceId: string) => void;
   onNavigateToAsk: () => void;
 }
 
-type YouSection = 'overview' | 'projects' | 'priorities' | 'unclear' | 'memory' | 'world';
-type ProjectSection = 'overview' | 'questions' | 'graph' | 'sources' | 'settings';
+type ScopeSection = 'overview' | 'projects' | 'priorities' | 'unclear' | 'world';
+type ProjectSection = 'overview' | 'questions' | 'graph' | 'sources';
 
 function dismissNode(project: Project, nodeId: string): Project {
   const updated: Project = JSON.parse(JSON.stringify(project));
@@ -47,33 +43,26 @@ function dismissNode(project: Project, nodeId: string): Project {
   return updated;
 }
 
-export const YouDestination: React.FC<YouDestinationProps> = ({
+export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   userId,
   project,
   worldProject,
   projects,
   scope,
   projectFocusKey,
-  profile,
   memories,
   onSelectProject,
   onOpenNewProject,
   onUpdateProject,
-  onUpdateProfile,
-  onUpdateMemories,
   onAnswerQuestion,
   onNavigateToContext,
   onNavigateToSource,
   onNavigateToAsk,
 }) => {
-  const [section, setSection] = useState<YouSection>('overview');
+  const [section, setSection] = useState<ScopeSection>('overview');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
   const [whyNode, setWhyNode] = useState<ClarityNode | null>(null);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
-  const [settingsName, setSettingsName] = useState(project.title);
-  const [settingsGoal, setSettingsGoal] = useState(project.goal);
-  const [settingsDescription, setSettingsDescription] = useState(project.one_sentence_context ?? '');
-  const [settingsDeadline, setSettingsDeadline] = useState(project.deadline ?? '');
   const priorities = useMemo(() => currentPriorities(memories), [memories]);
   const unclear = useMemo(() => userLevelUnresolvedQuestions(projects), [projects]);
   const projectQuestions = useMemo(
@@ -102,13 +91,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
         .slice(0, 3),
     [project.nodes]
   );
-
-  useEffect(() => {
-    setSettingsName(project.title);
-    setSettingsGoal(project.goal);
-    setSettingsDescription(project.one_sentence_context ?? '');
-    setSettingsDeadline(project.deadline ?? '');
-  }, [project.id, project.title, project.goal, project.one_sentence_context, project.deadline]);
 
   useEffect(() => {
     if (projectFocusKey > 0) {
@@ -150,27 +132,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       updated_at: new Date().toISOString(),
     });
     setOpenProjectMenuId(null);
-  };
-
-  const saveProjectSettings = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!settingsName.trim() || !settingsGoal.trim()) return;
-    onUpdateProject({
-      ...project,
-      title: settingsName.trim(),
-      goal: settingsGoal.trim(),
-      one_sentence_context: settingsDescription.trim() || undefined,
-      deadline: settingsDeadline || undefined,
-      updated_at: new Date().toISOString(),
-    });
-  };
-
-  const archiveCurrentProject = () => {
-    onUpdateProject({
-      ...project,
-      status: 'archived',
-      updated_at: new Date().toISOString(),
-    });
   };
 
   const formatProcessingState = (state?: string) => {
@@ -300,7 +261,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       <section className="rounded-xl border border-cyan-800 bg-slate-900 p-5 shadow-xl shadow-cyan-950/10">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">Your projects</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">Projects</p>
             <h2 className="mt-2 text-xl font-extrabold text-slate-100">Things you are working on</h2>
             <p className="mt-1 text-xs text-slate-400">{projectGroups.active.length} active project{projectGroups.active.length === 1 ? '' : 's'}</p>
           </div>
@@ -352,7 +313,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="text-sm font-extrabold text-slate-100">Your priorities</h2>
+          <h2 className="text-sm font-extrabold text-slate-100">Priorities</h2>
           <p className="mt-1 text-xs text-slate-500">Supported by durable memory</p>
           <div className="mt-4 space-y-3">
             {priorities.length ? priorities.slice(0, 3).map((memory) => (
@@ -385,21 +346,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
         </article>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <h2 className="text-sm font-extrabold text-slate-100">What Gapswise remembers</h2>
-          <p className="mt-2 text-sm text-slate-400">
-            {memories.filter((memory) => !memory.forgotten_at).length} active memories about preferences, priorities, and stable context.
-          </p>
-          <button
-            type="button"
-            onClick={() => setSection('memory')}
-            className="mt-4 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300"
-          >
-            Manage memory
-          </button>
-        </article>
-
+      <section>
         <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <h2 className="text-sm font-extrabold text-slate-100">My World</h2>
           <p className="mt-2 text-sm text-slate-400">
@@ -464,7 +411,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
 
   const renderPriorities = () => (
     <section className="space-y-4">
-      <h2 className="text-lg font-extrabold text-slate-100">Your priorities</h2>
+      <h2 className="text-lg font-extrabold text-slate-100">Priorities</h2>
       {priorities.length ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {priorities.map((memory) => (
@@ -612,80 +559,12 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
     </section>
   );
 
-  const renderProjectSettings = () => (
-    <section className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">
-      <form onSubmit={saveProjectSettings} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h3 className="text-lg font-extrabold text-slate-100">Settings</h3>
-        <div className="mt-5 space-y-4">
-          <label className="block">
-            <span className="text-xs font-bold text-slate-300">Project name</span>
-            <input
-              value={settingsName}
-              onChange={(event) => setSettingsName(event.target.value)}
-              required
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-bold text-slate-300">Goal</span>
-            <textarea
-              value={settingsGoal}
-              onChange={(event) => setSettingsGoal(event.target.value)}
-              required
-              rows={3}
-              className="mt-2 w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-bold text-slate-300">Description/context</span>
-            <textarea
-              value={settingsDescription}
-              onChange={(event) => setSettingsDescription(event.target.value)}
-              rows={3}
-              className="mt-2 w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-bold text-slate-300">Deadline</span>
-            <input
-              value={settingsDeadline}
-              onChange={(event) => setSettingsDeadline(event.target.value)}
-              type="date"
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-            />
-          </label>
-        </div>
-        <button
-          type="submit"
-          className="mt-5 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950"
-        >
-          Save changes
-        </button>
-      </form>
-      <aside className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h3 className="text-sm font-extrabold text-slate-100">Archive project</h3>
-        <p className="mt-2 text-sm text-slate-400">
-          Archiving moves this project out of active work. It keeps its graph, questions, and sources.
-        </p>
-        <button
-          type="button"
-          onClick={archiveCurrentProject}
-          disabled={project.status === 'archived'}
-          className="mt-5 inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950 px-4 py-2 text-xs font-bold text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Archive className="h-4 w-4" />
-          {project.status === 'archived' ? 'Archived' : 'Archive project'}
-        </button>
-      </aside>
-    </section>
-  );
-
   const renderProjects = () => (
     <div className="space-y-5">
       <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Your projects</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Projects</p>
             <h2 className="mt-2 text-xl font-extrabold text-slate-100">{project.title}</h2>
             <p className="mt-2 max-w-2xl text-xs text-slate-400">{project.goal}</p>
           </div>
@@ -737,7 +616,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             ['questions', 'Questions'],
             ['graph', 'Graph'],
             ['sources', 'Sources'],
-            ['settings', 'Settings'],
           ] as const).map(([id, label]) => (
             <button
               key={id}
@@ -763,7 +641,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
           {sourceCards}
         </section>
       )}
-      {projectSection === 'settings' && renderProjectSettings()}
     </div>
   );
 
@@ -779,7 +656,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             ['questions', 'Questions'],
             ['graph', 'Graph'],
             ['sources', 'Sources'],
-            ['settings', 'Settings'],
           ] as const).map(([id, label]) => (
             <button
               key={id}
@@ -800,7 +676,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">{sourceCards}</section>
       )}
-      {projectSection === 'settings' && renderProjectSettings()}
     </div>
   );
 
@@ -811,8 +686,8 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       <div className="mx-auto max-w-7xl px-3 pt-5 sm:px-6 sm:pt-6 lg:px-8">
         <div className="flex flex-col gap-4 border-b border-slate-800 pb-5 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">YOU</p>
-            <h1 className="mt-2 text-2xl font-extrabold text-slate-100">You</h1>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">SCOPE</p>
+            <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Scope</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-400">
               What Gapswise understands about you and the things you are working on.
             </p>
@@ -821,10 +696,9 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
 
         <div className="touch-scroll mt-4 flex gap-2 overflow-x-auto pb-2">
           {([
-            ['projects', 'Your projects'],
-            ['priorities', 'Your priorities'],
+            ['projects', 'Projects'],
+            ['priorities', 'Priorities'],
             ['unclear', 'Still unclear'],
-            ['memory', 'What Gapswise remembers'],
             ['world', 'My World'],
           ] as const).map(([id, label]) => (
             <button
@@ -853,14 +727,6 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
         <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8">
           {renderProjects()}
         </div>
-      )}
-      {section === 'memory' && (
-        <MemoryView
-          profile={profile}
-          memories={memories}
-          onUpdateProfile={onUpdateProfile}
-          onUpdateMemories={onUpdateMemories}
-        />
       )}
       {section === 'world' && (
         <MyWorldView

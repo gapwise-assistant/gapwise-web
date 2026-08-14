@@ -6,7 +6,8 @@ import { NewProjectModal } from '@/components/NewProjectModal';
 import { Today } from '@/components/Today';
 import { AskGapswise } from '@/components/AskGapswise';
 import { ContextInbox } from '@/components/ContextInbox';
-import { YouDestination } from '@/components/YouDestination';
+import { ScopeDestination } from '@/components/YouDestination';
+import { SettingsDestination } from '@/components/SettingsDestination';
 import { IdontKnowModal } from '@/components/IdontKnowModal';
 import { AnswerQuestionModal, AnswerQuestionTarget } from '@/components/AnswerQuestionModal';
 import { TracePanel } from '@/components/dev/TracePanel';
@@ -25,8 +26,9 @@ import { authFetch } from '@/lib/auth/client';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
+import { AppDestination } from '@/lib/navigation';
 
-type AppTab = 'today' | 'ask' | 'context' | 'you';
+type AppTab = AppDestination;
 
 async function loadProjectsFromAPI(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: AppScope }> {
   const res = await authFetch(`/api/projects?userId=${encodeURIComponent(userId)}`);
@@ -199,7 +201,7 @@ export default function Home() {
   const [answerTarget, setAnswerTarget] = useState<AnswerQuestionTarget | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
-  const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'connections' } | null>(null);
+  const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'documents' | 'add' } | null>(null);
   const demoMode = auth.demoMode;
 
   // Load project from persistent storage on mount and user switch
@@ -282,7 +284,7 @@ export default function Home() {
       localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify({ type: 'project', projectId: result.project.id }));
     }
     setIsNewProjectOpen(false);
-    setActiveTab('you');
+    setActiveTab('scope');
     setProjectFocusKey((current) => current + 1);
     setStorageMessage('');
     return result.project;
@@ -453,7 +455,7 @@ export default function Home() {
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
-        onSignOut={() => { void auth.signOut(); }}
+        onOpenSettings={() => setActiveTab('settings')}
         accountLabel={auth.user?.displayName}
         demoMode={demoMode}
       />
@@ -499,11 +501,10 @@ export default function Home() {
                 return;
               }
               if (source.kind === 'calendar') {
-                setContextEntry({ tab: 'connections' });
-                setActiveTab('context');
+                setActiveTab('settings');
                 return;
               }
-              setActiveTab('you');
+              setActiveTab('scope');
             }}
           />
         )}
@@ -526,21 +527,18 @@ export default function Home() {
             }}
           />
         )}
-        {activeTab === 'you' && (
-          <YouDestination
+        {activeTab === 'scope' && (
+          <ScopeDestination
             userId={userId}
             project={project}
             worldProject={scopedProject}
             projects={projects}
             scope={scope}
             projectFocusKey={projectFocusKey}
-            profile={profile}
             memories={memories}
             onSelectProject={handleSelectProject}
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
-            onUpdateProfile={handleUpdateProfile}
-            onUpdateMemories={handleUpdateMemories}
             onAnswerQuestion={openGraphQuestion}
             onNavigateToContext={() => setActiveTab('context')}
             onNavigateToSource={(sourceId) => {
@@ -548,6 +546,27 @@ export default function Home() {
               setActiveTab('context');
             }}
             onNavigateToAsk={() => setActiveTab('ask')}
+          />
+        )}
+        {activeTab === 'settings' && (
+          <SettingsDestination
+            userId={userId}
+            accountLabel={auth.user?.displayName}
+            scope={scope}
+            project={project}
+            generalContext={generalContext}
+            profile={profile}
+            memories={memories}
+            onUpdateProject={updateProject}
+            onUpdateGeneralContext={(updated) => {
+              setGeneralContext(updated);
+              persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
+                setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
+              });
+            }}
+            onUpdateProfile={handleUpdateProfile}
+            onUpdateMemories={handleUpdateMemories}
+            onSignOut={() => { void auth.signOut(); }}
           />
         )}
       </main>

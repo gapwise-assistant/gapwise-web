@@ -267,16 +267,16 @@ Implemented:
 - Deterministic Today section helpers in `src/lib/today/sections.ts`.
 - Proactive questions are derived from existing Context Pack gaps, contradictions, assumptions, risks, and Calendar commitments.
 - Coming up reads compact Google Calendar commitments from Context Pack only; Today does not call Calendar independently.
-- Top-level You is implemented by `src/components/YouDestination.tsx`.
-- You section selectors live in `src/lib/you/sections.ts` and only read existing durable memory and graph state.
-- You is organized around:
+- Top-level Scope is implemented by `src/components/YouDestination.tsx` (the file name is retained for compatibility).
+- Scope section selectors live in `src/lib/you/sections.ts` and only read existing durable memory and graph state.
+- Scope is organized around:
   - Priorities
   - Goals
   - Still unclear
   - Projects
   - What Gapswise remembers
   - View My World
-- Existing advanced screens are preserved under You:
+- Existing advanced screens are preserved under Scope:
   - My World visualization
   - active project overview
   - project gaps
@@ -1029,13 +1029,12 @@ Regression coverage:
 
 Implemented:
 
-- Redesigned the active project view under `You → Projects`.
+- Redesigned the active project view under `Scope` when a project is selected.
 - The project now uses the tabs:
   - `Overview`
   - `Questions`
   - `Graph`
   - `Sources`
-  - `Settings`
 - Overview shows:
   - project goal
   - clarity score
@@ -1055,7 +1054,7 @@ Implemented:
   - source type
   - processing state
   - what Gapswise learned
-- Settings allow:
+- Project settings are now available from the header Settings destination and allow:
   - rename project
   - edit goal
   - edit description/context
@@ -1069,27 +1068,26 @@ Constraints preserved:
 - No graph rewrite.
 - No persistence architecture changes.
 
-### Top-Level You Refinement
+### Top-Level Scope Refinement
 
 Implemented:
 
-- Reframed the top-level `You` destination around:
+- Reframed the top-level `Scope` destination around:
   - what Gapswise understands about the user
   - what the user is working on
 - The primary sections are now:
-  - `Your projects`
-  - `Your priorities`
+  - `Projects`
+  - `Priorities`
   - `Still unclear`
-  - `What Gapswise remembers`
   - `My World`
-- `Your projects` is now the most visually prominent section on the initial You screen.
+- `Projects` is now the most visually prominent section on the initial Scope screen.
 - `New project` remains clearly available.
-- `Your priorities` only displays cross-project/user priorities from durable memory.
+- `Priorities` only displays cross-project/user priorities from durable memory.
 - Project goals are no longer mixed into top-level personal priorities.
 - `Still unclear` now uses a conservative user-level selector for persistent unresolved questions about the user or broader direction.
 - Project-specific questions remain inside the project detail `Questions` tab.
-- `What Gapswise remembers` continues to use the existing server-backed Memory UI for edit, confirm, and forget.
-- `My World` is kept as an optional deeper visualization and no longer dominates the initial You page.
+- `What Gapswise remembers` continues to use the existing server-backed Memory UI for edit, confirm, and forget from Settings.
+- `My World` is kept as an optional deeper visualization and no longer dominates the initial Scope page.
 
 Constraints preserved:
 
@@ -1110,7 +1108,7 @@ Implemented:
   - `Everything`
   - the user's projects
   - `New project`
-- Scope is applied consistently to Today, Ask, Context, and You.
+- Scope is applied consistently to Today, Ask, Context, and Scope.
 - `Everything` is the default scope.
 - A missing, deleted, or invalid project scope falls back to `Everything`.
 - Creating or opening a project switches scope to that project.
@@ -1154,8 +1152,9 @@ Context behavior:
 
 You behavior:
 
-- `Everything` keeps the global personal view: projects, priorities, unresolved user-level questions, durable memory, and My World.
-- Project scope shows the existing project detail experience directly under `ABOUT THIS PROJECT` with Overview, Questions, Graph, Sources, and Settings.
+- `Everything` keeps the global reasoning view: projects, priorities, unresolved user-level questions, and My World.
+- Project scope shows the existing project detail experience directly under `ABOUT THIS PROJECT` with Overview, Questions, Graph, and Sources.
+- Durable memory, Connections, account actions, and project configuration are available from Settings.
 - Existing project detail components and persistence actions are reused.
 
 Regression coverage:
@@ -1219,8 +1218,8 @@ Implemented:
   - relevance score when available
   - the exact stored statement or reason supporting the answer
 - `View in Context` navigates to the cited source, promotes older cited sources into the Recent list when necessary, scrolls to the source, and highlights it.
-- Calendar provenance navigates to Context Connections.
-- Graph and memory provenance navigate to You.
+- Calendar provenance navigates to Settings Connections.
+- Graph provenance navigates to Scope; memory provenance navigates to Settings.
 - Existing `Why / Sources` remains available as the complete provenance drawer.
 
 Regression coverage:
@@ -1370,18 +1369,19 @@ Verification:
 
 ## 4. Current App Screens
 
-- **Global scope selector**: chooses Everything or one project and consistently controls Today, Ask, Context, and You.
+- **Global scope selector**: chooses Everything or one project and consistently controls Today, Ask, Context, and Scope.
 - **Today**: three-section daily surface for attention items, questions worth answering, and compact near-term commitments in the selected scope.
 - **Ask**: conversational Gapswise surface backed by the real Google ADK service and scope-aware Context Pack integration.
-- **Context**: scope-aware source area organized into Recent, Documents, Connections, and Add context.
-- **You**: global personal model in Everything scope, or the selected project's focused understanding surface in project scope.
-- **You > Projects**: project-management surface with active and archived sections, project cards, New project, Rename, Archive, and project detail tabs.
-- **Project**: active project workspace under You > Projects with Overview, Questions, Graph, Sources, and Settings.
-- **My World**: high-level cross-context map of domains, projects, sources, gaps, risks, and preferences, currently available under You.
-- **Clarity Graph**: project-level graph of goals, knowns, constraints, assumptions, decisions, risks, unknowns, evidence, experiments, next actions, and preferences, currently available under You > Graph.
+- **Context**: scope-aware source area organized into Recent, Documents, and Add context.
+- **Scope**: global understanding in Everything scope, or the selected project's focused understanding surface in project scope.
+- **Scope > Projects**: project-management surface with active and archived sections, project cards, New project, Rename, Archive, and project detail tabs.
+- **Project**: active project workspace under Scope with Overview, Questions, Graph, and Sources.
+- **Settings**: account, durable memory, Connections, and project configuration when project-scoped.
+- **My World**: high-level cross-context map of domains, projects, sources, gaps, risks, and preferences, currently available under Scope.
+- **Clarity Graph**: project-level graph of goals, knowns, constraints, assumptions, decisions, risks, unknowns, evidence, experiments, next actions, and preferences, currently available under Scope > Graph.
 - **Context Add context**: universal context capture with source metadata and provenance, currently available under Context.
-- **Connections**: read-only connected-account status inside Context. Google Calendar uses real OAuth; Gmail and Google Drive are shown as not connected unless implemented later.
-- **Memory**: editable profile preferences plus durable memory bank with edit/forget/confirm/why controls, currently available under You.
+- **Connections**: read-only connected-account status inside Settings. Google Calendar uses real OAuth; Gmail and Google Drive are shown as not connected unless implemented later.
+- **Memory**: editable profile preferences plus durable memory bank with edit/forget/confirm/why controls, currently available under Settings.
 - **Insights Panel**: compact review surface for loose ends, possible context changes, and stale context. The component remains available for future relocation.
 - **Feedback Controls**: reusable controls on recommendations that persist feedback history and adapt future behavior.
 
@@ -1643,7 +1643,7 @@ remain the primary layout above the mobile breakpoint.
 
 Phone-width behavior is additive:
 
-- `Today`, `Ask`, `Context`, and `You` use the existing fixed bottom navigation
+- `Today`, `Ask`, `Context`, and `Scope` use the existing fixed bottom navigation
   only below the desktop breakpoint.
 - The page reserves space for the bottom navigation and the device safe-area
   inset, so content and the Ask composer are not covered by phone browser chrome.
@@ -1653,7 +1653,7 @@ Phone-width behavior is additive:
 - Context tabs and graph filters use touch-friendly horizontal scrolling instead
   of widening the page. Source actions, project menus, forms, and key controls
   have larger phone tap targets.
-- Today, Ask, Context, You, Memory, My World, the Clarity Graph, and the legacy
+- Today, Ask, Context, Scope, Settings, Memory, My World, the Clarity Graph, and the legacy
   project view use narrower mobile padding while preserving their desktop
   multi-column layouts.
 - `touch-scroll` hides scrollbar chrome without disabling horizontal scrolling.
@@ -1662,6 +1662,47 @@ No authentication, scope, graph, AI, storage, Calendar, or deployment behavior
 was changed for this responsive pass. Desktop/browser-width verification is
 covered by the typecheck and production build; no browser automation dependency
 is currently installed in the repository.
+
+## 11. Scope and Settings Navigation
+
+The primary application destinations are now:
+
+- `Today`: what deserves attention now.
+- `Ask`: conversation with Gapswise.
+- `Context`: sources and context capture supplied to Gapswise.
+- `Scope`: the current reasoning/view boundary.
+
+The header scope selector continues to offer `Everything`, individual projects,
+and `New project`. The selected scope still controls Today, Ask, Context, and
+Scope behavior, while stored entities remain named `Project` internally.
+
+When `Everything` is selected, Scope exposes:
+
+- Projects
+- Priorities supported by durable memory
+- Still unclear user/cross-project questions
+- My World
+
+When a project is selected, Scope exposes the existing project workspace with:
+
+- Overview
+- Questions
+- Graph
+- Sources
+
+Project configuration is no longer a project workspace tab. The header gear
+opens Settings, which contains:
+
+- Account and sign out
+- What Gapswise remembers, including preferences and durable memory actions
+- Connections, including the existing Google Calendar OAuth integration
+- Project name, goal, description, deadline, and archive controls when a
+  project scope is selected
+
+Context now contains only Recent, Documents, and Add context. Connected account
+status and sync controls are available from Settings instead. Existing source
+ingestion, project persistence, scope persistence, Calendar OAuth, and backend
+contracts are unchanged.
 
 ## 11. Graph Reconciliation During Context Ingestion
 

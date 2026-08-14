@@ -407,7 +407,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                         ? 'View in Context'
                         : source.kind === 'calendar'
                           ? 'View connection'
-                          : 'View in You'}
+                          : 'View in Scope'}
                       <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
                     </button>
                   )}

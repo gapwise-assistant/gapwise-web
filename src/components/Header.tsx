@@ -1,11 +1,12 @@
 'use client';
 
 import React from 'react';
-import { LogOut, RefreshCw, Target } from 'lucide-react';
+import { RefreshCw, Settings2, Target } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
+import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
 
-type AppTab = 'today' | 'ask' | 'context' | 'you';
+type AppTab = AppDestination;
 
 interface HeaderProps {
   project: Project;
@@ -17,17 +18,12 @@ interface HeaderProps {
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
-  onSignOut: () => void;
+  onOpenSettings: () => void;
   accountLabel?: string;
   demoMode?: boolean;
 }
 
-const NAV_ITEMS: Array<{ id: AppTab; label: string }> = [
-  { id: 'today', label: 'Today' },
-  { id: 'ask', label: 'Ask' },
-  { id: 'context', label: 'Context' },
-  { id: 'you', label: 'You' },
-];
+const NAV_ITEMS = PRIMARY_NAVIGATION;
 
 export const Header: React.FC<HeaderProps> = ({
   project,
@@ -39,7 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
-  onSignOut,
+  onOpenSettings,
   accountLabel,
   demoMode = false,
 }) => {
@@ -144,16 +140,15 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className="w-4 h-4" />
             </button>
           )}
-          {!demoMode && (
-            <button
-              type="button"
-              onClick={onSignOut}
-              title={accountLabel ? `Sign out of ${accountLabel}` : 'Sign out'}
-              className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-rose-800/50 hover:text-rose-300 sm:h-auto sm:w-auto"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
+            aria-label={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
+            className={`h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-300 sm:h-auto sm:w-auto ${activeTab === 'settings' ? 'border-cyan-800 text-cyan-300' : ''}`}
+          >
+            <Settings2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>
