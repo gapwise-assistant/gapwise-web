@@ -1465,8 +1465,10 @@ upcoming-commitments path instead of flooding broad source evidence.
 The application now supports Google sign-in through Firebase Authentication.
 
 - `src/lib/auth/client.ts` initializes the Firebase Web SDK from
-  `NEXT_PUBLIC_FIREBASE_*` configuration, signs users in with Google, attaches
-  the current Firebase ID token to API requests, and signs users out.
+  `NEXT_PUBLIC_FIREBASE_*` configuration, signs users in with Google through
+  Firebase's redirect flow, attaches the current Firebase ID token to API
+  requests, and signs users out. Redirect avoids cross-origin popup cleanup
+  warnings and works better on mobile browsers.
 - `src/components/AuthProvider.tsx` loads the runtime mode, exposes the
   authenticated UID to the app, and keeps the existing local `demo-user` only
   when `GAPSWISE_DEMO_MODE=true`.
@@ -1539,9 +1541,9 @@ Staging runtime values include:
 - `CLOUD_STORAGE_BUCKET=gapwise-505217-context`
 - `GAPSWISE_AGENT_AUTH=true`
 
-The staging Calendar callback is:
+The public staging Calendar callback is:
 
-`https://gapswise-web-r3zqs7f2gq-uc.a.run.app/api/integrations/google/calendar/callback`
+`https://gapswise.web.app/api/integrations/google/calendar/callback`
 
 That exact URI must also be listed under the existing Google OAuth Web Client
 in Google Cloud Console → APIs & Services → Credentials. The existing
@@ -1551,6 +1553,10 @@ Firebase Authentication authorized domains include both Cloud Run hostnames:
 
 - `gapswise-web-r3zqs7f2gq-uc.a.run.app`
 - `gapswise-web-782439096411.us-central1.run.app`
+
+The Firebase Hosting frontend hostname must also be authorized:
+
+- `gapswise.web.app`
 
 Authorized domains contain only hostnames, without `https://`, paths, or a
 trailing slash.
@@ -1577,6 +1583,30 @@ files and are ignored by Git, Docker, and Cloud Build upload contexts.
 The existing `roles/run.invoker` binding from the web runtime identity to the
 private agent is preserved during deployment. The Cloud Build runtime does not
 need permission to change IAM policy for every release.
+
+### Firebase Hosting frontend
+
+Firebase Hosting site `gapswise` is deployed in project `gapwise-505217`:
+
+- Public URL: `https://gapswise.web.app`
+- Hosting configuration: `firebase.json`
+- Firebase project mapping: `.firebaserc`
+- Live Hosting version: `1bf889afccd62146`
+
+All Hosting routes rewrite to the existing `gapswise-web` Cloud Run service in
+`us-central1`. The Next.js app remains on Cloud Run, and `gapswise-agent`
+remains private. `GAPSWISE_APP_URL` continues to use the Cloud Run URL for the
+internal agent-to-web Context Pack call; only the public Calendar OAuth
+redirect uses the Hosting URL.
+
+### Billing budget alert
+
+The Google Cloud Billing Budgets API is enabled for `gapwise-505217`. A
+project-scoped monthly alert named `Gapswise monthly alert (50 MXN)` tracks only
+this project and not the rest of the billing account. Notifications are sent
+at 50%, 90%, 100%, and 150% of the 50 MXN threshold through the billing
+account's default recipients. This is an alert only; it does not automatically
+stop Cloud Run, Vertex AI, Firestore, Storage, or other billable services.
 
 ## 9. Authenticated User Demo Bootstrap
 
@@ -1667,3 +1697,23 @@ Project Questions, Today questions, and the Clarity Graph explain relationship
 paths in user-facing language such as `Blocks: "Which hotels should I book?"`,
 `Resolved by`, `Contradicted by`, or `Affected by`. The Clarity Score formula was
 not changed. Demo mode remains deterministic and does not call Gemini.
+
+## 12. Constellation Graph Visualization
+
+The project Graph tab now defaults to a lazy-loaded interactive Constellation
+Graph. It is a visualization layer over the existing `Project.nodes` and
+`Project.edges` only; it does not change graph reasoning, Gemini prompts,
+persistence, scope, or provenance.
+
+- `3D` uses Three.js with orbit, zoom, and node dragging controls.
+- `2D` uses an SVG constellation with touch-friendly pan, zoom, and node
+  dragging controls.
+- Hovering emphasizes connected paths. Selecting a node can focus its
+  neighborhood or open a Decision Path toward a project goal.
+- The detail panel shows type, statement, status, confidence, relationships,
+  why it matters, and clickable supporting sources that open Context details.
+- `Readable view` preserves the existing card/SVG graph fallback.
+
+The layout and decision-path helpers live in `src/lib/graph/constellation.ts`
+and are deterministic so graph movement is stable between renders. Heavy 3D
+dependencies are loaded only when the Graph tab is rendered.

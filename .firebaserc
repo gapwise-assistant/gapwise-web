@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "gapwise-505217"
+  },
+  "targets": {
+    "gapwise-505217": {
+      "hosting": {
+        "gapswise": [
+          "gapswise"
+        ]
+      }
+    }
+  }
+}

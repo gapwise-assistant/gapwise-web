@@ -29,6 +29,7 @@ interface YouDestinationProps {
   onUpdateMemories: (updated: DurableMemory[]) => void;
   onAnswerQuestion: (node: ClarityNode) => void;
   onNavigateToContext: () => void;
+  onNavigateToSource: (sourceId: string) => void;
   onNavigateToAsk: () => void;
 }
 
@@ -62,6 +63,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
   onUpdateMemories,
   onAnswerQuestion,
   onNavigateToContext,
+  onNavigateToSource,
   onNavigateToAsk,
 }) => {
   const [section, setSection] = useState<YouSection>('overview');
@@ -754,7 +756,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
       {projectSection === 'graph' && (
-        <ClarityGraphCanvas project={project} onSelectNode={() => {}} />
+        <ClarityGraphCanvas project={project} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />
       )}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -794,7 +796,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       </div>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
-      {projectSection === 'graph' && <ClarityGraphCanvas project={project} onSelectNode={() => {}} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas project={project} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">{sourceCards}</section>
       )}

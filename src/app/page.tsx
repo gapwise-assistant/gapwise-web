@@ -543,6 +543,10 @@ export default function Home() {
             onUpdateMemories={handleUpdateMemories}
             onAnswerQuestion={openGraphQuestion}
             onNavigateToContext={() => setActiveTab('context')}
+            onNavigateToSource={(sourceId) => {
+              setContextEntry({ sourceId, tab: 'recent' });
+              setActiveTab('context');
+            }}
             onNavigateToAsk={() => setActiveTab('ask')}
           />
         )}

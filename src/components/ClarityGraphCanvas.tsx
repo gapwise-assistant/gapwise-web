@@ -1,13 +1,25 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Filter, Sparkles, AlertCircle, Info, ChevronRight, CheckCircle2 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+import { Filter, Sparkles, AlertCircle, Info, ChevronRight, CheckCircle2, Focus, Map, Route, X } from 'lucide-react';
 import { Project, ClarityNode, NodeType } from '@/types/clarity';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
+import { buildDecisionPath } from '@/lib/graph/constellation';
+
+const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-[520px] items-center justify-center rounded-xl border border-cyan-950/80 bg-[#040b17] text-sm text-slate-400 sm:h-[600px]">
+      Loading constellation...
+    </div>
+  ),
+});
 
 interface ClarityGraphCanvasProps {
   project: Project;
   onSelectNode: (node: ClarityNode) => void;
+  onSelectSource?: (sourceId: string) => void;
 }
 
 const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: string; dot: string }> = {
@@ -24,6 +36,20 @@ const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: strin
   PREFERENCE: { bg: 'bg-fuchsia-950/80', border: 'border-fuchsia-700/80', text: 'text-fuchsia-300', dot: 'bg-fuchsia-400' },
 };
 
+const constellationNodeColors: Record<NodeType, string> = {
+  GOAL: '#34d399',
+  KNOWN: '#94a3b8',
+  CONSTRAINT: '#60a5fa',
+  ASSUMPTION: '#fbbf24',
+  DECISION: '#818cf8',
+  UNKNOWN: '#fb7185',
+  EVIDENCE: '#2dd4bf',
+  EXPERIMENT: '#c084fc',
+  RISK: '#fb923c',
+  NEXT_ACTION: '#22d3ee',
+  PREFERENCE: '#e879f9',
+};
+
 function readableStatus(status: ClarityNode['status']): string {
   if (status === 'DEFERRED') return 'Questionable';
   if (status === 'DEPRECATED') return 'Stale';
@@ -33,9 +59,14 @@ function readableStatus(status: ClarityNode['status']): string {
 export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   project,
   onSelectNode,
+  onSelectSource,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'critical' | 'assumptions'>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'readable' | 'constellation'>('constellation');
+  const [dimension, setDimension] = useState<'2d' | '3d'>('3d');
+  const [focusMode, setFocusMode] = useState(false);
+  const [pathMode, setPathMode] = useState(false);
 
   const filteredNodes = project.nodes.filter((node) => {
     if (filter === 'unresolved') return node.type === 'UNKNOWN' && node.status === 'OPEN';
@@ -45,20 +76,243 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   });
 
   const selectedNode = project.nodes.find((n) => n.id === selectedNodeId);
+  const constellationProject: Project = {
+    ...project,
+    nodes: filteredNodes,
+    edges: project.edges.filter((edge) => filteredNodes.some((node) => node.id === edge.source) && filteredNodes.some((node) => node.id === edge.target)),
+  };
+  const decisionPath = selectedNodeId ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
+
+  const handleConstellationSelect = (node: ClarityNode) => {
+    setSelectedNodeId(node.id);
+    setFocusMode(true);
+    onSelectNode(node);
+  };
+
+  if (viewMode === 'constellation') {
+    return (
+      <div className="mx-auto max-w-7xl space-y-5 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-cyan-400" />
+                <h2 className="text-xl font-bold text-slate-100">Constellation Graph</h2>
+                <span className="rounded-full border border-cyan-800 bg-cyan-950/60 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">
+                  Live map
+                </span>
+              </div>
+              <p className="mt-1 max-w-2xl text-xs text-slate-400">
+                Explore how evidence, uncertainty, decisions, and goals connect. Select a question to see the path it creates.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1">
+                <button
+                  type="button"
+                  onClick={() => setDimension('2d')}
+                  className={`min-h-10 rounded-md px-3 py-1.5 text-xs font-bold sm:min-h-0 ${dimension === '2d' ? 'bg-cyan-500 text-slate-950' : 'text-slate-400 hover:text-slate-100'}`}
+                  aria-pressed={dimension === '2d'}
+                >
+                  2D
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDimension('3d')}
+                  className={`min-h-10 rounded-md px-3 py-1.5 text-xs font-bold sm:min-h-0 ${dimension === '3d' ? 'bg-cyan-500 text-slate-950' : 'text-slate-400 hover:text-slate-100'}`}
+                  aria-pressed={dimension === '3d'}
+                >
+                  3D
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewMode('readable')}
+                className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200 sm:min-h-0"
+              >
+                <Map className="h-3.5 w-3.5" />
+                Readable view
+              </button>
+              {selectedNode && (
+                <button
+                  type="button"
+                  onClick={() => setFocusMode((current) => !current)}
+                  className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${focusMode ? 'border-cyan-700 bg-cyan-950 text-cyan-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                  aria-pressed={focusMode}
+                >
+                  <Focus className="h-3.5 w-3.5" />
+                  {focusMode ? 'Show all' : 'Focus neighborhood'}
+                </button>
+              )}
+              {selectedNode && (
+                <button
+                  type="button"
+                  onClick={() => setPathMode((current) => !current)}
+                  className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${pathMode ? 'border-rose-700 bg-rose-950 text-rose-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                  aria-pressed={pathMode}
+                >
+                  <Route className="h-3.5 w-3.5" />
+                  {pathMode ? 'Exit decision path' : 'Decision path'}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="touch-scroll flex max-w-full items-center gap-1.5 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-1">
+            <Filter className="ml-2 mr-1 h-3.5 w-3.5 shrink-0 text-slate-500" />
+            {([
+              ['all', `All (${project.nodes.length})`],
+              ['unresolved', 'Unresolved'],
+              ['critical', 'Critical path'],
+              ['assumptions', 'Assumptions'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFilter(id)}
+                className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${filter === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-3">
+            <LazyConstellationGraph
+              project={constellationProject}
+              selectedNodeId={selectedNodeId}
+              focusMode={focusMode}
+              pathMode={pathMode}
+              dimension={dimension}
+              onSelectNode={handleConstellationSelect}
+            />
+            {pathMode && selectedNode && (
+              <div className="overflow-hidden rounded-xl border border-rose-900/70 bg-rose-950/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-rose-300">Why this matters</p>
+                    <p className="mt-1 text-xs text-slate-400">The shortest connected reasoning path from this node toward a project goal.</p>
+                  </div>
+                  <button type="button" onClick={() => setPathMode(false)} className="rounded-md p-2 text-slate-500 hover:text-slate-200" aria-label="Close decision path">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {decisionPath.nodeIds.length > 1 ? (
+                  <div className="touch-scroll mt-3 flex items-center gap-2 overflow-x-auto pb-1">
+                    {decisionPath.nodeIds.map((nodeId, index) => {
+                      const node = project.nodes.find((item) => item.id === nodeId);
+                      const edge = index > 0 ? project.edges.find((item) => item.id === decisionPath.edgeIds[index - 1]) : undefined;
+                      if (!node) return null;
+                      return (
+                        <React.Fragment key={node.id}>
+                          {edge && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-slate-500">{edge.type.replace('_', ' ')} →</span>}
+                          <button
+                            type="button"
+                            onClick={() => handleConstellationSelect(node)}
+                            className={`w-44 shrink-0 rounded-lg border px-3 py-2 text-left ${nodeTypeColors[node.type].border} ${nodeTypeColors[node.type].bg}`}
+                          >
+                            <span className={`text-[9px] font-extrabold uppercase tracking-[0.14em] ${nodeTypeColors[node.type].text}`}>{node.type}</span>
+                            <span className="mt-1 block line-clamp-2 text-xs font-semibold text-slate-200">{node.text}</span>
+                          </button>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-400">No connected goal path is available for this node yet.</p>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3 px-1 text-[10px] text-slate-500">
+              {(['GOAL', 'UNKNOWN', 'DECISION', 'ASSUMPTION', 'EVIDENCE', 'RISK', 'NEXT_ACTION'] as NodeType[]).map((type) => (
+                <span key={type} className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: constellationNodeColors[type] ?? '#94a3b8' }} />
+                  {type.replace('_', ' ')}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-xl sm:p-5">
+            {selectedNode ? (
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+                  <span className={`rounded-lg border px-2.5 py-1 text-xs font-bold ${nodeTypeColors[selectedNode.type].bg} ${nodeTypeColors[selectedNode.type].text} ${nodeTypeColors[selectedNode.type].border}`}>
+                    {selectedNode.type}
+                  </span>
+                  <button type="button" onClick={() => setSelectedNodeId(null)} className="rounded-md p-2 text-slate-500 hover:text-slate-200" aria-label="Close node details">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div>
+                  <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Statement</p>
+                  <h3 className="mt-2 text-sm font-bold leading-relaxed text-slate-100">{selectedNode.text}</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3"><span className="block text-[10px] uppercase text-slate-500">Status</span><span className="mt-1 block font-semibold text-slate-200">{readableStatus(selectedNode.status)}</span></div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950 p-3"><span className="block text-[10px] uppercase text-slate-500">Confidence</span><span className="mt-1 block font-semibold text-cyan-300">{Math.round(selectedNode.confidence * 100)}%</span></div>
+                </div>
+                {selectedNode.why_it_matters && selectedNode.why_it_matters.length > 0 && (
+                  <div className="space-y-2 border-t border-slate-800 pt-3">
+                    <span className="text-xs font-semibold text-slate-400">Why it matters</span>
+                    {selectedNode.why_it_matters.map((reason) => <p key={reason} className="text-xs leading-relaxed text-slate-300">{reason}</p>)}
+                  </div>
+                )}
+                <div className="space-y-2 border-t border-slate-800 pt-3">
+                  <span className="text-xs font-semibold text-slate-400">Connected relationships</span>
+                  {relationshipReasons(project, selectedNode.id).length > 0 ? relationshipReasons(project, selectedNode.id).map((relationship) => <p key={relationship} className="text-xs leading-relaxed text-slate-300">{relationship}</p>) : <p className="text-xs text-slate-500">No relationships recorded yet.</p>}
+                </div>
+                <div className="space-y-2 border-t border-slate-800 pt-3">
+                  <span className="text-xs font-semibold text-slate-400">Supporting sources</span>
+                  {selectedNode.source_refs.length > 0 ? selectedNode.source_refs.map((sourceId) => {
+                    const source = project.sources.find((item) => item.id === sourceId);
+                    return onSelectSource ? (
+                      <button key={sourceId} type="button" onClick={() => onSelectSource(sourceId)} className="block w-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-left text-xs text-cyan-300 hover:border-cyan-700">
+                        {source?.filename ?? 'Source context'}
+                        <span className="mt-1 block text-[10px] text-slate-500">Open source details</span>
+                      </button>
+                    ) : (
+                      <p key={sourceId} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">{source?.filename ?? 'Source context'}</p>
+                    );
+                  }) : <p className="text-xs text-slate-500">No direct source attached.</p>}
+                </div>
+              </div>
+            ) : (
+              <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
+                <Focus className="h-8 w-8 text-slate-700" />
+                <h3 className="mt-3 text-sm font-bold text-slate-200">Select a constellation</h3>
+                <p className="mt-2 max-w-xs text-xs leading-relaxed text-slate-500">Choose a node to inspect its evidence, relationships, and path toward the goal.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
       {/* Header & Filter Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
-        <div>
-          <h2 className="text-xl font-bold text-slate-100 flex items-center space-x-2">
-            <Sparkles className="w-5 h-5 text-cyan-400" />
-            <span>Interactive Clarity Graph</span>
-          </h2>
+          <div>
+            <h2 className="text-xl font-bold text-slate-100 flex items-center space-x-2">
+              <Sparkles className="w-5 h-5 text-cyan-400" />
+              <span>Interactive Clarity Graph</span>
+            </h2>
           <p className="text-xs text-slate-400">
             Live map of goals, knowns, constraints, decisions, assumptions, and unknowns.
           </p>
-        </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('constellation')}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-800 bg-cyan-950/50 px-3 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-900/60 sm:min-h-0"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Explore constellation
+          </button>
 
         {/* Filter Toggle Buttons */}
         <div className="touch-scroll flex max-w-full items-center space-x-1.5 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-1">
