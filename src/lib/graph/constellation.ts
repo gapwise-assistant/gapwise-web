@@ -11,6 +11,149 @@ export interface DecisionPath {
   edgeIds: string[];
 }
 
+export type DecisionMapLane = 0 | 1 | 2 | 3 | 4;
+
+export const DECISION_MAP_LANE_LABELS: Record<DecisionMapLane, string> = {
+  0: 'Evidence & known',
+  1: 'Assumptions & risks',
+  2: 'Open questions',
+  3: 'Decisions & actions',
+  4: 'Goal',
+};
+
+const DECISION_MAP_LANE_Y: Record<DecisionMapLane, number> = {
+  0: 76,
+  1: 204,
+  2: 332,
+  3: 460,
+  4: 588,
+};
+
+const DECISION_MAP_X = [270, 480, 690, 900];
+
+function decisionMapScore(node: ClarityNode): number {
+  return (node.impact * node.confidence) + (node.priority ?? 0) * 0.25;
+}
+
+export function decisionMapLaneForType(type: ClarityNode['type']): DecisionMapLane | null {
+  if (type === 'EVIDENCE' || type === 'KNOWN' || type === 'CONSTRAINT') return 0;
+  if (type === 'ASSUMPTION' || type === 'RISK') return 1;
+  if (type === 'UNKNOWN') return 2;
+  if (type === 'DECISION' || type === 'NEXT_ACTION' || type === 'EXPERIMENT') return 3;
+  if (type === 'GOAL') return 4;
+  return null;
+}
+
+export function isDecisionMapSecondaryNode(
+  node: ClarityNode,
+  graph: Pick<Project, 'edges'>,
+): boolean {
+  if (node.type === 'PREFERENCE') return true;
+  if (node.type !== 'KNOWN' && node.type !== 'EVIDENCE') return false;
+  return !graph.edges.some((edge) =>
+    (edge.source === node.id || edge.target === node.id) && edge.type !== 'derived_from'
+  );
+}
+
+function laneNodes(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+  lane: DecisionMapLane,
+): ClarityNode[] {
+  return graph.nodes
+    .filter((node) => decisionMapLaneForType(node.type) === lane && !isDecisionMapSecondaryNode(node, graph))
+    .sort((left, right) => {
+      const scoreDifference = decisionMapScore(right) - decisionMapScore(left);
+      return scoreDifference || left.text.localeCompare(right.text);
+    });
+}
+
+function assignLanePositions(
+  nodes: ClarityNode[],
+  positions: Map<string, ConstellationPoint>,
+  lane: DecisionMapLane,
+): void {
+  const columns = Math.min(DECISION_MAP_X.length, Math.max(nodes.length, 1));
+  const xPositions = DECISION_MAP_X.slice(0, columns);
+  const xOffset = (DECISION_MAP_X[DECISION_MAP_X.length - 1] - DECISION_MAP_X[0] - (xPositions[xPositions.length - 1] - xPositions[0])) / 2;
+  const rows = Math.ceil(nodes.length / DECISION_MAP_X.length);
+
+  nodes.forEach((node, index) => {
+    const column = index % DECISION_MAP_X.length;
+    const row = Math.floor(index / DECISION_MAP_X.length);
+    const rowOffset = (row - (rows - 1) / 2) * 64;
+    positions.set(node.id, {
+      x: (xPositions[column] ?? DECISION_MAP_X[0]) + xOffset,
+      y: DECISION_MAP_LANE_Y[lane] + rowOffset,
+      z: 0,
+    });
+  });
+}
+
+function connectedAnchorX(
+  node: ClarityNode,
+  graph: Pick<Project, 'edges'>,
+  positions: Map<string, ConstellationPoint>,
+): number | undefined {
+  const relatedXs = graph.edges.flatMap((edge) => {
+    if (edge.source !== node.id && edge.target !== node.id) return [];
+    const relatedId = edge.source === node.id ? edge.target : edge.source;
+    const related = positions.get(relatedId);
+    return related ? [related.x] : [];
+  });
+  if (relatedXs.length === 0) return undefined;
+  return relatedXs.reduce((total, x) => total + x, 0) / relatedXs.length;
+}
+
+/**
+ * Deterministic five-lane layout for the readable 2D Decision Map.
+ * The force layout remains available for the optional 3D constellation view.
+ */
+export function calculateDecisionMapLayout(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+): Record<string, ConstellationPoint> {
+  const positions = new Map<string, ConstellationPoint>();
+  const lanes = ([0, 1, 2, 3, 4] as DecisionMapLane[]).map((lane) => ({
+    lane,
+    nodes: laneNodes(graph, lane),
+  }));
+
+  lanes.forEach(({ lane, nodes }) => assignLanePositions(nodes, positions, lane));
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    lanes.forEach(({ lane, nodes }) => {
+      nodes.sort((left, right) => {
+        const leftAnchor = connectedAnchorX(left, graph, positions) ?? 600;
+        const rightAnchor = connectedAnchorX(right, graph, positions) ?? 600;
+        return (leftAnchor - rightAnchor) || (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text);
+      });
+      assignLanePositions(nodes, positions, lane);
+    });
+    [...lanes].reverse().forEach(({ lane, nodes }) => {
+      nodes.sort((left, right) => {
+        const leftAnchor = connectedAnchorX(left, graph, positions) ?? 600;
+        const rightAnchor = connectedAnchorX(right, graph, positions) ?? 600;
+        return (leftAnchor - rightAnchor) || (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text);
+      });
+      assignLanePositions(nodes, positions, lane);
+    });
+  }
+
+  graph.nodes
+    .filter((node) => isDecisionMapSecondaryNode(node, graph))
+    .sort((left, right) => (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text))
+    .forEach((node, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      positions.set(node.id, {
+        x: 1045 + column * 100,
+        y: 92 + row * 86,
+        z: 0,
+      });
+    });
+
+  return Object.fromEntries(positions);
+}
+
 const EDGE_PRIORITY: Record<ClarityEdge['type'], number> = {
   blocks: 0,
   depends_on: 1,
@@ -203,4 +346,3 @@ export function buildDecisionPath(
 
   return { nodeIds, edgeIds };
 }
-

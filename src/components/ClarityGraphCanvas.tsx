@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Filter, Sparkles, AlertCircle, Info, ChevronRight, CheckCircle2, Focus, Map, Route, X } from 'lucide-react';
+import { Filter, Sparkles, AlertCircle, Info, ChevronRight, CheckCircle2, Focus, Map, Maximize2, Minimize2, Route, X } from 'lucide-react';
 import { Project, ClarityNode, NodeType } from '@/types/clarity';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { buildDecisionPath } from '@/lib/graph/constellation';
@@ -64,9 +64,26 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'critical' | 'assumptions'>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'readable' | 'constellation'>('constellation');
-  const [dimension, setDimension] = useState<'2d' | '3d'>('3d');
+  const [dimension, setDimension] = useState<'2d' | '3d'>('2d');
   const [focusMode, setFocusMode] = useState(false);
   const [pathMode, setPathMode] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isFullscreen]);
 
   const filteredNodes = project.nodes.filter((node) => {
     if (filter === 'unresolved') return node.type === 'UNKNOWN' && node.status === 'OPEN';
@@ -86,6 +103,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const handleConstellationSelect = (node: ClarityNode) => {
     setSelectedNodeId(node.id);
     setFocusMode(true);
+    setPathMode(true);
     onSelectNode(node);
   };
 
@@ -97,13 +115,13 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-cyan-400" />
-                <h2 className="text-xl font-bold text-slate-100">Constellation Graph</h2>
+                <h2 className="text-xl font-bold text-slate-100">{dimension === '2d' ? 'Decision Map' : 'Constellation Graph'}</h2>
                 <span className="rounded-full border border-cyan-800 bg-cyan-950/60 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">
-                  Live map
+                  {dimension === '2d' ? 'Reasoning map' : 'Live map'}
                 </span>
               </div>
               <p className="mt-1 max-w-2xl text-xs text-slate-400">
-                Explore how evidence, uncertainty, decisions, and goals connect. Select a question to see the path it creates.
+                See what is known, what is uncertain, what is blocked, and how it connects to the goal.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -152,7 +170,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                   aria-pressed={pathMode}
                 >
                   <Route className="h-3.5 w-3.5" />
-                  {pathMode ? 'Exit decision path' : 'Decision path'}
+                  {pathMode ? 'Exit focus path' : 'Focus path'}
                 </button>
               )}
             </div>
@@ -179,14 +197,27 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
 
         <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0 space-y-3">
-            <LazyConstellationGraph
-              project={constellationProject}
-              selectedNodeId={selectedNodeId}
-              focusMode={focusMode}
-              pathMode={pathMode}
-              dimension={dimension}
-              onSelectNode={handleConstellationSelect}
-            />
+            {!isFullscreen && (
+              <div className="relative">
+                <LazyConstellationGraph
+                  project={constellationProject}
+                  selectedNodeId={selectedNodeId}
+                  focusMode={focusMode}
+                  pathMode={pathMode}
+                  dimension={dimension}
+                  onSelectNode={handleConstellationSelect}
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsFullscreen(true)}
+                  className="absolute right-3 top-3 z-20 inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-700/90 bg-slate-950/90 p-2 text-slate-200 shadow-lg backdrop-blur transition hover:border-cyan-600 hover:text-cyan-300"
+                  aria-label="Open constellation graph full screen"
+                  title="Open full screen"
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
             {pathMode && selectedNode && (
               <div className="overflow-hidden rounded-xl border border-rose-900/70 bg-rose-950/20 p-4">
                 <div className="flex items-center justify-between gap-3">
@@ -281,12 +312,66 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             ) : (
               <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
                 <Focus className="h-8 w-8 text-slate-700" />
-                <h3 className="mt-3 text-sm font-bold text-slate-200">Select a constellation</h3>
+                <h3 className="mt-3 text-sm font-bold text-slate-200">Select a node</h3>
                 <p className="mt-2 max-w-xs text-xs leading-relaxed text-slate-500">Choose a node to inspect its evidence, relationships, and path toward the goal.</p>
               </div>
             )}
           </div>
         </div>
+
+        {isFullscreen && (
+          <div
+            className="fixed inset-0 z-[80] bg-slate-950/95 p-2 backdrop-blur-sm sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="constellation-fullscreen-title"
+          >
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-900/70 bg-slate-950 shadow-2xl">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3 py-3 sm:px-5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 shrink-0 text-cyan-400" />
+                    <h2 id="constellation-fullscreen-title" className="truncate text-sm font-bold text-slate-100 sm:text-base">
+                      {dimension === '2d' ? 'Decision Map' : 'Constellation Graph'}
+                    </h2>
+                  </div>
+                  <p className="mt-1 hidden text-xs text-slate-500 sm:block">Explore the project graph and select a node to inspect its path.</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsFullscreen(false)}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-200 transition hover:border-cyan-600 hover:text-cyan-300"
+                    aria-label="Exit full screen"
+                    title="Exit full screen"
+                  >
+                    <Minimize2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsFullscreen(false)}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-200 transition hover:border-cyan-600 hover:text-cyan-300"
+                    aria-label="Close constellation graph"
+                    title="Close"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 p-2 sm:p-4">
+                <LazyConstellationGraph
+                  project={constellationProject}
+                  selectedNodeId={selectedNodeId}
+                  focusMode={focusMode}
+                  pathMode={pathMode}
+                  dimension={dimension}
+                  expanded
+                  onSelectNode={handleConstellationSelect}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

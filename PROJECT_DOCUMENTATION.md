@@ -1599,6 +1599,11 @@ remains private. `GAPSWISE_APP_URL` continues to use the Cloud Run URL for the
 internal agent-to-web Context Pack call; only the public Calendar OAuth
 redirect uses the Hosting URL.
 
+The root document is explicitly `no-store` at both Next.js and Firebase
+Hosting, so a new Cloud Run revision is picked up at the normal
+`https://gapswise.web.app` URL without a cache-busting query parameter. Hashed
+`_next/static` assets remain cacheable and immutable.
+
 ### Billing budget alert
 
 The Google Cloud Billing Budgets API is enabled for `gapwise-505217`. A
@@ -1698,21 +1703,32 @@ paths in user-facing language such as `Blocks: "Which hotels should I book?"`,
 `Resolved by`, `Contradicted by`, or `Affected by`. The Clarity Score formula was
 not changed. Demo mode remains deterministic and does not call Gemini.
 
-## 12. Constellation Graph Visualization
+## 12. Decision Map and Constellation Graph Visualization
 
-The project Graph tab now defaults to a lazy-loaded interactive Constellation
-Graph. It is a visualization layer over the existing `Project.nodes` and
+The project Graph tab now defaults to a lazy-loaded interactive 2D Decision
+Map. It is a visualization layer over the existing `Project.nodes` and
 `Project.edges` only; it does not change graph reasoning, Gemini prompts,
 persistence, scope, or provenance.
 
-- `3D` uses Three.js with orbit, zoom, and node dragging controls.
-- `2D` uses an SVG constellation with touch-friendly pan, zoom, and node
-  dragging controls.
+- `2D` uses deterministic semantic lanes: evidence/known, assumptions/risks,
+  open questions, decisions/actions, and the primary goal. Isolated preferences
+  and unconnected known/evidence records move to a quieter side area.
+- Decision Map edges use arrows for direction, labels for meaningful
+  relationships, stronger styling for important relationships, and wrapped
+  node cards to keep statements readable.
+- Clicking a node focuses its connected reasoning path and opens the existing
+  details/provenance panel. `Focus path` isolates the path toward a goal, and
+  the map includes pan, zoom, fit-to-view, and node dragging controls.
+- `3D` remains optional and uses Three.js with orbit, zoom, and node dragging
+  controls.
 - Hovering emphasizes connected paths. Selecting a node can focus its
   neighborhood or open a Decision Path toward a project goal.
 - The detail panel shows type, statement, status, confidence, relationships,
   why it matters, and clickable supporting sources that open Context details.
 - `Readable view` preserves the existing card/SVG graph fallback.
+- The graph has a full-screen control for larger exploration. The modal keeps
+  the current 2D/3D mode, filters, selected node, focus mode, and decision path;
+  it closes with the minimize/close controls or `Escape`.
 
 The layout and decision-path helpers live in `src/lib/graph/constellation.ts`
 and are deterministic so graph movement is stable between renders. Heavy 3D

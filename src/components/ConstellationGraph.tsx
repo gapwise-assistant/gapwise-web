@@ -3,13 +3,17 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber';
 import { Html, Line, OrbitControls } from '@react-three/drei';
+import { Scan } from 'lucide-react';
 import * as THREE from 'three';
 import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
 import {
   buildDecisionPath,
   calculateConstellationLayout,
+  calculateDecisionMapLayout,
   ConstellationPoint,
+  DECISION_MAP_LANE_LABELS,
   getNeighborhood,
+  isDecisionMapSecondaryNode,
 } from '@/lib/graph/constellation';
 
 type Dimension = '2d' | '3d';
@@ -20,6 +24,7 @@ interface ConstellationGraphProps {
   focusMode: boolean;
   pathMode: boolean;
   dimension: Dimension;
+  expanded?: boolean;
   onSelectNode: (node: ClarityNode) => void;
 }
 
@@ -293,15 +298,64 @@ interface PanState {
   moved: boolean;
 }
 
+const DECISION_MAP_WIDTH = 1200;
+const DECISION_MAP_HEIGHT = 700;
+const DECISION_MAP_LANES = [0, 1, 2, 3, 4] as const;
+const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
+  'blocks',
+  'supports',
+  'contradicts',
+  'resolves',
+  'affects',
+  'depends_on',
+  'supersedes',
+]);
+
+function relationshipLabel(type: ClarityEdge['type']): string {
+  return type.replaceAll('_', ' ');
+}
+
+function nodeDimensions(node: ClarityNode, secondary: boolean): { width: number; height: number } {
+  if (secondary) return { width: 100, height: 70 };
+  if (node.type === 'GOAL') return { width: 230, height: 90 };
+  return { width: 190, height: 78 };
+}
+
+function edgeBoundaryPoint(
+  center: { x: number; y: number },
+  toward: { x: number; y: number },
+  dimensions: { width: number; height: number },
+): { x: number; y: number } {
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  if (dx === 0 && dy === 0) return center;
+  const scale = 1 / Math.max(Math.abs(dx) / (dimensions.width / 2), Math.abs(dy) / (dimensions.height / 2));
+  return { x: center.x + dx * scale, y: center.y + dy * scale };
+}
+
+function edgeGeometry(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  index: number,
+): { path: string; labelX: number; labelY: number } {
+  const midY = (start.y + end.y) / 2;
+  const bend = ((index % 3) - 1) * 28;
+  return {
+    path: `M ${start.x} ${start.y} C ${start.x + bend} ${midY} ${end.x + bend} ${midY} ${end.x} ${end.y}`,
+    labelX: (start.x + end.x) / 2 + bend,
+    labelY: midY - 7,
+  };
+}
+
 function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelectNode }: GraphSceneProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const panRef = useRef<PanState | null>(null);
   const suppressClickRef = useRef(false);
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 450, y: 275 });
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggedPositions, setDraggedPositions] = useState<Record<string, ConstellationPoint>>({});
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const layout = useMemo(() => calculateConstellationLayout(project), [project]);
+  const layout = useMemo(() => calculateDecisionMapLayout(project), [project]);
   const decisionPath = useMemo(
     () => (selectedNodeId && pathMode ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] }),
     [pathMode, project, selectedNodeId],
@@ -327,15 +381,15 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
 
   const pointFor = (node: ClarityNode): { x: number; y: number } => {
     const point = positions[node.id];
-    return { x: point.x * 38, y: point.y * 38 };
+    return { x: point.x, y: point.y };
   };
 
-  const localPoint = (event: React.PointerEvent<SVGElement>) => {
+  const localPoint = (event: { clientX: number; clientY: number }) => {
     const bounds = svgRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
     return {
-      x: ((event.clientX - bounds.left) / bounds.width) * 900,
-      y: ((event.clientY - bounds.top) / bounds.height) * 550,
+      x: ((event.clientX - bounds.left) / bounds.width) * DECISION_MAP_WIDTH,
+      y: ((event.clientY - bounds.top) / bounds.height) * DECISION_MAP_HEIGHT,
     };
   };
 
@@ -355,123 +409,178 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
     if (drag.nodeId) {
       setDraggedPositions((current) => ({
         ...current,
-        [drag.nodeId as string]: { x: (point.x - pan.x) / zoom / 38, y: (point.y - pan.y) / zoom / 38, z: 0 },
+        [drag.nodeId as string]: { x: (point.x - pan.x) / zoom, y: (point.y - pan.y) / zoom, z: 0 },
       }));
     }
   };
 
   return (
-    <svg
-      ref={svgRef}
-      viewBox="0 0 900 550"
-      className="h-full w-full touch-none select-none"
-      role="img"
-      aria-label="Interactive two-dimensional Gapswise constellation graph"
-      onWheel={(event) => {
-        event.preventDefault();
-        setZoom((current) => Math.max(0.55, Math.min(1.8, current + (event.deltaY > 0 ? -0.08 : 0.08))));
-      }}
-      onPointerDown={(event) => {
-        const point = localPoint(event);
-        panRef.current = { mode: 'canvas', startX: point.x, startY: point.y, moved: false };
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={handlePointerMove}
-      onPointerUp={(event) => {
-        suppressClickRef.current = panRef.current?.moved ?? false;
-        panRef.current = null;
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-    >
-      <defs>
-        <pattern id="constellation-grid" width="32" height="32" patternUnits="userSpaceOnUse">
-          <circle cx="1" cy="1" r="1" fill="#38bdf8" opacity="0.2" />
-        </pattern>
-      </defs>
-      <rect width="900" height="550" fill="url(#constellation-grid)" opacity="0.75" />
-      <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
-        {project.edges.map((edge) => {
-          const source = project.nodes.find((node) => node.id === edge.source);
-          const target = project.nodes.find((node) => node.id === edge.target);
-          if (!source || !target) return null;
-          const start = pointFor(source);
-          const end = pointFor(target);
-          const highlighted = edgeIsHighlighted(edge, emphasizedNodes, pathEdgeIds);
-          const muted = Boolean(emphasizedNodes) && !highlighted;
-          return (
-            <g key={edge.id} opacity={muted ? 0.08 : highlighted ? 1 : 0.35}>
-              <line
-                x1={start.x}
-                y1={start.y}
-                x2={end.x}
-                y2={end.y}
-                stroke={EDGE_COLORS[edge.type]}
-                strokeWidth={highlighted ? 2.5 : 1.2}
-                strokeDasharray={edge.type === 'blocks' || edge.type === 'contradicts' ? '6 5' : undefined}
-              />
-              {(highlighted || pathMode) && (
-                <text
-                  x={(start.x + end.x) / 2}
-                  y={(start.y + end.y) / 2 - 5}
-                  textAnchor="middle"
-                  className="fill-slate-400 text-[9px] font-semibold"
-                >
-                  {edge.type.replace('_', ' ')}
-                </text>
-              )}
-            </g>
-          );
-        })}
-        {project.nodes.map((node, index) => {
-          const point = pointFor(node);
-          const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
-          const highlighted = node.id === selectedNodeId || Boolean(emphasizedNodes?.has(node.id));
-          const radius = node.type === 'GOAL' ? 14 : node.type === 'UNKNOWN' ? 12 : 9;
-          return (
-            <g
-              key={node.id}
-              transform={`translate(${point.x} ${point.y})`}
-              className="constellation-node-enter cursor-grab active:cursor-grabbing"
-              opacity={muted ? 0.17 : 1}
-              style={{ animationDelay: `${Math.min(index * 28, 420)}ms` }}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                const local = localPoint(event);
-                panRef.current = { mode: 'node', nodeId: node.id, startX: local.x, startY: local.y, moved: false };
-              }}
-              onPointerOver={() => setHoveredNodeId(node.id)}
-              onPointerOut={() => setHoveredNodeId(null)}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (!suppressClickRef.current) onSelectNode(node);
-                suppressClickRef.current = false;
-              }}
+    <div className="relative h-full w-full">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${DECISION_MAP_WIDTH} ${DECISION_MAP_HEIGHT}`}
+        className="h-full w-full touch-none select-none"
+        role="img"
+        aria-label="Interactive two-dimensional Gapswise decision map"
+        onWheel={(event) => {
+          event.preventDefault();
+          setZoom((current) => Math.max(0.55, Math.min(1.8, current + (event.deltaY > 0 ? -0.08 : 0.08))));
+        }}
+        onPointerDown={(event) => {
+          const point = localPoint(event);
+          panRef.current = { mode: 'canvas', startX: point.x, startY: point.y, moved: false };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={handlePointerMove}
+        onPointerUp={(event) => {
+          suppressClickRef.current = panRef.current?.moved ?? false;
+          panRef.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+      >
+        <defs>
+          <pattern id="decision-map-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" fill="#38bdf8" opacity="0.16" />
+          </pattern>
+          {(Object.keys(EDGE_COLORS) as ClarityEdge['type'][]).map((type) => (
+            <marker
+              key={type}
+              id={`decision-arrow-${type}`}
+              viewBox="0 0 8 8"
+              refX="7"
+              refY="4"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto"
+              markerUnits="userSpaceOnUse"
             >
-              {(node.type === 'GOAL' || node.type === 'UNKNOWN' || highlighted) && (
-                <circle r={radius + 7} fill="none" stroke={NODE_COLORS[node.type]} strokeWidth="1.5" opacity="0.7" />
-              )}
-              <circle
-                r={radius}
-                fill={NODE_COLORS[node.type]}
-                stroke="#06101e"
-                strokeWidth="3"
-                className={highlighted ? 'constellation-node-pulse' : undefined}
-              />
-              {!muted && (
-                <text x={radius + 7} y="4" className="fill-slate-100 text-[11px] font-semibold">
-                  {shorten(node.text, 42)}
+              <path d="M 0 0 L 8 4 L 0 8 z" fill={EDGE_COLORS[type]} />
+            </marker>
+          ))}
+        </defs>
+        <rect width={DECISION_MAP_WIDTH} height={DECISION_MAP_HEIGHT} fill="url(#decision-map-grid)" opacity="0.8" />
+        <g aria-hidden="true">
+          {DECISION_MAP_LANES.map((lane) => {
+            const y = [76, 204, 332, 460, 588][lane];
+            return (
+              <g key={lane}>
+                <rect x="48" y={y - 50} width="960" height="100" rx="18" fill={lane === 4 ? '#064e3b' : '#07111f'} opacity={lane === 4 ? 0.32 : 0.66} stroke={lane === 4 ? '#10b981' : '#16304a'} strokeWidth="1" />
+                <text x="68" y={y - 27} className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
+                  {DECISION_MAP_LANE_LABELS[lane]}
                 </text>
-              )}
-              {!muted && (
-                <text x={radius + 7} y="-9" className="fill-slate-500 text-[8px] font-extrabold uppercase tracking-[0.16em]">
-                  {node.type}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </g>
-    </svg>
+              </g>
+            );
+          })}
+          <rect x="1020" y="42" width="170" height="620" rx="18" fill="#07111f" opacity="0.5" stroke="#16304a" strokeWidth="1" />
+          <text x="1038" y="72" className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">Other context</text>
+        </g>
+        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+          {project.edges.map((edge, index) => {
+            const source = project.nodes.find((node) => node.id === edge.source);
+            const target = project.nodes.find((node) => node.id === edge.target);
+            if (!source || !target) return null;
+            const sourcePoint = pointFor(source);
+            const targetPoint = pointFor(target);
+            const sourceDimensions = nodeDimensions(source, isDecisionMapSecondaryNode(source, project));
+            const targetDimensions = nodeDimensions(target, isDecisionMapSecondaryNode(target, project));
+            const start = edgeBoundaryPoint(sourcePoint, targetPoint, sourceDimensions);
+            const end = edgeBoundaryPoint(targetPoint, sourcePoint, targetDimensions);
+            const geometry = edgeGeometry(start, end, index);
+            const highlighted = edgeIsHighlighted(edge, emphasizedNodes, pathEdgeIds);
+            const muted = Boolean(emphasizedNodes) && !highlighted;
+            const important = IMPORTANT_EDGE_TYPES.has(edge.type) && (edge.confidence ?? 1) >= 0.6;
+            const opacity = muted ? 0.07 : highlighted ? 1 : important ? 0.62 : 0.2;
+            const showLabel = important || highlighted || pathMode;
+            return (
+              <g key={edge.id} opacity={opacity}>
+                <path
+                  d={geometry.path}
+                  fill="none"
+                  stroke={EDGE_COLORS[edge.type]}
+                  strokeWidth={highlighted ? 3 : important ? 2 : 1}
+                  strokeDasharray={edge.type === 'blocks' || edge.type === 'contradicts' ? '7 5' : undefined}
+                  markerEnd={`url(#decision-arrow-${edge.type})`}
+                />
+                {showLabel && (
+                  <text
+                    x={geometry.labelX}
+                    y={geometry.labelY}
+                    textAnchor="middle"
+                    className="fill-slate-300 text-[9px] font-bold uppercase tracking-wide"
+                    stroke="#040b17"
+                    strokeWidth="4"
+                    paintOrder="stroke"
+                  >
+                    {relationshipLabel(edge.type)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          {project.nodes.map((node, index) => {
+            const point = pointFor(node);
+            const secondary = isDecisionMapSecondaryNode(node, project);
+            const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
+            const highlighted = node.id === selectedNodeId || Boolean(emphasizedNodes?.has(node.id));
+            const dimensions = nodeDimensions(node, secondary);
+            const color = NODE_COLORS[node.type];
+            const isGoal = node.type === 'GOAL';
+            return (
+              <g key={node.id} opacity={muted ? 0.14 : secondary ? 0.72 : 1} style={{ animationDelay: `${Math.min(index * 28, 420)}ms` }}>
+                <foreignObject
+                  x={point.x - dimensions.width / 2}
+                  y={point.y - dimensions.height / 2}
+                  width={dimensions.width}
+                  height={dimensions.height}
+                  className="constellation-node-enter overflow-visible"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    const local = localPoint(event);
+                    panRef.current = { mode: 'node', nodeId: node.id, startX: local.x, startY: local.y, moved: false };
+                    svgRef.current?.setPointerCapture(event.pointerId);
+                  }}
+                  onPointerOver={(event) => {
+                    event.stopPropagation();
+                    setHoveredNodeId(node.id);
+                  }}
+                  onPointerOut={() => setHoveredNodeId(null)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (!suppressClickRef.current) onSelectNode(node);
+                    suppressClickRef.current = false;
+                  }}
+                >
+                  <div
+                    className={`h-full w-full cursor-grab overflow-hidden rounded-xl border p-2.5 text-left shadow-lg transition active:cursor-grabbing ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
+                    style={{ borderColor: `${color}${highlighted || isGoal ? 'ee' : '99'}`, backgroundColor: secondary ? '#08111ecc' : `${color}22` }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[9px] font-extrabold uppercase tracking-[0.14em]" style={{ color }}>{node.type.replace('_', ' ')}</span>
+                      {isGoal && <span className="text-[9px] font-bold text-emerald-300">PRIMARY</span>}
+                    </div>
+                    <p className={`mt-1 break-words text-[11px] font-semibold leading-tight ${secondary ? 'text-slate-400' : 'text-slate-100'} line-clamp-3`}>
+                      {node.text}
+                    </p>
+                  </div>
+                </foreignObject>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+      <button
+        type="button"
+        onClick={() => {
+          setZoom(1);
+          setPan({ x: 0, y: 0 });
+        }}
+        className="absolute left-3 top-3 inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-slate-700/90 bg-slate-950/90 p-2 text-slate-200 shadow-lg backdrop-blur transition hover:border-cyan-600 hover:text-cyan-300"
+        aria-label="Fit decision map to view"
+        title="Fit to view"
+      >
+        <Scan className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
 
@@ -481,10 +590,11 @@ export default function ConstellationGraph({
   focusMode,
   pathMode,
   dimension,
+  expanded = false,
   onSelectNode,
 }: ConstellationGraphProps) {
   return (
-    <div className="relative h-[520px] overflow-hidden rounded-xl border border-cyan-950/80 bg-[#040b17] sm:h-[600px]">
+    <div className={`relative overflow-hidden rounded-xl border border-cyan-950/80 bg-[#040b17] ${expanded ? 'h-full min-h-0' : 'h-[520px] sm:h-[600px]'}`}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(14,116,144,0.16),transparent_42%)]" />
       {dimension === '3d' ? (
         <Canvas

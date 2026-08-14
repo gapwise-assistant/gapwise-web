@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildDecisionPath, calculateConstellationLayout, getNeighborhood } from '@/lib/graph/constellation';
+import {
+  buildDecisionPath,
+  calculateConstellationLayout,
+  calculateDecisionMapLayout,
+  getNeighborhood,
+} from '@/lib/graph/constellation';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 
 describe('constellation graph view model', () => {
@@ -27,5 +32,18 @@ describe('constellation graph view model', () => {
 
     expect(path.nodeIds).toEqual(['unknown_target_user', 'node_decision_track', 'node_goal']);
     expect(path.edgeIds).toEqual(['e5', 'e3']);
+  });
+
+  it('places the decision map in a readable semantic hierarchy', () => {
+    const project = createGoldenDemoProject();
+    const layout = calculateDecisionMapLayout(project);
+
+    expect(layout.node_known_track.y).toBeLessThan(layout.node_assumption_visual.y);
+    expect(layout.node_assumption_visual.y).toBeLessThan(layout.unknown_target_user.y);
+    expect(layout.unknown_target_user.y).toBeLessThan(layout.node_decision_track.y);
+    expect(layout.node_decision_track.y).toBeLessThan(layout.node_goal.y);
+    expect(layout.unknown_target_user.x).toBeGreaterThan(0);
+    expect(layout.node_goal.x).toBeGreaterThan(0);
+    expect(calculateDecisionMapLayout(project)).toEqual(layout);
   });
 });
