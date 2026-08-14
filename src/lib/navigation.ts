@@ -5,5 +5,5 @@ export const PRIMARY_NAVIGATION: ReadonlyArray<{ id: PrimaryDestination; label: 
   { id: 'today', label: 'Today' },
   { id: 'ask', label: 'Ask' },
   { id: 'context', label: 'Context' },
-  { id: 'scope', label: 'Scope' },
+  { id: 'scope', label: 'Workspace' },
 ];

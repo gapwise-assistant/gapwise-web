@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { HelpCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
@@ -10,6 +10,8 @@ import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/
 import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
 import { buildComingUp, buildTodayQuestions, TodayQuestion } from '@/lib/today/sections';
 import { localQuestionSuggestions, TodayQuestionSuggestion } from '@/lib/today/questionPlans';
+import { buildTodayFeed } from '@/lib/today/feed';
+import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 import { RecommendationCard } from '@/components/RecommendationCard';
 import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
@@ -26,17 +28,19 @@ interface TodayProps {
   onUpdateProfile?: (profile: import('@/types/clarity').UserMemoryProfile) => void;
   profile?: import('@/types/clarity').UserMemoryProfile;
   onAnswerQuestion?: (question: TodayQuestion) => void;
+  onNavigateToSource?: (sourceId: string) => void;
+  onViewReasoningPath?: (nodeId: string) => void;
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<TodayQuestion | null>(null);
   const [questionSuggestions, setQuestionSuggestions] = useState<Record<string, TodayQuestionSuggestion>>({});
-  const [questionSuggestionSource, setQuestionSuggestionSource] = useState<'gapswise-agent' | 'local-context'>('local-context');
+  const [questionSuggestionSource, setQuestionSuggestionSource] = useState<'gapswise-agent' | 'local-context' | 'local-fallback'>('local-context');
+  const [questionSuggestionWarning, setQuestionSuggestionWarning] = useState('');
   const [hiddenStatuses, setHiddenStatuses] = useState<Record<string, RecommendationStatus>>({});
-  const [hiddenQuestionIds, setHiddenQuestionIds] = useState<string[]>([]);
 
   const localBrief: DailyBrief = useMemo(
     () => generateDailyBrief({ userId, project, memories, feedbackEvents, force: Boolean(refreshCounter) }),
@@ -72,20 +76,26 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     }))
     .filter((recommendation) => recommendation.status === 'active')
     .slice(0, 5);
-  const questions = buildTodayQuestions({ project, brief, hiddenQuestionIds });
+  const questions = buildTodayQuestions({ project, brief });
+  const feedItems = useMemo(() => buildTodayFeed(recommendations, questions, project), [recommendations, questions, project]);
+  const feedQuestions = feedItems.flatMap((item) => item.question ? [item.question] : []);
   const comingUp = buildComingUp(brief);
-  const questionPlanKey = JSON.stringify(questions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })));
+  const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })));
+  const selectedQuestionWhy = selectedQuestion ? buildQuestionWhyExplanation(project, selectedQuestion) : null;
+  const selectedReasoningPathNodeId = selectedQuestionWhy?.reasoningPath?.nodeIds[0] ?? null;
 
   React.useEffect(() => {
-    if (!questions.length) {
+    if (!feedQuestions.length) {
       setQuestionSuggestions({});
       setQuestionSuggestionSource('local-context');
+      setQuestionSuggestionWarning('');
       return;
     }
 
-    const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(questions).map((suggestion) => [suggestion.questionId, suggestion]));
+    const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(feedQuestions).map((suggestion) => [suggestion.questionId, suggestion]));
     setQuestionSuggestions(fallbackSuggestions);
     setQuestionSuggestionSource('local-context');
+    setQuestionSuggestionWarning('');
     const controller = new AbortController();
     const scopeProjectId = scope.type === 'project' ? scope.projectId : undefined;
     const scopeLabel = scope.type === 'project' ? project.title : 'Everything';
@@ -97,7 +107,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         userId,
         ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
         scopeLabel,
-        questions: questions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })),
+        questions: feedQuestions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })),
       }),
       signal: controller.signal,
     })
@@ -108,7 +118,14 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       .then((body) => {
         const suggestions = Array.isArray(body.suggestions) ? body.suggestions as TodayQuestionSuggestion[] : [];
         setQuestionSuggestions(Object.fromEntries(suggestions.map((suggestion) => [suggestion.questionId, suggestion])));
-        setQuestionSuggestionSource(body.generatedBy === 'gapswise-agent' ? 'gapswise-agent' : 'local-context');
+        setQuestionSuggestionSource(
+          body.generatedBy === 'gapswise-agent'
+            ? 'gapswise-agent'
+            : body.generatedBy === 'local-fallback'
+              ? 'local-fallback'
+              : 'local-context'
+        );
+        setQuestionSuggestionWarning(typeof body.warning === 'string' ? body.warning : '');
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -157,7 +174,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
               <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
               <p className="text-xs text-slate-400">
-                {recommendations.length} ranked attention items for {brief.period}
+                {feedItems.length} items for {brief.period}
               </p>
               {scope.type === 'project' && (
                 <p className="mt-1 text-xs font-semibold text-cyan-300">Focused on: {project.title}</p>
@@ -178,73 +195,32 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
 
       <section className="space-y-4">
         <h2 className="text-lg font-extrabold text-slate-100">What deserves attention</h2>
-        {recommendations.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {recommendations.map((recommendation) => (
+        {questionSuggestionWarning && (
+          <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
+        )}
+        {feedItems.length > 0 ? (
+          <div className="space-y-4">
+            {feedItems.map((item) => (
               <RecommendationCard
-                key={recommendation.id}
-                recommendation={recommendation}
+                key={item.recommendation.id}
+                recommendation={item.recommendation}
+                itemType={item.itemType}
+                title={item.title}
+                description={item.description}
+                question={item.question}
+                questionSuggestion={item.question ? questionSuggestions[item.question.id] : undefined}
+                questionSuggestionSource={questionSuggestionSource}
                 onOpenWhy={setSelectedRecommendation}
+                onOpenQuestionWhy={setSelectedQuestion}
+                onAnswerQuestion={onAnswerQuestion}
                 onFeedback={handleFeedback}
               />
             ))}
           </div>
         ) : (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
-            <h3 className="text-sm font-bold text-slate-100">No active recommendations</h3>
+            <h3 className="text-sm font-bold text-slate-100">Nothing needs your attention right now</h3>
             <p className="mt-2 text-xs text-slate-500">Refresh after adding new context or memory.</p>
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-lg font-extrabold text-slate-100">Questions worth answering</h2>
-        {questions.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {questions.map((question) => (
-              <article key={question.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4 space-y-3">
-                <h3 className="text-sm font-bold leading-snug text-slate-100">{question.question}</h3>
-                <p className="text-xs text-slate-400">{question.reason}</p>
-                {questionSuggestions[question.id] && (
-                  <div className="rounded-lg border border-cyan-900/70 bg-cyan-950/20 p-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300">
-                      {questionSuggestionSource === 'gapswise-agent' ? 'AI answer suggestion' : 'Suggested answer'}
-                    </p>
-                    <p className="mt-2 text-xs leading-relaxed text-slate-200">{questionSuggestions[question.id].suggestedAnswer}</p>
-                    <p className="mt-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Why this matters</p>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-400">{questionSuggestions[question.id].whyItMatters}</p>
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onAnswerQuestion?.(question)}
-                    className="min-h-11 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 sm:min-h-0 sm:py-1.5"
-                  >
-                    Answer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHiddenQuestionIds((current) => [...current, question.id])}
-                    className="min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 sm:min-h-0 sm:py-1.5"
-                  >
-                    Not now
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedQuestion(question)}
-                    className="flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 sm:min-h-0 sm:py-1.5"
-                  >
-                    <HelpCircle className="h-3.5 w-3.5" />
-                    Why?
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 text-xs text-slate-500">
-            No high-value unresolved questions right now.
           </div>
         )}
       </section>
@@ -275,16 +251,105 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       {selectedQuestion && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
           <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-none sm:rounded-xl sm:p-5">
-            <h2 className="text-sm font-bold text-slate-100">Why this question?</h2>
-            <p className="mt-3 text-sm text-slate-300">{selectedQuestion.question}</p>
-            <p className="mt-3 text-xs text-slate-400">{selectedQuestion.reason}</p>
-            <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-cyan-300">
-              {selectedQuestion.provenance}
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Decision value</p>
+                <h2 className="mt-1 text-sm font-bold text-slate-100">Why this matters</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedQuestion(null)}
+                className="min-h-11 min-w-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0 sm:min-w-0"
+                aria-label="Close question explanation"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mt-3 text-sm font-semibold leading-relaxed text-slate-200">{selectedQuestion.question}</p>
+
+            {selectedQuestionWhy && (
+              <div className="mt-5 space-y-5">
+                <section>
+                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-cyan-300">Why this matters</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">{selectedQuestionWhy.whyThisMatters}</p>
+                </section>
+
+                <section>
+                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What Gapswise already knows</h3>
+                  <ul className="mt-2 space-y-2">
+                    {selectedQuestionWhy.whatGapswiseKnows.map((item) => (
+                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What this is blocking</h3>
+                  <ul className="mt-2 space-y-2">
+                    {selectedQuestionWhy.whatThisBlocks.map((item) => (
+                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What could change if you answer</h3>
+                  <ul className="mt-2 space-y-2">
+                    {selectedQuestionWhy.whatCouldChange.map((item) => (
+                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Evidence checked</h3>
+                  {selectedQuestionWhy.evidence.length ? (
+                    <div className="mt-2 space-y-2">
+                      {selectedQuestionWhy.evidence.map((evidence) => (
+                        evidence.sourceId && onNavigateToSource && !evidence.sourceId.startsWith('gcal_') ? (
+                          <button
+                            key={evidence.sourceId}
+                            type="button"
+                            onClick={() => {
+                              onNavigateToSource(evidence.sourceId as string);
+                              setSelectedQuestion(null);
+                            }}
+                            className="block min-h-11 w-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-left hover:border-cyan-700"
+                          >
+                            <span className="block text-xs font-semibold text-cyan-300">{evidence.title}</span>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-400">{evidence.excerpt}</span>
+                          </button>
+                        ) : (
+                          <div key={`${evidence.title}-${evidence.excerpt}`} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+                            <span className="block text-xs font-semibold text-slate-300">{evidence.title}</span>
+                            <span className="mt-1 block text-xs leading-relaxed text-slate-400">{evidence.excerpt}</span>
+                          </div>
+                        )
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-slate-500">No named source is linked to this question yet.</p>
+                  )}
+                </section>
+
+                {selectedReasoningPathNodeId && onViewReasoningPath && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onViewReasoningPath(selectedReasoningPathNodeId);
+                      setSelectedQuestion(null);
+                    }}
+                    className="min-h-11 w-full rounded-lg border border-cyan-800 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600"
+                  >
+                    View reasoning path
+                  </button>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setSelectedQuestion(null)}
-              className="mt-4 min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
+              className="mt-5 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
             >
               Close
             </button>

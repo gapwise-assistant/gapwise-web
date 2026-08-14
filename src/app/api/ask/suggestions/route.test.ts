@@ -79,14 +79,25 @@ describe('POST /api/ask/suggestions', () => {
     });
   });
 
-  it('returns an agent error without inventing static suggestions', async () => {
+  it('uses context-derived suggestions when the agent is unavailable', async () => {
     process.env.GAPSWISE_DEMO_MODE = 'false';
     vi.mocked(askGapswise).mockRejectedValue(new AskAgentError('ADK is unavailable.'));
+    vi.mocked(generateLocalAskSuggestions).mockResolvedValue({
+      top: ['What should I clarify about the trip budget?'],
+      other: ['What should I verify next?'],
+    });
 
     const response = await POST(jsonRequest({ userId: 'demo-user' }));
 
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({ error: 'ADK is unavailable.', stage: 'agent-unavailable' });
+    expect(response.status).toBe(200);
+    expect(generateLocalAskSuggestions).toHaveBeenCalledWith({ userId: 'demo-user', projectId: undefined });
+    await expect(response.json()).resolves.toEqual({
+      topQuestions: ['What should I clarify about the trip budget?'],
+      otherQuestions: ['What should I verify next?'],
+      generatedBy: 'local-fallback',
+      warning: 'AI suggestions are unavailable right now. Showing questions from the current context instead.',
+      stage: 'agent-unavailable',
+    });
   });
 
   it('rejects an invalid request', async () => {

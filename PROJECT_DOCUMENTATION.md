@@ -244,7 +244,7 @@ Implemented:
 - Optional internal scheduler auth through `ATTENTION_RUN_SECRET`.
 - Today page in `src/components/Today.tsx`.
 - Recommendation card UI in `src/components/RecommendationCard.tsx`.
-- Why drawer with score factors and evidence in `src/components/RecommendationWhy.tsx`.
+- Why drawer with user-facing context and evidence in `src/components/RecommendationWhy.tsx`.
 - Global navigation in `src/components/Header.tsx` now exposes only:
   - Today
   - Ask
@@ -260,10 +260,11 @@ Implemented:
   - returns sanitized `Why / Sources` data from Context Pack
   - never returns raw Context Pack JSON, traces, tool calls, or ADK internals to normal users
 - Ask service URL is configured with `GAPSWISE_AGENT_URL`, defaulting to the Agents CLI playground at `http://127.0.0.1:8080`.
-- Today is organized into:
-  - What deserves attention
-  - Questions worth answering
-  - Coming up
+- Today is organized into one ranked What deserves attention feed and a
+  separate compact Coming up section.
+- The Today feed presentation model in `src/lib/today/feed.ts` maps ranked
+  recommendations to `QUESTION`, `ACTION`, `DECISION`, or `REMINDER` cards and
+  deduplicates items backed by the same graph node.
 - Deterministic Today section helpers in `src/lib/today/sections.ts`.
 - Proactive questions are derived from existing Context Pack gaps, contradictions, assumptions, risks, and Calendar commitments.
 - Coming up reads compact Google Calendar commitments from Context Pack only; Today does not call Calendar independently.
@@ -287,6 +288,8 @@ Implemented:
 - Recommendation feedback:
   - `Not now`
   - `Done`
+  - secondary Useful, Not useful, and Wrong assumption feedback lives under a
+    `...` menu
   - suppressed recommendations do not remain in the active brief.
 
 Tests:
@@ -1154,7 +1157,7 @@ You behavior:
 
 - `Everything` keeps the global reasoning view: projects, priorities, unresolved user-level questions, and My World.
 - Project scope shows the existing project detail experience directly under `ABOUT THIS PROJECT` with Overview, Questions, Graph, and Sources.
-- Durable memory, Connections, account actions, and project configuration are available from Settings.
+- Durable memory, Connections, account actions, and preferences are available from Settings; project configuration stays in Workspace.
 - Existing project detail components and persistence actions are reused.
 
 Regression coverage:
@@ -1369,16 +1372,16 @@ Verification:
 
 ## 4. Current App Screens
 
-- **Global scope selector**: chooses Everything or one project and consistently controls Today, Ask, Context, and Scope.
-- **Today**: three-section daily surface for attention items, questions worth answering, and compact near-term commitments in the selected scope.
+- **Global workspace selector**: chooses Everything or one project and consistently controls Today, Ask, Context, and Workspace.
+- **Today**: one ranked attention feed of questions/actions/decisions plus compact near-term commitments in the selected scope.
 - **Ask**: conversational Gapswise surface backed by the real Google ADK service and scope-aware Context Pack integration.
 - **Context**: scope-aware source area organized into Recent, Documents, and Add context.
-- **Scope**: global understanding in Everything scope, or the selected project's focused understanding surface in project scope.
-- **Scope > Projects**: project-management surface with active and archived sections, project cards, New project, Rename, Archive, and project detail tabs.
-- **Project**: active project workspace under Scope with Overview, Questions, Graph, and Sources.
-- **Settings**: account, durable memory, Connections, and project configuration when project-scoped.
-- **My World**: high-level cross-context map of domains, projects, sources, gaps, risks, and preferences, currently available under Scope.
-- **Clarity Graph**: project-level graph of goals, knowns, constraints, assumptions, decisions, risks, unknowns, evidence, experiments, next actions, and preferences, currently available under Scope > Graph.
+- **Workspace**: global understanding in Everything, or the selected project's focused understanding surface.
+- **Workspace > Projects**: project-management surface with active and archived sections, project cards, New project, Rename, Archive, and project detail tabs.
+- **Project**: active project workspace under Workspace with Overview, Questions, Graph, and Sources.
+- **Settings**: Connections, durable memory, preferences, and account/sign-out configuration.
+- **My World**: high-level cross-context map of domains, projects, sources, gaps, risks, and preferences, currently available under Workspace.
+- **Clarity Graph**: project-level graph of goals, knowns, constraints, assumptions, decisions, risks, unknowns, evidence, experiments, next actions, and preferences, currently available under Workspace > Graph.
 - **Context Add context**: universal context capture with source metadata and provenance, currently available under Context.
 - **Connections**: read-only connected-account status inside Settings. Google Calendar uses real OAuth; Gmail and Google Drive are shown as not connected unless implemented later.
 - **Memory**: editable profile preferences plus durable memory bank with edit/forget/confirm/why controls, currently available under Settings.
@@ -1663,27 +1666,28 @@ was changed for this responsive pass. Desktop/browser-width verification is
 covered by the typecheck and production build; no browser automation dependency
 is currently installed in the repository.
 
-## 11. Scope and Settings Navigation
+## 11. Workspace and Settings Navigation
 
 The primary application destinations are now:
 
 - `Today`: what deserves attention now.
 - `Ask`: conversation with Gapswise.
 - `Context`: sources and context capture supplied to Gapswise.
-- `Scope`: the current reasoning/view boundary.
+- `Workspace`: the current reasoning/view boundary.
 
-The header scope selector continues to offer `Everything`, individual projects,
-and `New project`. The selected scope still controls Today, Ask, Context, and
-Scope behavior, while stored entities remain named `Project` internally.
+The header workspace selector continues to offer `Everything`, individual
+projects, and `New project`. The selected internal scope still controls Today,
+Ask, Context, and Workspace behavior, while stored entities remain named
+`Project` internally.
 
-When `Everything` is selected, Scope exposes:
+When `Everything` is selected, Workspace exposes:
 
 - Projects
 - Priorities supported by durable memory
 - Still unclear user/cross-project questions
 - My World
 
-When a project is selected, Scope exposes the existing project workspace with:
+When a project is selected, Workspace exposes the existing project workspace with:
 
 - Overview
 - Questions
@@ -1693,11 +1697,13 @@ When a project is selected, Scope exposes the existing project workspace with:
 Project configuration is no longer a project workspace tab. The header gear
 opens Settings, which contains:
 
-- Account and sign out
-- What Gapswise remembers, including preferences and durable memory actions
 - Connections, including the existing Google Calendar OAuth integration
-- Project name, goal, description, deadline, and archive controls when a
-  project scope is selected
+- What Gapswise remembers and durable memory actions
+- Preferences and personalization controls
+- Account and sign out
+
+Project name, goal, description, deadline, and archive controls remain in the
+selected project's Workspace edit modal.
 
 Context now contains only Recent, Documents, and Add context. Connected account
 status and sync controls are available from Settings instead. Existing source
@@ -1815,10 +1821,95 @@ Context Pack flow. Each suggestion contains an evidence-aware draft answer and
 a project-specific explanation of why the question matters. When evidence is
 missing, the model must say what is missing rather than inventing an answer.
 Demo mode and temporary agent failures retain a cautious deterministic fallback
-without inventing context.
+without inventing context. Agent failures on this optional enrichment endpoint
+return HTTP 200 with `generatedBy: local-fallback` and a warning, so Today does
+not become unusable merely because the ADK service is offline. Server logs retain
+the failure stage (`agent-auth`, `agent-unavailable`, `context-pack`, or
+`gemini`) for diagnosis. Real AI mode still uses the ADK when it is available.
+
+The Ask screen's contextual prompt endpoint follows the same resilience rule:
+when ADK is unavailable, it returns the existing Context Pack-derived local
+suggestions as `generatedBy: local-fallback` with a visible warning instead of
+turning the prompt area into a `502`. This fallback does not claim to be a
+Gemini response and does not replace the real Ask conversation path.
 
 The project Scope overview now includes the existing project edit panel for
 name, goal, description, deadline, and archive controls. The overview no
 longer includes separate Recent decisions or Primary actions panels; decisions
 remain available through Questions and Graph, while capture and Ask remain in
 their top-level destinations.
+
+## 14. Question Decision-Value Explanations
+
+The Today `Why?` action is a trust layer over the existing project graph. It
+uses `src/lib/questions/whyQuestion.ts` to translate stored `blocks`,
+`depends_on`, `affects`, `supports`, `contradicts`, `supersedes`, `resolves`,
+and related path relationships into five user-facing areas: why the question
+matters, what it blocks, what Gapswise already knows, what could change after
+an answer, and the two-to-four most relevant named evidence sources. It does
+not call Gemini or create another explanation store.
+
+Evidence cards use source filenames/titles and short original excerpts rather
+than internal source IDs. Clicking a named source opens the existing Context
+source detail view. When a question has a connected path to a project goal,
+`View reasoning path` opens the project Scope graph with the question selected,
+its neighborhood focused, and its goal path highlighted. When the graph lacks
+enough information, the explanation states that directly instead of inventing
+decision impact.
+
+## 15. Today Primary Attention Feed
+
+Today now presents one primary ranked feed. It keeps the Attention Engine's
+internal scores and ranking but does not expose score numbers, signal counts, or
+generic internal titles. `src/lib/today/feed.ts` translates each ranked item to
+one of four user-facing types: `QUESTION`, `ACTION`, `DECISION`, or `REMINDER`.
+
+Gap-backed recommendations use the underlying question as their title and are
+not repeated in a second Questions section. Duplicate candidates sharing the
+same underlying gap/action node are collapsed at the presentation boundary.
+Question cards use `Answer`, `Why?`, and `Not now`; action, decision, and reminder
+cards use `Done`, `Why?`, and `Not now`. Secondary feedback is inside the
+overflow menu. AI answer text is shown only when the real agent returns a
+specific evidence-supported answer; generic missing-context fallbacks remain
+hidden while the question itself stays visible.
+
+## 16. Workspace Navigation and Project Overview
+
+The primary user-facing destination previously called `Scope` is now labeled
+`Workspace`. The navigation is `Today`, `Ask`, `Context`, and `Workspace`, while
+the existing `AppScope` type, persisted scope values, project storage, and scope
+propagation remain unchanged internally. The header selector still offers
+`Everything` and the user's project names, so Workspace is the place where the
+selected context is viewed and worked on rather than a new data model.
+
+When a project is selected, its Workspace header shows the project name, goal,
+optional deadline, and an `Edit project` action. Overview now opens with a
+compact `Current picture` section built synchronously from existing graph nodes
+and relationships. It uses stored blockers, impacts, contradictions,
+dependencies, unresolved questions, decisions, constraints, and knowns; it does
+not make a Gemini call or add another summary store. Internal clarity scores and
+source-count metrics remain available to ranking and other product logic but are
+no longer prominent Overview or header content.
+
+Project editing uses the shared `ProjectSettingsPanel` in a modal. It edits the
+existing name, goal, description, and deadline fields, persists through the
+existing project update API, and keeps Archive project separated at the bottom.
+The modal is reachable from the selected project's Workspace header; Settings
+does not expose project configuration.
+
+## 17. User-Level Settings Only
+
+Settings now contains only account-level configuration, ordered as:
+
+1. Connections, with the existing Google Calendar OAuth flow and unavailable
+   Gmail/Drive states.
+2. What Gapswise remembers, using the existing durable-memory create, edit,
+   confirm, forget, and provenance behavior.
+3. Preferences, using the existing personalization controls and explanation
+   surface.
+4. Account, with the signed-in account and sign-out action.
+
+Project name, goal, description, deadline, and archive controls were removed
+from Settings. Project editing is available only from the selected project in
+Workspace through its shared `Edit project` modal. No OAuth, storage, memory,
+or project persistence behavior changed.

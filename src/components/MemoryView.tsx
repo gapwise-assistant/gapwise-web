@@ -13,6 +13,7 @@ interface MemoryViewProps {
   memories: DurableMemory[];
   onUpdateProfile: (updated: UserMemoryProfile) => void;
   onUpdateMemories: (updated: DurableMemory[]) => void;
+  section?: 'all' | 'memory' | 'preferences';
 }
 
 const categories: MemoryCategory[] = ['career', 'communication', 'learning', 'current_priorities', 'custom'];
@@ -22,6 +23,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   memories,
   onUpdateProfile,
   onUpdateMemories,
+  section = 'all',
 }) => {
   const [formData, setFormData] = useState<UserMemoryProfile>(profile);
   const [draftMemory, setDraftMemory] = useState('');
@@ -31,6 +33,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
 
   const visibleMemories = activeMemories(memories);
   const promptProfile = buildPromptProfile(profile, memories);
+  const showMemory = section === 'all' || section === 'memory';
+  const showPreferences = section === 'all' || section === 'preferences';
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +58,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-2 sm:p-6">
+      {section === 'all' && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-2 sm:p-6">
         <div className="flex items-center space-x-3">
           <div className="p-2.5 bg-cyan-950 border border-cyan-800 rounded-xl text-cyan-400">
             <Sliders className="w-6 h-6" />
@@ -66,11 +70,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             </p>
           </div>
         </div>
-      </div>
+      </div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <form onSubmit={handleSaveProfile} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-xl">
-          <h2 className="text-sm font-bold text-slate-200">Interaction Preferences</h2>
+        {showPreferences && <form onSubmit={handleSaveProfile} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-xl">
+          <h2 className="text-sm font-bold text-slate-200">Preferences</h2>
           <div className="space-y-4 text-xs">
             <label className="block">
               <span className="block font-semibold text-slate-300 mb-1">Answer Density</span>
@@ -120,12 +124,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             Save Profile
           </button>
           {savedMessage && <p className="text-xs text-emerald-400 text-center">{savedMessage}</p>}
-        </form>
+        </form>}
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+        {showMemory && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
           <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
             <Plus className="w-4 h-4 text-cyan-400" />
-            Add Explicit Memory
+            What Gapswise remembers
           </h2>
           <textarea
             rows={4}
@@ -142,10 +146,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           >
             Remember This
           </button>
-        </div>
+        </div>}
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+      {showMemory && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
         <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
           <Brain className="w-4 h-4 text-fuchsia-400" />
           Durable Memory Bank
@@ -220,9 +224,9 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             );
           })}
         </div>
-      </div>
+      </div>}
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+      {showPreferences && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
         <h2 className="text-sm font-bold text-slate-200">Why Gapswise Thinks This About You</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
@@ -250,7 +254,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             </div>
           ))}
         </div>
-      </div>
+      </div>}
     </div>
   );
 };

@@ -9,17 +9,6 @@ interface RecommendationWhyProps {
   onClose: () => void;
 }
 
-const FACTOR_LABELS: Record<keyof AttentionCandidate['factors'], string> = {
-  goal_alignment: 'Goal alignment',
-  impact: 'Impact',
-  urgency: 'Urgency',
-  actionability: 'Actionability',
-  evidence_confidence: 'Evidence confidence',
-  unresolved_risk: 'Unresolved risk',
-  momentum: 'Momentum',
-  estimated_effort: 'Estimated effort',
-};
-
 export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommendation, onClose }) => {
   if (!recommendation) return null;
   const calendarCommitments = recommendation.context_pack.upcomingCommitments.filter((commitment) =>
@@ -33,7 +22,7 @@ export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommenda
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-100">Why This Matters</h2>
-            <p className="text-xs text-slate-500">{Math.round(recommendation.score * 100)} / 100 attention score</p>
+            <p className="text-xs text-slate-500">How this connects to your current context</p>
           </div>
           <button
             onClick={onClose}
@@ -49,21 +38,6 @@ export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommenda
             <h3 className="text-sm font-bold text-slate-100">{recommendation.title}</h3>
             <p className="mt-2 text-xs text-slate-400">{recommendation.reason}</p>
             <p className="mt-3 text-xs font-semibold text-cyan-300">{recommendation.next_action}</p>
-          </section>
-
-          <section className="space-y-2">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Score Factors</h3>
-            {Object.entries(recommendation.factors).map(([key, value]) => (
-              <div key={key} className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-400">{FACTOR_LABELS[key as keyof AttentionCandidate['factors']]}</span>
-                  <span className="text-slate-200">{Math.round(value * 100)}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                  <div className="h-full bg-cyan-400" style={{ width: `${Math.round(value * 100)}%` }} />
-                </div>
-              </div>
-            ))}
           </section>
 
           <section className="space-y-2">

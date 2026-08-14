@@ -45,6 +45,12 @@ export function localQuestionSuggestions(questions: TodayQuestionLike[]): TodayQ
   return questions.map(localQuestionSuggestion);
 }
 
+export function hasUsefulSuggestedAnswer(suggestion: TodayQuestionSuggestion): boolean {
+  return !/(not enough|not recorded|no confirmed|cannot confirm|can't confirm|unable to|do not have enough|don't have enough|missing information|not available|unknown)/i.test(
+    suggestion.suggestedAnswer
+  );
+}
+
 function parsedObject(answer: string): Record<string, unknown> | null {
   const normalized = answer.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
   const candidates = [normalized];

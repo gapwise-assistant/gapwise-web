@@ -39,6 +39,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
   const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedQuestionGroups>({ top: [], other: [] });
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState('');
+  const [suggestionsWarning, setSuggestionsWarning] = useState('');
   const [error, setError] = useState('');
   const [selectedSources, setSelectedSources] = useState<AskSource[] | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -69,6 +70,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
     const controller = new AbortController();
     setIsLoadingSuggestions(true);
     setSuggestionsError('');
+    setSuggestionsWarning('');
     setSuggestedPrompts({ top: [], other: [] });
 
     authFetch('/api/ask/suggestions', {
@@ -97,6 +99,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
           top: top.filter((item: unknown): item is string => typeof item === 'string').slice(0, 3),
           other: other.filter((item: unknown): item is string => typeof item === 'string').slice(0, 3),
         });
+        setSuggestionsWarning(typeof body.warning === 'string' ? body.warning : '');
       })
       .catch((caught: unknown) => {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
@@ -231,6 +234,9 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
             )}
             {!isLoadingSuggestions && suggestionsError && (
               <p className="mt-4 text-xs text-slate-500">{suggestionsError} You can still ask Gapswise anything below.</p>
+            )}
+            {!isLoadingSuggestions && suggestionsWarning && (
+              <p className="mt-4 text-xs text-amber-300" role="status">{suggestionsWarning}</p>
             )}
           </div>
         )}
@@ -407,7 +413,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                         ? 'View in Context'
                         : source.kind === 'calendar'
                           ? 'View connection'
-                          : 'View in Scope'}
+                          : 'View in Workspace'}
                       <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
                     </button>
                   )}

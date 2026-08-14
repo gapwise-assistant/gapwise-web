@@ -63,15 +63,23 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const stage = error instanceof AskAgentError ? error.stage : 'gemini';
-    console.error('[Gapswise Today question plans]', {
-      stage,
-      error: error instanceof Error ? error.message : 'unknown-error',
-      questionCount: questions.length,
-      hasProjectScope: Boolean(parsed.data.projectId),
-    });
+    const errorMessage = error instanceof Error ? error.message : 'unknown-error';
+    // Keep this flat so Cloud Run/Next logs retain the failure stage and message.
+    console.error(
+      '[Gapswise Today question suggestions]',
+      `stage=${stage}`,
+      `questionCount=${questions.length}`,
+      `hasProjectScope=${Boolean(parsed.data.projectId)}`,
+      `message=${errorMessage.replace(/\s+/g, ' ').slice(0, 240)}`,
+    );
+
+    // Today already has a conservative context-only answer suggestion path.
+    // Keep the page usable when the optional AI enrichment service is offline.
     return NextResponse.json({
-      error: error instanceof AskAgentError ? error.message : 'Today question plans are unavailable right now.',
+      suggestions: localQuestionSuggestions(questions),
+      generatedBy: 'local-fallback',
+      warning: 'AI answer suggestions are unavailable right now. Showing a local context prompt instead.',
       stage,
-    }, { status: 502 });
+    });
   }
 }

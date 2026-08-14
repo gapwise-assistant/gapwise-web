@@ -9,7 +9,6 @@ import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
 type AppTab = AppDestination;
 
 interface HeaderProps {
-  project: Project;
   projects: Project[];
   scope: AppScope;
   activeTab: AppTab;
@@ -26,7 +25,6 @@ interface HeaderProps {
 const NAV_ITEMS = PRIMARY_NAVIGATION;
 
 export const Header: React.FC<HeaderProps> = ({
-  project,
   projects,
   scope,
   activeTab,
@@ -83,7 +81,7 @@ export const Header: React.FC<HeaderProps> = ({
             value={scope.type === 'project' ? scope.projectId : '__everything__'}
             onChange={(event) => handleProjectSelect(event.target.value)}
             className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
-            aria-label="Gapswise scope"
+            aria-label="Workspace selector"
           >
             <option value="__everything__" className="bg-slate-900">Everything</option>
             <optgroup label="Projects">
@@ -120,17 +118,6 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          <div className="hidden lg:flex items-center space-x-2 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800">
-            <span className="hidden sm:inline text-xs text-slate-400">Clarity Score</span>
-            <span className="text-sm font-bold text-cyan-400">{project.clarity_score}%</span>
-            <div className="w-12 h-2 rounded-full bg-slate-800 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-amber-500 via-cyan-400 to-emerald-400 transition-all duration-500"
-                style={{ width: `${project.clarity_score}%` }}
-              />
-            </div>
-          </div>
-
           {demoMode && (
             <button
               onClick={onResetDemo}

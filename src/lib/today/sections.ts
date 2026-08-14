@@ -53,7 +53,7 @@ function bestContextPack(brief: DailyBrief): ContextPack | null {
   return packs.find((pack) => pack.upcomingCommitments.some(isCalendarNode)) ?? packs[0] ?? null;
 }
 
-function questionFromNode(project: Project, node: ClarityNode): TodayQuestion {
+export function todayQuestionFromNode(project: Project, node: ClarityNode): TodayQuestion {
   const reasons = relationshipReasons(project, node.id, 2);
   return {
     id: `question_${node.id}`,
@@ -92,8 +92,8 @@ export function buildTodayQuestions(params: {
   const contextPack = bestContextPack(params.brief);
   const questions: TodayQuestion[] = [];
 
-  contextPack?.unresolvedGaps.forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
-  contextPack?.contradictions.forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
+  contextPack?.unresolvedGaps.forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
+  contextPack?.contradictions.forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
   contextPack?.upcomingCommitments.filter(isCalendarNode).forEach((node) => {
     const question = calendarQuestion(node, now);
     if (question) questions.push(question);
@@ -103,7 +103,7 @@ export function buildTodayQuestions(params: {
     reasoningProject.nodes
       .filter((node) => node.status === 'OPEN' && ['UNKNOWN', 'ASSUMPTION', 'RISK'].includes(node.type))
       .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact))
-      .forEach((node) => questions.push(questionFromNode(reasoningProject, node)));
+      .forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
   }
 
   const seen = new Set<string>();

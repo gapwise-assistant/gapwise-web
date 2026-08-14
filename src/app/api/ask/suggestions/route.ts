@@ -76,15 +76,42 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const stage = failureStage(error);
-    console.error('[Gapswise Ask suggestions]', {
-      stage,
-      error: error instanceof Error ? error.message : 'unknown-error',
-      hasProjectScope: Boolean(parsed.data.projectId),
-      scopeLabelLength: parsed.data.scopeLabel.length,
-    });
-    const message = error instanceof AskAgentError
-      ? error.message
-      : 'Contextual suggestions are unavailable right now.';
-    return NextResponse.json({ error: message, stage }, { status: 502 });
+    const errorMessage = error instanceof Error ? error.message : 'unknown-error';
+    try {
+      const fallback = await generateLocalAskSuggestions({
+        userId,
+        projectId: parsed.data.projectId,
+      });
+      console.error(
+        '[Gapswise Ask suggestions]',
+        `stage=${stage}`,
+        'fallback=local-context',
+        `hasProjectScope=${Boolean(parsed.data.projectId)}`,
+        `scopeLabelLength=${parsed.data.scopeLabel.length}`,
+        `message=${errorMessage.replace(/\s+/g, ' ').slice(0, 240)}`,
+      );
+      return NextResponse.json({
+        topQuestions: fallback.top,
+        otherQuestions: fallback.other,
+        generatedBy: 'local-fallback',
+        warning: 'AI suggestions are unavailable right now. Showing questions from the current context instead.',
+        stage,
+      });
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'unknown-fallback-error';
+      console.error(
+        '[Gapswise Ask suggestions]',
+        `stage=${stage}`,
+        'fallback=failed',
+        `hasProjectScope=${Boolean(parsed.data.projectId)}`,
+        `scopeLabelLength=${parsed.data.scopeLabel.length}`,
+        `message=${errorMessage.replace(/\s+/g, ' ').slice(0, 180)}`,
+        `fallbackMessage=${fallbackMessage.replace(/\s+/g, ' ').slice(0, 180)}`,
+      );
+      const message = error instanceof AskAgentError
+        ? error.message
+        : 'Contextual suggestions are unavailable right now.';
+      return NextResponse.json({ error: message, stage }, { status: 502 });
+    }
   }
 }

@@ -20,6 +20,7 @@ interface ClarityGraphCanvasProps {
   project: Project;
   onSelectNode: (node: ClarityNode) => void;
   onSelectSource?: (sourceId: string) => void;
+  focusNodeId?: string | null;
 }
 
 const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: string; dot: string }> = {
@@ -60,6 +61,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   project,
   onSelectNode,
   onSelectSource,
+  focusNodeId,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'critical' | 'assumptions'>('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -99,6 +101,13 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
     edges: project.edges.filter((edge) => filteredNodes.some((node) => node.id === edge.source) && filteredNodes.some((node) => node.id === edge.target)),
   };
   const decisionPath = selectedNodeId ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
+
+  useEffect(() => {
+    if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
+    setSelectedNodeId(focusNodeId);
+    setFocusMode(true);
+    setPathMode(true);
+  }, [focusNodeId, project]);
 
   const handleConstellationSelect = (node: ClarityNode) => {
     setSelectedNodeId(node.id);

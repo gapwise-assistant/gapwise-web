@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { askGapswise } from '@/lib/ask/adkClient';
+import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { POST } from './route';
 
 vi.mock('@/lib/ask/adkClient', () => ({
@@ -64,5 +64,20 @@ describe('POST /api/today/question-plans', () => {
     expect(response.status).toBe(200);
     expect(askGapswise).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({ generatedBy: 'local-context', suggestions: [{ questionId: 'question_budget' }] });
+  });
+
+  it('keeps Today usable with a labeled local fallback when the agent is unavailable', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.mocked(askGapswise).mockRejectedValue(new AskAgentError('The deployed ADK agent could not be reached while creating a session.'));
+
+    const response = await POST(request({ userId: 'demo-user', questions: [question] }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      generatedBy: 'local-fallback',
+      stage: 'agent-unavailable',
+      warning: expect.stringContaining('AI answer suggestions are unavailable'),
+      suggestions: [{ questionId: 'question_budget' }],
+    });
   });
 });

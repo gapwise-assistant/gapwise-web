@@ -202,6 +202,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
   const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'documents' | 'add' } | null>(null);
+  const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
 
   // Load project from persistent storage on mount and user switch
@@ -464,7 +465,6 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <Header
-        project={scopedProject}
         projects={projects}
         scope={scope}
         activeTab={activeTab}
@@ -504,6 +504,17 @@ export default function Home() {
                 : undefined;
               if (node) openGraphQuestion(node);
               else setActiveTab('ask');
+            }}
+            onNavigateToSource={(sourceId) => {
+              setContextEntry({ sourceId, tab: 'recent' });
+              setActiveTab('context');
+            }}
+            onViewReasoningPath={(nodeId) => {
+              const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
+              if (!owner) return;
+              handleSelectProject(owner.id);
+              setReasoningPathRequest({ projectId: owner.id, nodeId });
+              setActiveTab('scope');
             }}
           />
         )}
@@ -564,6 +575,7 @@ export default function Home() {
               setContextEntry({ sourceId, tab: 'recent' });
               setActiveTab('context');
             }}
+            reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
           />
         )}
         {activeTab === 'settings' && (

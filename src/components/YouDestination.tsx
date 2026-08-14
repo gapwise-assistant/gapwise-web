@@ -14,6 +14,7 @@ import { answeredQuestionHistory } from '@/lib/questions/history';
 import type { AnsweredQuestion } from '@/lib/questions/history';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { AppScope } from '@/types/scope';
+import { buildCurrentPicture } from '@/lib/projects/projectOverview';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -30,6 +31,7 @@ interface ScopeDestinationProps {
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToContext: () => void;
   onNavigateToSource: (sourceId: string) => void;
+  reasoningPathNodeId?: string | null;
 }
 
 type ScopeSection = 'overview' | 'projects' | 'priorities' | 'unclear' | 'world';
@@ -44,6 +46,14 @@ function dismissNode(project: Project, nodeId: string): Project {
     updated.updated_at = node.updated_at;
   }
   return updated;
+}
+
+function formatDeadline(deadline?: string): string | null {
+  if (!deadline) return null;
+  const date = new Date(`${deadline}T12:00:00`);
+  return Number.isNaN(date.getTime())
+    ? deadline
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
@@ -61,9 +71,11 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onEditAnsweredQuestion,
   onNavigateToContext,
   onNavigateToSource,
+  reasoningPathNodeId,
 }) => {
   const [section, setSection] = useState<ScopeSection>('overview');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
+  const [isProjectEditOpen, setIsProjectEditOpen] = useState(false);
   const [whyNode, setWhyNode] = useState<ClarityNode | null>(null);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const priorities = useMemo(() => currentPriorities(memories), [memories]);
@@ -81,18 +93,20 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   );
   const answeredQuestions = useMemo(() => answeredQuestionHistory(project), [project]);
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);
-  const highestQuestion = useMemo(() => {
-    if (project.active_question) {
-      return projectQuestions.find((node) => node.id === project.active_question?.node_id) ?? null;
-    }
-    return projectQuestions[0] ?? null;
-  }, [projectQuestions, project.active_question]);
+  const currentPicture = useMemo(() => buildCurrentPicture(project), [project]);
   useEffect(() => {
     if (projectFocusKey > 0) {
       setSection('projects');
       setProjectSection('overview');
     }
   }, [projectFocusKey]);
+
+  useEffect(() => {
+    if (reasoningPathNodeId) {
+      setSection('projects');
+      setProjectSection('graph');
+    }
+  }, [reasoningPathNodeId]);
 
   const projectById = (projectId: string) => projects.find((item) => item.id === projectId);
 
@@ -431,54 +445,26 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
 
   const renderProjectOverview = () => (
     <div className="space-y-5">
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5 lg:col-span-2">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Project goal</p>
-          <h3 className="mt-3 text-lg font-extrabold text-slate-100">{project.goal}</h3>
-          {project.one_sentence_context && (
-            <p className="mt-3 text-sm text-slate-400">{project.one_sentence_context}</p>
-          )}
-        </article>
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Clarity</p>
-          <p className="mt-3 text-3xl font-extrabold text-cyan-300">{project.clarity_score}</p>
-          <p className="mt-1 text-xs text-slate-500">out of 100</p>
-        </article>
-        <article className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Sources</p>
-          <p className="mt-3 text-3xl font-extrabold text-slate-100">{project.sources.length}</p>
-          <p className="mt-1 text-xs text-slate-500">available to Gapswise</p>
-        </article>
-      </section>
-
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-400">Highest-value unresolved question</p>
-            {highestQuestion ? (
-              <>
-                <h3 className="mt-3 text-lg font-extrabold text-slate-100">{highestQuestion.text}</h3>
-                <p className="mt-2 text-sm text-slate-400">
-                  {highestQuestion.why_it_matters?.[0] ?? 'This is one of the most important unresolved items in the project.'}
-                </p>
-              </>
-            ) : (
-              <p className="mt-3 text-sm text-slate-500">No open high-value project questions right now.</p>
-            )}
-          </div>
-          {highestQuestion && (
-            <button
-              type="button"
-              onClick={() => onAnswerQuestion(highestQuestion)}
-              className="rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950"
-            >
-              Answer
-            </button>
-          )}
-        </div>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Current picture</p>
+        <h2 className="mt-2 text-lg font-extrabold text-slate-100">What Gapswise currently understands</h2>
+        {currentPicture.length ? (
+          <ul className="mt-4 space-y-3">
+            {currentPicture.map((item) => (
+              <li key={item.id} className="flex gap-3 text-sm leading-relaxed text-slate-300">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" aria-hidden="true" />
+                <span>{item.text}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-4 text-sm text-slate-500">Gapswise has not built a picture of this project yet. Add context to get started.</p>
+        )}
+        {project.one_sentence_context && (
+          <p className="mt-5 border-t border-slate-800 pt-4 text-sm leading-relaxed text-slate-400">{project.one_sentence_context}</p>
+        )}
       </section>
 
-      <ProjectSettingsPanel project={project} onUpdateProject={onUpdateProject} />
     </div>
   );
 
@@ -645,7 +631,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
       {projectSection === 'graph' && (
-        <ClarityGraphCanvas project={project} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />
+        <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />
       )}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -657,10 +643,25 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
 
   const renderFocusedProject = () => (
     <div className="mx-auto max-w-7xl space-y-5 px-3 py-5 sm:px-6 sm:py-6 lg:px-8">
-      <div className="border-b border-slate-800 pb-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">ABOUT THIS PROJECT</p>
-        <h1 className="mt-2 text-2xl font-extrabold text-slate-100">{project.title}</h1>
-        <p className="mt-2 max-w-2xl text-sm text-slate-400">{project.goal}</p>
+      <header className="border-b border-slate-800 pb-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">WORKSPACE</p>
+            <h1 className="mt-2 text-2xl font-extrabold text-slate-100">{project.title}</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">{project.goal}</p>
+            {formatDeadline(project.deadline) && (
+              <p className="mt-2 text-xs font-semibold text-slate-500">Deadline: {formatDeadline(project.deadline)}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsProjectEditOpen(true)}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-bold text-slate-200 hover:border-cyan-700 hover:text-cyan-300 sm:min-h-0"
+          >
+            <Edit3 className="h-3.5 w-3.5" />
+            Edit project
+          </button>
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {([
             ['overview', 'Overview'],
@@ -680,12 +681,20 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             </button>
           ))}
         </div>
-      </div>
+      </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
-      {projectSection === 'graph' && <ClarityGraphCanvas project={project} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} />}
       {projectSection === 'sources' && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">{sourceCards}</section>
+      )}
+      {isProjectEditOpen && (
+        <ProjectSettingsPanel
+          project={project}
+          mode="modal"
+          onUpdateProject={onUpdateProject}
+          onClose={() => setIsProjectEditOpen(false)}
+        />
       )}
     </div>
   );
@@ -697,8 +706,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       <div className="mx-auto max-w-7xl px-3 pt-5 sm:px-6 sm:pt-6 lg:px-8">
         <div className="flex flex-col gap-4 border-b border-slate-800 pb-5 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">SCOPE</p>
-            <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Scope</h1>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">WORKSPACE</p>
+            <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Workspace</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-400">
               What Gapswise understands about you and the things you are working on.
             </p>

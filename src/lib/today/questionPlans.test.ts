@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TodayQuestion } from '@/lib/today/sections';
-import { localQuestionSuggestion, parseQuestionSuggestions, questionSuggestionRequestMessage } from '@/lib/today/questionPlans';
+import { hasUsefulSuggestedAnswer, localQuestionSuggestion, parseQuestionSuggestions, questionSuggestionRequestMessage } from '@/lib/today/questionPlans';
 
 const questions: TodayQuestion[] = [
   {
@@ -54,5 +54,18 @@ describe('Today question suggestions', () => {
     expect(message).toContain('why answering this question matters');
     expect(message).toContain('question_budget');
     expect(message).toContain('{"suggestions"');
+  });
+
+  it('only marks an answer suggestion useful when it contains actionable evidence', () => {
+    expect(hasUsefulSuggestedAnswer({
+      questionId: 'question_budget',
+      suggestedAnswer: 'The trip budget is not recorded yet.',
+      whyItMatters: 'It determines which hotels are affordable.',
+    })).toBe(false);
+    expect(hasUsefulSuggestedAnswer({
+      questionId: 'question_budget',
+      suggestedAnswer: 'The notes put the monthly budget at $2,000.',
+      whyItMatters: 'It determines which hotels are affordable.',
+    })).toBe(true);
   });
 });

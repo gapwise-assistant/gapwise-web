@@ -229,7 +229,7 @@ export function generateAttentionCandidates(params: {
       withAttentionScore({
         id: `rec_gap_${gap.node_id}`,
         kind: relatedMeeting ? 'preparation' : 'gap',
-        title: relatedMeeting ? 'Prepare around the unresolved demo gap' : 'Resolve the top clarity gap',
+        title: gap.question,
         reason: gap.reasons[0] ?? 'This uncertainty affects the next decision.',
         next_action: gap.question,
         source_node_ids: [gap.node_id, ...gap.blocked_decision_ids],

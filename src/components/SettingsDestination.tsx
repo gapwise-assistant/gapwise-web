@@ -8,7 +8,6 @@ import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { GoogleWorkspaceSignals } from '@/types/google';
-import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 
 interface SettingsDestinationProps {
   userId: string;
@@ -58,9 +57,37 @@ export const SettingsDestination: React.FC<SettingsDestinationProps> = ({
         <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">SETTINGS</p>
         <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Settings</h1>
         <p className="mt-2 max-w-2xl text-sm text-slate-400">
-          Manage what Gapswise remembers, connected accounts, and your configuration.
+          Manage connected accounts, memories, preferences, and your account.
         </p>
       </header>
+
+      <section className="border-b border-slate-800 pb-8">
+        <ConnectedContext
+          userId={userId}
+          project={connectionProject}
+          onImportSources={importWorkspaceSignals}
+        />
+      </section>
+
+      <section>
+        <MemoryView
+          profile={profile}
+          memories={memories}
+          onUpdateProfile={onUpdateProfile}
+          onUpdateMemories={onUpdateMemories}
+          section="memory"
+        />
+      </section>
+
+      <section>
+        <MemoryView
+          profile={profile}
+          memories={memories}
+          onUpdateProfile={onUpdateProfile}
+          onUpdateMemories={onUpdateMemories}
+          section="preferences"
+        />
+      </section>
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -81,27 +108,6 @@ export const SettingsDestination: React.FC<SettingsDestinationProps> = ({
           </button>
         </div>
       </section>
-
-      <section>
-        <MemoryView
-          profile={profile}
-          memories={memories}
-          onUpdateProfile={onUpdateProfile}
-          onUpdateMemories={onUpdateMemories}
-        />
-      </section>
-
-      <section>
-        <ConnectedContext
-          userId={userId}
-          project={connectionProject}
-          onImportSources={importWorkspaceSignals}
-        />
-      </section>
-
-      {scope.type === 'project' && (
-        <ProjectSettingsPanel project={project} onUpdateProject={onUpdateProject} />
-      )}
     </div>
   );
 };
