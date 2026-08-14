@@ -53,8 +53,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-2">
+    <div className="mx-auto max-w-7xl space-y-8 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-2 sm:p-6">
         <div className="flex items-center space-x-3">
           <div className="p-2.5 bg-cyan-950 border border-cyan-800 rounded-xl text-cyan-400">
             <Sliders className="w-6 h-6" />
@@ -77,7 +77,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               <select
                 value={formData.answer_density}
                 onChange={(e) => setFormData({ ...formData, answer_density: e.target.value as UserMemoryProfile['answer_density'] })}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500"
+                className="min-h-11 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500 sm:min-h-0"
               >
                 <option value="concise">Concise</option>
                 <option value="balanced">Balanced</option>
@@ -90,7 +90,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               <select
                 value={formData.question_frequency}
                 onChange={(e) => setFormData({ ...formData, question_frequency: e.target.value as UserMemoryProfile['question_frequency'] })}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500"
+                className="min-h-11 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500 sm:min-h-0"
               >
                 <option value="low">Low</option>
                 <option value="moderate">Moderate</option>
@@ -103,7 +103,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               <select
                 value={formData.evidence_preference}
                 onChange={(e) => setFormData({ ...formData, evidence_preference: e.target.value as UserMemoryProfile['evidence_preference'] })}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500"
+                className="min-h-11 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 outline-none focus:border-cyan-500 sm:min-h-0"
               >
                 <option value="research_first">Research First</option>
                 <option value="intuition_allowed">Intuition Allowed</option>
@@ -114,7 +114,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
 
           <button
             type="submit"
-            className="w-full py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 text-white font-semibold rounded-xl text-xs shadow-lg flex items-center justify-center gap-2"
+            className="min-h-11 w-full py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 text-white font-semibold rounded-xl text-xs shadow-lg flex items-center justify-center gap-2 sm:min-h-0"
           >
             <Save className="w-4 h-4" />
             Save Profile
@@ -138,7 +138,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             type="button"
             onClick={handleAddMemory}
             disabled={!draftMemory.trim()}
-            className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold rounded-xl text-xs disabled:opacity-50"
+            className="min-h-11 w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold rounded-xl text-xs disabled:opacity-50 sm:min-h-0"
           >
             Remember This
           </button>
@@ -180,7 +180,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                           <button
                             type="button"
                             onClick={() => handleSaveEdit(memory)}
-                            className="rounded-lg border border-cyan-800 bg-cyan-950 px-2 py-1 text-[10px] font-semibold text-cyan-200"
+                            className="min-h-10 rounded-lg border border-cyan-800 bg-cyan-950 px-2 py-1 text-[10px] font-semibold text-cyan-200 sm:min-h-0"
                           >
                             Save Edit
                           </button>
@@ -191,7 +191,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                               setEditingId(memory.id);
                               setEditingText(memory.text);
                             }}
-                            className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold text-slate-300"
+                            className="min-h-10 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold text-slate-300 sm:min-h-0"
                           >
                             Edit
                           </button>
@@ -199,7 +199,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onUpdateMemories(confirmMemory(memories, memory.id))}
-                          className="rounded-lg border border-emerald-800 bg-emerald-950 px-2 py-1 text-[10px] font-semibold text-emerald-200 flex items-center gap-1"
+                          className="min-h-10 rounded-lg border border-emerald-800 bg-emerald-950 px-2 py-1 text-[10px] font-semibold text-emerald-200 flex items-center gap-1 sm:min-h-0"
                         >
                           <CheckCircle2 className="w-3 h-3" />
                           Confirm
@@ -207,7 +207,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onUpdateMemories(forgetMemory(memories, memory.id))}
-                          className="rounded-lg border border-rose-800 bg-rose-950 px-2 py-1 text-[10px] font-semibold text-rose-200 flex items-center gap-1"
+                          className="min-h-10 rounded-lg border border-rose-800 bg-rose-950 px-2 py-1 text-[10px] font-semibold text-rose-200 flex items-center gap-1 sm:min-h-0"
                         >
                           <Trash2 className="w-3 h-3" />
                           Forget

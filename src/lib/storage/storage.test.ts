@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadGoldenDemoForUser } from '@/lib/demo/bootstrap';
 import { getFirestoreClient } from '@/lib/firebase-admin';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
@@ -66,10 +67,9 @@ describe('Project bootstrap', () => {
     await expect(storage.listProjects('firebase-user')).resolves.toEqual([]);
   });
 
-  it('does not expose a previously auto-seeded Golden Demo to an authenticated user', async () => {
+  it('loads the Golden Demo only after an explicit request and keeps it user-scoped', async () => {
     process.env.GAPSWISE_DEMO_MODE = 'false';
     const storage = await useIsolatedMockStorage();
-    await storage.saveProject('firebase-user', createGoldenDemoProject());
 
     await expect(listUserProjects('firebase-user')).resolves.toEqual([]);
     await expect(loadProjectState('firebase-user')).resolves.toMatchObject({
@@ -77,6 +77,22 @@ describe('Project bootstrap', () => {
       activeProjectId: null,
       scope: { type: 'everything' },
     });
+
+    const firstLoad = await loadGoldenDemoForUser('firebase-user');
+    expect(firstLoad.created).toBe(true);
+    expect(firstLoad.project.id).toBe(createGoldenDemoProject().id);
+    expect(firstLoad.scope).toEqual({ type: 'project', projectId: 'hackathon_demo' });
+    expect(firstLoad.project.sources.length).toBeGreaterThan(0);
+    expect(firstLoad.project.nodes.length).toBeGreaterThan(0);
+
+    const secondLoad = await loadGoldenDemoForUser('firebase-user');
+    expect(secondLoad.created).toBe(false);
+    expect((await storage.listProjects('firebase-user'))).toHaveLength(1);
+    await expect(storage.getAppScope('firebase-user')).resolves.toEqual({
+      type: 'project',
+      projectId: 'hackathon_demo',
+    });
+    await expect(storage.listProjects('demo-user')).resolves.toEqual([]);
   });
 });
 

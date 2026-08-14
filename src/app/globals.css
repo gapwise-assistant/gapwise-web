@@ -3,6 +3,11 @@
 :root {
   --background: #030712;
   --foreground: #f9fafb;
+  --mobile-nav-height: 4.5rem;
+}
+
+html {
+  min-width: 320px;
 }
 
 body {
@@ -21,4 +26,12 @@ textarea {
 
 * {
   box-sizing: border-box;
+}
+
+.touch-scroll {
+  scrollbar-width: none;
+}
+
+.touch-scroll::-webkit-scrollbar {
+  display: none;
 }

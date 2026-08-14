@@ -58,16 +58,16 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <>
     <header className="sticky top-0 z-40 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 text-slate-100">
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 py-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-sky-500 to-fuchsia-500 p-0.5 shadow-lg shadow-cyan-500/20">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-14 sm:min-h-16 py-2 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none sm:gap-3">
+          <div className="h-8 w-8 shrink-0 rounded-xl bg-gradient-to-tr from-cyan-500 via-sky-500 to-fuchsia-500 p-0.5 shadow-lg shadow-cyan-500/20 sm:h-10 sm:w-10">
             <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-              <Target className="w-5 h-5 text-cyan-400" />
+              <Target className="h-4 w-4 text-cyan-400 sm:h-5 sm:w-5" />
             </div>
           </div>
           <div className="min-w-0">
             <div className="flex items-center space-x-2">
-              <span className="font-extrabold text-base sm:text-lg tracking-tight text-slate-100">
+              <span className="font-extrabold text-sm tracking-tight text-slate-100 sm:text-lg">
                 GAPSWISE
               </span>
               <span className="hidden lg:inline px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 rounded-full">
@@ -86,7 +86,7 @@ export const Header: React.FC<HeaderProps> = ({
           <select
             value={scope.type === 'project' ? scope.projectId : '__everything__'}
             onChange={(event) => handleProjectSelect(event.target.value)}
-            className="max-w-[180px] rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px]"
+            className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
             aria-label="Gapswise scope"
           >
             <option value="__everything__" className="bg-slate-900">Everything</option>
@@ -123,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({
           ))}
         </nav>
 
-        <div className="flex items-center space-x-2 sm:space-x-3 ml-auto">
+        <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
           <div className="hidden lg:flex items-center space-x-2 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800">
             <span className="hidden sm:inline text-xs text-slate-400">Clarity Score</span>
             <span className="text-sm font-bold text-cyan-400">{project.clarity_score}%</span>
@@ -139,7 +139,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={onResetDemo}
               title="Reset local demo data"
-              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-400 hover:border-cyan-800/50 transition-colors"
+              className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-400 sm:h-auto sm:w-auto"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -149,7 +149,7 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={onSignOut}
               title={accountLabel ? `Sign out of ${accountLabel}` : 'Sign out'}
-              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-300 hover:border-rose-800/50 transition-colors"
+              className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-rose-800/50 hover:text-rose-300 sm:h-auto sm:w-auto"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -163,7 +163,7 @@ export const Header: React.FC<HeaderProps> = ({
           key={item.id}
           type="button"
           onClick={() => setActiveTab(item.id)}
-          className={`h-12 text-xs font-bold ${
+          className={`min-h-12 min-w-0 text-xs font-bold ${
             activeTab === item.id ? 'text-cyan-300' : 'text-slate-500'
           }`}
         >

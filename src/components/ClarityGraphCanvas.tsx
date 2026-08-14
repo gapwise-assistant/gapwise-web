@@ -40,7 +40,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const selectedNode = project.nodes.find((n) => n.id === selectedNodeId);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
       {/* Header & Filter Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-4 rounded-2xl">
         <div>
@@ -54,11 +54,11 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         </div>
 
         {/* Filter Toggle Buttons */}
-        <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <div className="touch-scroll flex max-w-full items-center space-x-1.5 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-1">
           <Filter className="w-3.5 h-3.5 text-slate-500 ml-2 mr-1" />
           <button
             onClick={() => setFilter('all')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`min-h-10 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium transition-colors sm:min-h-0 ${
               filter === 'all' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -66,7 +66,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </button>
           <button
             onClick={() => setFilter('unresolved')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`min-h-10 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium transition-colors sm:min-h-0 ${
               filter === 'unresolved' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -74,7 +74,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </button>
           <button
             onClick={() => setFilter('critical')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`min-h-10 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium transition-colors sm:min-h-0 ${
               filter === 'critical' ? 'bg-indigo-950 text-indigo-300 border border-indigo-800' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -82,7 +82,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </button>
           <button
             onClick={() => setFilter('assumptions')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`min-h-10 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium transition-colors sm:min-h-0 ${
               filter === 'assumptions' ? 'bg-amber-950 text-amber-300 border border-amber-800' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -94,7 +94,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       {/* Main Canvas & Detail Drawer Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 min-w-0">
         {/* Visual Graph Canvas Area */}
-        <div className="lg:col-span-2 bg-slate-950 border border-slate-800/90 rounded-2xl p-4 sm:p-6 min-h-[520px] relative overflow-hidden shadow-2xl flex flex-col justify-between min-w-0">
+        <div className="lg:col-span-2 bg-slate-950 border border-slate-800/90 rounded-2xl p-4 sm:p-6 min-h-[480px] sm:min-h-[520px] relative overflow-hidden shadow-2xl flex flex-col justify-between min-w-0">
           {/* Subtle Canvas Grid Pattern */}
           <div
             className="absolute inset-0 opacity-15 pointer-events-none"
@@ -198,7 +198,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         </div>
 
         {/* Selected Node Inspection Drawer */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6 shadow-xl">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 space-y-6 shadow-xl">
           {selectedNode ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">

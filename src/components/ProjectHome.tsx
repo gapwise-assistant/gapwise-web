@@ -86,7 +86,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="mx-auto max-w-7xl space-y-8 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
       {/* Top Banner / Project Overview */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden backdrop-blur-sm">
         <div className="absolute top-0 right-0 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -112,7 +112,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
           </div>
 
           {/* Quick Metrics Bar */}
-          <div className="grid grid-cols-3 gap-3 bg-slate-950/80 border border-slate-800 p-3 rounded-xl min-w-[320px]">
+          <div className="grid min-w-0 grid-cols-3 gap-3 bg-slate-950/80 border border-slate-800 p-3 rounded-xl sm:min-w-[320px]">
             <div className="p-2 rounded-lg bg-slate-900 border border-slate-800/60 text-center">
               <span className="text-[10px] uppercase tracking-wider font-semibold text-rose-400 block">
                 Critical Gaps
@@ -185,7 +185,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsEvidenceOpen(true)}
-                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-cyan-300 flex items-center gap-1.5"
+                    className="flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:text-cyan-300 sm:min-h-0 sm:py-1.5"
                   >
                     <BookOpen className="w-3.5 h-3.5" />
                     Evidence
@@ -212,12 +212,12 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
                     value={answerInput}
                     onChange={(e) => setAnswerInput(e.target.value)}
                     placeholder="Enter your decision or clarification answer..."
-                    className="flex-1 px-4 py-3 bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl text-slate-100 text-sm placeholder-slate-500 outline-none transition-colors"
+                    className="min-h-11 flex-1 px-4 py-3 bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl text-slate-100 text-sm placeholder-slate-500 outline-none transition-colors sm:min-h-0"
                   />
                   <button
                     type="submit"
                     disabled={isSubmitting || !answerInput.trim()}
-                    className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-semibold rounded-xl text-sm transition-all shadow-lg flex items-center justify-center space-x-2 disabled:opacity-50"
+                    className="min-h-11 px-6 py-3 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-semibold rounded-xl text-sm transition-all shadow-lg flex items-center justify-center space-x-2 disabled:opacity-50 sm:min-h-0"
                   >
                     <Send className="w-4 h-4" />
                     <span>Answer & Update Map</span>

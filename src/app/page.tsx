@@ -24,6 +24,7 @@ import { emptyGeneralContext, projectForScope, resolveScope } from '@/lib/scope/
 import { authFetch } from '@/lib/auth/client';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
+import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 
 type AppTab = 'today' | 'ask' | 'context' | 'you';
 
@@ -99,6 +100,29 @@ async function createProjectViaAPI(userId: string, input: CreateProjectInput): P
   return (await res.json()) as { project: Project; projects: Project[] };
 }
 
+async function loadGoldenDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+}> {
+  const res = await authFetch('/api/projects/demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -168,6 +192,8 @@ export default function Home() {
   const [feedbackEvents, setFeedbackEvents] = useState<FeedbackEvent[]>([]);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
+  const [isLoadingDemo, setIsLoadingDemo] = useState(false);
+  const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
   const [answerTarget, setAnswerTarget] = useState<AnswerQuestionTarget | null>(null);
@@ -260,6 +286,23 @@ export default function Home() {
     setProjectFocusKey((current) => current + 1);
     setStorageMessage('');
     return result.project;
+  }, [userId]);
+
+  const handleLoadDemo = useCallback(async () => {
+    setIsLoadingDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadGoldenDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The demo could not be loaded.');
+    } finally {
+      setIsLoadingDemo(false);
+    }
   }, [userId]);
 
   const handleResetDemo = async () => {
@@ -372,6 +415,32 @@ export default function Home() {
     );
   }
 
+  if (!demoMode && projects.length === 0) {
+    return (
+      <>
+        <NewUserOnboarding
+          accountLabel={auth.user?.displayName}
+          isLoadingDemo={isLoadingDemo}
+          error={demoLoadError}
+          onCreateProject={() => {
+            setDemoLoadError('');
+            setIsNewProjectOpen(true);
+          }}
+          onLoadDemo={() => void handleLoadDemo()}
+          onSignOut={() => { void auth.signOut(); }}
+        />
+        {isNewProjectOpen && (
+          <NewProjectModal
+            onCreateProject={async (input) => {
+              await handleCreateProject(input);
+            }}
+            onClose={() => setIsNewProjectOpen(false)}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <Header
@@ -389,7 +458,7 @@ export default function Home() {
         demoMode={demoMode}
       />
 
-      <main className="pb-24 md:pb-16">
+      <main className="pb-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] md:pb-16">
         {storageMessage && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
             <div className="rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-xs text-amber-200">

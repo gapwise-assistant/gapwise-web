@@ -29,10 +29,7 @@ export function resetStorageProviderForTests(): void {
 export async function listProjects(userId: string): Promise<Project[]> {
   const storage = getStorageProvider();
   const stored = await storage.listProjects(userId);
-  const existing = isDemoMode()
-    ? stored
-    : stored.filter((project) => project.id !== createGoldenDemoProject().id);
-  if (existing.length) return existing;
+  if (stored.length) return stored;
 
   if (!isDemoMode()) return [];
 

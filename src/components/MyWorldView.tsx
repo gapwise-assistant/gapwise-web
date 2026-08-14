@@ -45,8 +45,8 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
   const watchCount = worldGraph.nodes.filter((node) => node.status === 'watch').length;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+    <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-4 sm:p-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 bg-emerald-950 border border-emerald-800 rounded-xl text-emerald-400">
@@ -60,7 +60,7 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 min-w-[300px]">
+          <div className="grid min-w-0 grid-cols-3 gap-2 sm:min-w-[300px]">
             <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-center">
               <span className="block text-[10px] uppercase font-bold text-slate-500">Domains</span>
               <span className="text-lg font-bold text-emerald-300">{worldGraph.domains.length}</span>
@@ -80,7 +80,7 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
           <Filter className="w-3.5 h-3.5 text-slate-500" />
           <button
             onClick={() => setDomainFilter('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+            className={`min-h-10 rounded-lg border px-3 py-1.5 text-xs font-semibold sm:min-h-0 ${
               domainFilter === 'all' ? 'border-cyan-700 bg-cyan-950 text-cyan-200' : 'border-slate-800 bg-slate-950 text-slate-400'
             }`}
           >
@@ -90,7 +90,7 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
             <button
               key={domain.domain}
               onClick={() => setDomainFilter(domain.domain)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              className={`min-h-10 rounded-lg border px-3 py-1.5 text-xs font-semibold sm:min-h-0 ${
                 domainFilter === domain.domain
                   ? 'border-emerald-700 bg-emerald-950 text-emerald-200'
                   : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'

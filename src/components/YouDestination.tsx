@@ -222,7 +222,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
               event.stopPropagation();
               setOpenProjectMenuId(openProjectMenuId === summary.id ? null : summary.id);
             }}
-            className="rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-400 hover:text-slate-100"
+            className="h-11 w-11 rounded-lg border border-slate-700 bg-slate-950 p-2 text-slate-400 hover:text-slate-100 sm:h-auto sm:w-auto"
             aria-label={`Project actions for ${summary.name}`}
           >
             <MoreHorizontal className="h-4 w-4" />
@@ -235,7 +235,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
               <button
                 type="button"
                 onClick={() => renameProject(summary.id)}
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                className="flex min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800 sm:min-h-0"
               >
                 <Edit3 className="h-3.5 w-3.5" />
                 Rename
@@ -244,7 +244,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
                 <button
                   type="button"
                   onClick={() => archiveProject(summary.id)}
-                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                  className="flex min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800 sm:min-h-0"
                 >
                   <Archive className="h-3.5 w-3.5" />
                   Archive
@@ -267,7 +267,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             event.stopPropagation();
             openProject(summary.id);
           }}
-          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-bold text-slate-200 hover:text-cyan-300"
+          className="min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-200 hover:text-cyan-300 sm:min-h-0 sm:py-1.5"
         >
           Open
         </button>
@@ -305,7 +305,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             <button
               type="button"
               onClick={onOpenNewProject}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-cyan-400"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-cyan-400 sm:min-h-0"
             >
               <Plus className="h-3.5 w-3.5" />
               New project
@@ -317,7 +317,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
                   setSection('projects');
                   setProjectSection('overview');
                 }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300 sm:min-h-0"
               >
                 Open project
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -338,7 +338,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             <button
               type="button"
               onClick={onOpenNewProject}
-              className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-cyan-400"
+              className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-cyan-400 sm:min-h-0"
             >
               <Plus className="h-4 w-4" />
               New project
@@ -765,7 +765,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
   );
 
   const renderFocusedProject = () => (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+    <div className="mx-auto max-w-7xl space-y-5 px-3 py-5 sm:px-6 sm:py-6 lg:px-8">
       <div className="border-b border-slate-800 pb-5">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">ABOUT THIS PROJECT</p>
         <h1 className="mt-2 text-2xl font-extrabold text-slate-100">{project.title}</h1>
@@ -782,7 +782,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
               key={id}
               type="button"
               onClick={() => setProjectSection(id)}
-              className={`rounded-lg px-3 py-2 text-xs font-bold ${
+              className={`min-h-11 rounded-lg px-3 py-2 text-xs font-bold sm:min-h-0 ${
                 projectSection === id ? 'bg-cyan-500 text-slate-950' : 'bg-slate-900 text-slate-400 hover:text-slate-100'
               }`}
             >
@@ -805,7 +805,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <div className="mx-auto max-w-7xl px-3 pt-5 sm:px-6 sm:pt-6 lg:px-8">
         <div className="flex flex-col gap-4 border-b border-slate-800 pb-5 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">YOU</p>
@@ -816,7 +816,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
           </div>
         </div>
 
-        <div className="mt-4 flex gap-2 overflow-x-auto pb-2">
+        <div className="touch-scroll mt-4 flex gap-2 overflow-x-auto pb-2">
           {([
             ['projects', 'Your projects'],
             ['priorities', 'Your priorities'],
@@ -828,7 +828,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
               key={label}
               type="button"
               onClick={() => setSection(id)}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${
+              className={`min-h-11 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold sm:min-h-0 ${
                 section === id ? 'bg-cyan-500 text-slate-950' : 'bg-slate-900 text-slate-400 hover:text-slate-100'
               }`}
             >
@@ -838,7 +838,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8">
         {section === 'overview' && (
           renderOverview()
         )}
@@ -847,7 +847,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       </div>
 
       {section === 'projects' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8">
           {renderProjects()}
         </div>
       )}
@@ -872,8 +872,8 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
       )}
 
       {whyNode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-none sm:rounded-xl sm:p-5">
             <h2 className="text-sm font-bold text-slate-100">Why this is still unclear</h2>
             <p className="mt-3 text-sm text-slate-300">{whyNode.text}</p>
             <div className="mt-3 space-y-2">
@@ -886,7 +886,7 @@ export const YouDestination: React.FC<YouDestinationProps> = ({
             <button
               type="button"
               onClick={() => setWhyNode(null)}
-              className="mt-4 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200"
+              className="mt-4 min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
             >
               Close
             </button>

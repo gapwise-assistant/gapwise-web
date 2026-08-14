@@ -100,16 +100,16 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
       <div className="border-b border-slate-800 pb-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl border border-cyan-800 bg-cyan-950 p-2.5 text-cyan-300">
+            <div className="shrink-0 rounded-xl border border-cyan-800 bg-cyan-950 p-2.5 text-cyan-300">
               <Sparkles className="w-6 h-6" />
             </div>
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
-              <h1 className="text-2xl font-extrabold text-slate-100">What deserves attention now</h1>
+              <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
               <p className="text-xs text-slate-400">
                 {recommendations.length} ranked attention items for {brief.period}
               </p>
@@ -122,7 +122,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
           <button
             type="button"
             onClick={() => setRefreshCounter((value) => value + 1)}
-            className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300 flex items-center gap-2"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300 sm:min-h-0 sm:w-auto"
           >
             <RefreshCw className="w-4 h-4" />
             Refresh
@@ -163,21 +163,21 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                   <button
                     type="button"
                     onClick={() => onAnswerQuestion?.(question)}
-                    className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-bold text-slate-950"
+                    className="min-h-11 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 sm:min-h-0 sm:py-1.5"
                   >
                     Answer
                   </button>
                   <button
                     type="button"
                     onClick={() => setHiddenQuestionIds((current) => [...current, question.id])}
-                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300"
+                    className="min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 sm:min-h-0 sm:py-1.5"
                   >
                     Not now
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedQuestion(question)}
-                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 flex items-center gap-1.5"
+                    className="flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 sm:min-h-0 sm:py-1.5"
                   >
                     <HelpCircle className="h-3.5 w-3.5" />
                     Why?
@@ -217,8 +217,8 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         onClose={() => setSelectedRecommendation(null)}
       />
       {selectedQuestion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-none sm:rounded-xl sm:p-5">
             <h2 className="text-sm font-bold text-slate-100">Why this question?</h2>
             <p className="mt-3 text-sm text-slate-300">{selectedQuestion.question}</p>
             <p className="mt-3 text-xs text-slate-400">{selectedQuestion.reason}</p>
@@ -228,7 +228,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
             <button
               type="button"
               onClick={() => setSelectedQuestion(null)}
-              className="mt-4 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200"
+              className="mt-4 min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
             >
               Close
             </button>

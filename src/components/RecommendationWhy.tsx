@@ -28,8 +28,8 @@ export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommenda
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
-      <aside className="h-full w-full max-w-lg overflow-y-auto border-l border-slate-800 bg-slate-950 p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">
+      <aside className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-100">Why This Matters</h2>
@@ -38,7 +38,7 @@ export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommenda
           <button
             onClick={onClose}
             title="Close recommendation explanation"
-            className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100"
+            className="h-11 w-11 rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100 sm:h-auto sm:w-auto"
           >
             <X className="w-4 h-4" />
           </button>

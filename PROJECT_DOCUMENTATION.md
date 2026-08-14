@@ -1577,3 +1577,53 @@ files and are ignored by Git, Docker, and Cloud Build upload contexts.
 The existing `roles/run.invoker` binding from the web runtime identity to the
 private agent is preserved during deployment. The Cloud Build runtime does not
 need permission to change IAM policy for every release.
+
+## 9. Authenticated User Demo Bootstrap
+
+Authenticated users start with a clean project list. The application does not
+copy, migrate, or expose the `demo-user` account automatically. When a signed-in
+user has no projects, the first-login empty state offers:
+
+- `Create project` — opens the normal single-step project form.
+- `Load demo` — explicitly copies the reusable Golden Demo project into that
+  user's own `users/{uid}/contexts`, `nodes`, `edges`, `sources`, and related
+  storage collections.
+
+The demo load endpoint is `POST /api/projects/demo` and uses the verified
+Firebase identity. It seeds the canonical `hackathon_demo` project from
+`src/lib/demo/seed.ts`, sets that user's scope to the seeded project, and never
+writes to `demo-user`. The canonical project ID makes the operation idempotent:
+repeated clicks return the existing user-owned project rather than creating a
+second copy or overwriting the user's edits.
+
+Users who already have one or more projects bypass this empty state. Local
+`GAPSWISE_DEMO_MODE=true` remains separate and continues to use the local demo
+fixtures and reset behavior for development and presentations.
+
+## 10. Responsive Mobile/PWA Surface
+
+The web app keeps one responsive implementation for desktop and phone widths.
+The existing desktop header, navigation, project layouts, cards, and breakpoints
+remain the primary layout above the mobile breakpoint.
+
+Phone-width behavior is additive:
+
+- `Today`, `Ask`, `Context`, and `You` use the existing fixed bottom navigation
+  only below the desktop breakpoint.
+- The page reserves space for the bottom navigation and the device safe-area
+  inset, so content and the Ask composer are not covered by phone browser chrome.
+- Ask, Context source details, and Today/You explanations become viewport-sized
+  bottom sheets on narrow screens and retain side-panel/modal behavior on larger
+  screens.
+- Context tabs and graph filters use touch-friendly horizontal scrolling instead
+  of widening the page. Source actions, project menus, forms, and key controls
+  have larger phone tap targets.
+- Today, Ask, Context, You, Memory, My World, the Clarity Graph, and the legacy
+  project view use narrower mobile padding while preserving their desktop
+  multi-column layouts.
+- `touch-scroll` hides scrollbar chrome without disabling horizontal scrolling.
+
+No authentication, scope, graph, AI, storage, Calendar, or deployment behavior
+was changed for this responsive pass. Desktop/browser-width verification is
+covered by the typecheck and production build; no browser automation dependency
+is currently installed in the repository.

@@ -168,10 +168,10 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-5xl flex-col px-3 py-4 sm:min-h-[calc(100vh-5rem)] sm:px-6 sm:py-6 lg:px-8">
       <div className="border-b border-slate-800 pb-5">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">ASK GAPSWISE</p>
-        <h1 className="mt-2 text-2xl font-extrabold text-slate-100">What should I focus on?</h1>
+        <h1 className="mt-2 text-xl font-extrabold text-slate-100 sm:text-2xl">What should I focus on?</h1>
         <p className="mt-2 max-w-2xl text-sm text-slate-400">
           Gapswise uses your goals, memories, documents, calendar and other context to answer.
         </p>
@@ -180,7 +180,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
 
       <div className="flex-1 space-y-5 py-5">
         {!hasConversation && (
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 sm:p-5">
             <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
               <Sparkles className="h-4 w-4 text-cyan-400" />
               Questions for this context
@@ -202,7 +202,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                           key={prompt}
                           type="button"
                           onClick={() => sendMessage(prompt)}
-                          className="rounded-lg border border-cyan-900/70 bg-slate-950 px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:border-cyan-700 hover:text-cyan-300"
+                          className="min-h-11 rounded-lg border border-cyan-900/70 bg-slate-950 px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:border-cyan-700 hover:text-cyan-300 sm:min-h-0"
                         >
                           {prompt}
                         </button>
@@ -219,7 +219,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                           key={prompt}
                           type="button"
                           onClick={() => sendMessage(prompt)}
-                          className="rounded-full border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-300"
+                          className="min-h-11 rounded-full border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-300 sm:min-h-0"
                         >
                           {prompt}
                         </button>
@@ -243,7 +243,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                   key={prompt}
                   type="button"
                   onClick={() => sendMessage(prompt)}
-                  className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-300"
+                  className="min-h-10 rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-300 sm:min-h-0"
                 >
                   {prompt}
                 </button>
@@ -256,7 +256,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                     key={prompt}
                     type="button"
                     onClick={() => sendMessage(prompt)}
-                    className="rounded-full border border-slate-900 bg-slate-950 px-3 py-1.5 text-[11px] font-medium text-slate-500 hover:border-slate-700 hover:text-slate-300"
+                    className="min-h-10 rounded-full border border-slate-900 bg-slate-950 px-3 py-1.5 text-[11px] font-medium text-slate-500 hover:border-slate-700 hover:text-slate-300 sm:min-h-0"
                   >
                     {prompt}
                   </button>
@@ -273,7 +273,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm shadow-lg sm:max-w-[74%] ${
+                className={`max-w-[94%] rounded-2xl px-4 py-3 text-sm shadow-lg sm:max-w-[74%] ${
                   message.role === 'user'
                     ? 'bg-cyan-500 text-slate-950'
                     : 'border border-slate-800 bg-slate-900 text-slate-200'
@@ -293,7 +293,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                             type="button"
                             onClick={() => setSelectedSources([source])}
                             title={source.title}
-                            className="max-w-full truncate rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] font-semibold text-cyan-300 hover:border-cyan-700"
+                            className="min-h-9 max-w-full truncate rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-left text-[10px] font-semibold text-cyan-300 hover:border-cyan-700"
                           >
                             {index + 1}. {source.title}
                           </button>
@@ -308,7 +308,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                   <button
                     type="button"
                     onClick={() => setSelectedSources(message.sources ?? [])}
-                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-cyan-300"
+                    className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-cyan-300 sm:min-h-0"
                   >
                     <BookOpen className="h-3.5 w-3.5" />
                     Why / Sources
@@ -319,7 +319,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
           ))}
           {isLoading && (
             <div className="flex justify-start">
-              <div className="inline-flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
+              <div className="inline-flex max-w-full items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
                 <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
                 Gapswise is checking your context...
               </div>
@@ -338,7 +338,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="sticky bottom-20 md:bottom-4">
+      <form onSubmit={handleSubmit} className="sticky bottom-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] z-20 pb-1 md:bottom-4 md:pb-0">
         <div className="flex gap-2 rounded-2xl border border-slate-800 bg-slate-950/95 p-2 shadow-2xl backdrop-blur">
           <textarea
             rows={1}
@@ -365,15 +365,15 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
       </form>
 
       {selectedSources && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
-          <aside className="h-full w-full max-w-lg overflow-y-auto border-l border-slate-800 bg-slate-950 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">
+          <aside className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <h2 className="text-lg font-bold text-slate-100">Why / Sources</h2>
               <button
                 type="button"
                 onClick={() => setSelectedSources(null)}
                 title="Close sources"
-                className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100"
+                className="h-11 w-11 rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100 sm:h-auto sm:w-auto"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -401,7 +401,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                         onViewSource(source);
                         setSelectedSources(null);
                       }}
-                      className="mt-3 text-xs font-bold text-cyan-300 hover:text-cyan-200"
+                      className="mt-3 inline-flex min-h-11 items-center text-xs font-bold text-cyan-300 hover:text-cyan-200 sm:min-h-0"
                     >
                       {source.kind === 'source'
                         ? 'View in Context'

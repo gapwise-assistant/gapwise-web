@@ -314,7 +314,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                 event.stopPropagation();
                 handleRestoreSource(src.id);
               }}
-              className="rounded-lg border border-emerald-800 bg-emerald-950/50 p-2 text-emerald-300 hover:bg-emerald-900"
+              className="h-11 w-11 rounded-lg border border-emerald-800 bg-emerald-950/50 p-2 text-emerald-300 hover:bg-emerald-900 sm:h-auto sm:w-auto"
               title="Restore context"
               aria-label={`Restore ${src.filename}`}
             >
@@ -327,7 +327,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                 event.stopPropagation();
                 void handleDeleteSource(src.id);
               }}
-              className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-500 hover:text-rose-300"
+              className="h-11 w-11 rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-500 hover:text-rose-300 sm:h-auto sm:w-auto"
               title="Move to Discarded context"
               aria-label={`Move ${src.filename} to Discarded context`}
             >
@@ -368,7 +368,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             event.stopPropagation();
             openSourceDetails(src);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-800 bg-cyan-950/50 px-2.5 py-1.5 text-[10px] font-bold text-cyan-200 hover:bg-cyan-900"
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-cyan-800 bg-cyan-950/50 px-2.5 py-1.5 text-[10px] font-bold text-cyan-200 hover:bg-cyan-900 sm:min-h-0"
         >
           <Eye className="h-3.5 w-3.5" />
           View details
@@ -386,7 +386,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
     const size = formatBytes(selectedSource.size_bytes);
     return (
       <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
+        className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/75 p-2 backdrop-blur-sm sm:items-center sm:p-4"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setSelectedSource(null);
         }}
@@ -395,7 +395,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="context-source-details-title"
-          className="max-h-[min(760px,calc(100vh-2rem))] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl"
+          className="max-h-[calc(100dvh-1rem)] w-full max-w-2xl overflow-y-auto rounded-t-2xl border border-slate-700 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[min(760px,calc(100vh-2rem))] sm:rounded-2xl sm:p-5 sm:pb-5"
         >
           <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
             <div className="flex min-w-0 items-start gap-3">
@@ -416,7 +416,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
               type="button"
               onClick={() => setSelectedSource(null)}
               aria-label="Close source details"
-              className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+              className="h-11 w-11 rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100 sm:h-auto sm:w-auto"
             >
               <X className="h-4 w-4" />
             </button>
@@ -519,7 +519,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   };
 
   const renderAddContext = () => (
-    <section className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-xl">
+    <section className="rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-xl sm:p-5">
       <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
         <Plus className="w-4 h-4 text-cyan-300" />
         Add context
@@ -532,7 +532,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             <select
               value={targetProjectId}
               onChange={(event) => setTargetProjectId(event.target.value)}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 outline-none focus:border-cyan-500"
+              className="min-h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 outline-none focus:border-cyan-500 sm:min-h-0"
             >
               <option value={GENERAL_CONTEXT_ID}>General / no project</option>
               {projects.filter((item) => item.status !== 'archived').map((item) => (
@@ -549,7 +549,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                 key={option.type}
                 type="button"
                 onClick={() => setSourceType(option.type)}
-                className={`h-10 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                className={`min-h-11 rounded-lg border px-2 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors sm:min-h-0 sm:h-10 ${
                   sourceType === option.type
                     ? 'border-cyan-700 bg-cyan-950 text-cyan-200'
                     : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
@@ -570,7 +570,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
               value={filenameInput}
               onChange={(e) => setFilenameInput(e.target.value)}
               placeholder="customer-interview-notes.txt"
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-xs placeholder-slate-500 outline-none focus:border-cyan-500"
+              className="min-h-11 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-xs placeholder-slate-500 outline-none focus:border-cyan-500 sm:min-h-0"
             />
           </label>
 
@@ -590,7 +590,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                   else setSourceType('text');
                 }
               }}
-              className="w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-200 hover:file:bg-slate-700"
+              className="min-h-11 w-full text-xs text-slate-400 file:mr-3 file:min-h-10 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-200 hover:file:bg-slate-700 sm:min-h-0"
             />
             {selectedFile && (
               <span className="mt-1 block text-[10px] text-slate-500">
@@ -615,14 +615,14 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
             placeholder="Paste notes, extracted text, a transcript, or a concise description..."
-            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-xs placeholder-slate-500 outline-none focus:border-cyan-500"
+            className="min-h-24 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-xs placeholder-slate-500 outline-none focus:border-cyan-500"
           />
         </label>
 
         <button
           type="submit"
           disabled={isProcessing || (!pasteText.trim() && !selectedFile)}
-          className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs shadow-lg transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
+          className="min-h-11 w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs shadow-lg transition-all flex items-center justify-center space-x-2 disabled:opacity-50 sm:min-h-0"
         >
           {isProcessing ? (
             <>
@@ -652,7 +652,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   );
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
       <div className="flex flex-col gap-4 border-b border-slate-800 pb-5 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">CONTEXT</p>
@@ -667,14 +667,14 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         <button
           type="button"
           onClick={() => setActiveTab('add')}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950"
+          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 sm:min-h-0 sm:w-auto"
         >
           <Plus className="w-4 h-4" />
           Add context
         </button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto border-b border-slate-800 pb-2">
+      <div className="touch-scroll flex gap-2 overflow-x-auto border-b border-slate-800 pb-2">
         {([
           ['recent', 'Recent'],
           ['documents', 'Documents'],
@@ -685,7 +685,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             key={id}
             type="button"
             onClick={() => setActiveTab(id)}
-            className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold ${
+            className={`min-h-11 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold sm:min-h-0 ${
               activeTab === id ? 'bg-cyan-500 text-slate-950' : 'bg-slate-900 text-slate-400 hover:text-slate-100'
             }`}
           >

@@ -45,7 +45,7 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
           <button
             type="button"
             onClick={() => onOpenWhy(recommendation)}
-            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 font-semibold text-slate-300 hover:text-cyan-300 flex items-center gap-1.5"
+            className="flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 font-semibold text-slate-300 hover:text-cyan-300 sm:min-h-0 sm:py-1.5"
           >
             <HelpCircle className="w-3.5 h-3.5" />
             Why
