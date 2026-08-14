@@ -1774,3 +1774,21 @@ persistence, scope, or provenance.
 The layout and decision-path helpers live in `src/lib/graph/constellation.ts`
 and are deterministic so graph movement is stable between renders. Heavy 3D
 dependencies are loaded only when the Graph tab is rendered.
+
+### Decision Map Stability Pass
+
+The 2D map now renders its grid, semantic lanes, cards, edges, labels, and
+secondary context inside one shared pan/zoom transform. Normal page scrolling
+does not move or re-layout graph elements, and the map does not auto-fit on
+ordinary resize events.
+
+Shared metrics keep lane centers, row spacing, card dimensions, and the SVG
+viewBox aligned. Cards wrap several readable lines, edge paths leave card
+boundaries, parallel relationship labels are separated and backgrounded, and
+weak edges are visually quiet. Selecting a node continues to fade unrelated
+content and emphasize the existing neighborhood or goal path.
+
+Disconnected preferences, knowns, and evidence are available through a compact
+collapsible `Other context (N)` area instead of a large permanent side panel.
+Graph data, reasoning, persistence, provenance, scope, and the optional 3D
+view remain unchanged.

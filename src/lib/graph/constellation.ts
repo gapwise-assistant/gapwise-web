@@ -13,6 +13,9 @@ export interface DecisionPath {
 
 export type DecisionMapLane = 0 | 1 | 2 | 3 | 4;
 
+export const DECISION_MAP_WIDTH = 1520;
+export const DECISION_MAP_LANES = [0, 1, 2, 3, 4] as const;
+
 export const DECISION_MAP_LANE_LABELS: Record<DecisionMapLane, string> = {
   0: 'Evidence & known',
   1: 'Assumptions & risks',
@@ -21,15 +24,15 @@ export const DECISION_MAP_LANE_LABELS: Record<DecisionMapLane, string> = {
   4: 'Goal',
 };
 
-const DECISION_MAP_LANE_Y: Record<DecisionMapLane, number> = {
-  0: 76,
-  1: 204,
-  2: 332,
-  3: 460,
-  4: 588,
-};
+const DECISION_MAP_X = [270, 560, 850, 1140];
+const DECISION_MAP_ROW_HEIGHT = 160;
+const DECISION_MAP_LANE_GAP = 34;
 
-const DECISION_MAP_X = [270, 480, 690, 900];
+export interface DecisionMapMetrics {
+  width: number;
+  height: number;
+  laneY: Record<DecisionMapLane, number>;
+}
 
 function decisionMapScore(node: ClarityNode): number {
   return (node.impact * node.confidence) + (node.priority ?? 0) * 0.25;
@@ -67,10 +70,34 @@ function laneNodes(
     });
 }
 
+export function calculateDecisionMapMetrics(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+): DecisionMapMetrics {
+  let cursor = 92;
+  const laneY = {} as Record<DecisionMapLane, number>;
+
+  DECISION_MAP_LANES.forEach((lane) => {
+    const rows = Math.max(1, Math.ceil(laneNodes(graph, lane).length / DECISION_MAP_X.length));
+    const laneHeight = Math.max(154, rows * DECISION_MAP_ROW_HEIGHT + 34);
+    laneY[lane] = cursor + laneHeight / 2;
+    cursor += laneHeight + DECISION_MAP_LANE_GAP;
+  });
+
+  const secondaryCount = graph.nodes.filter((node) => isDecisionMapSecondaryNode(node, graph)).length;
+  const secondaryHeight = secondaryCount > 0 ? 100 + secondaryCount * 160 : 0;
+
+  return {
+    width: DECISION_MAP_WIDTH,
+    height: Math.max(cursor + 28, secondaryHeight + 56),
+    laneY,
+  };
+}
+
 function assignLanePositions(
   nodes: ClarityNode[],
   positions: Map<string, ConstellationPoint>,
   lane: DecisionMapLane,
+  laneY: number,
 ): void {
   const columns = Math.min(DECISION_MAP_X.length, Math.max(nodes.length, 1));
   const xPositions = DECISION_MAP_X.slice(0, columns);
@@ -80,10 +107,10 @@ function assignLanePositions(
   nodes.forEach((node, index) => {
     const column = index % DECISION_MAP_X.length;
     const row = Math.floor(index / DECISION_MAP_X.length);
-    const rowOffset = (row - (rows - 1) / 2) * 64;
+    const rowOffset = (row - (rows - 1) / 2) * DECISION_MAP_ROW_HEIGHT;
     positions.set(node.id, {
       x: (xPositions[column] ?? DECISION_MAP_X[0]) + xOffset,
-      y: DECISION_MAP_LANE_Y[lane] + rowOffset,
+      y: laneY + rowOffset,
       z: 0,
     });
   });
@@ -112,12 +139,13 @@ export function calculateDecisionMapLayout(
   graph: Pick<Project, 'nodes' | 'edges'>,
 ): Record<string, ConstellationPoint> {
   const positions = new Map<string, ConstellationPoint>();
-  const lanes = ([0, 1, 2, 3, 4] as DecisionMapLane[]).map((lane) => ({
+  const metrics = calculateDecisionMapMetrics(graph);
+  const lanes = DECISION_MAP_LANES.map((lane) => ({
     lane,
     nodes: laneNodes(graph, lane),
   }));
 
-  lanes.forEach(({ lane, nodes }) => assignLanePositions(nodes, positions, lane));
+  lanes.forEach(({ lane, nodes }) => assignLanePositions(nodes, positions, lane, metrics.laneY[lane]));
 
   for (let pass = 0; pass < 3; pass += 1) {
     lanes.forEach(({ lane, nodes }) => {
@@ -126,7 +154,7 @@ export function calculateDecisionMapLayout(
         const rightAnchor = connectedAnchorX(right, graph, positions) ?? 600;
         return (leftAnchor - rightAnchor) || (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text);
       });
-      assignLanePositions(nodes, positions, lane);
+      assignLanePositions(nodes, positions, lane, metrics.laneY[lane]);
     });
     [...lanes].reverse().forEach(({ lane, nodes }) => {
       nodes.sort((left, right) => {
@@ -134,7 +162,7 @@ export function calculateDecisionMapLayout(
         const rightAnchor = connectedAnchorX(right, graph, positions) ?? 600;
         return (leftAnchor - rightAnchor) || (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text);
       });
-      assignLanePositions(nodes, positions, lane);
+      assignLanePositions(nodes, positions, lane, metrics.laneY[lane]);
     });
   }
 
@@ -142,11 +170,10 @@ export function calculateDecisionMapLayout(
     .filter((node) => isDecisionMapSecondaryNode(node, graph))
     .sort((left, right) => (decisionMapScore(right) - decisionMapScore(left)) || left.text.localeCompare(right.text))
     .forEach((node, index) => {
-      const column = index % 2;
-      const row = Math.floor(index / 2);
+      const row = index;
       positions.set(node.id, {
-        x: 1045 + column * 100,
-        y: 92 + row * 86,
+        x: 1400,
+        y: 102 + row * 160,
         z: 0,
       });
     });

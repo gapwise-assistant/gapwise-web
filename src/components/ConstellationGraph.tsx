@@ -9,9 +9,12 @@ import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
 import {
   buildDecisionPath,
   calculateConstellationLayout,
+  calculateDecisionMapMetrics,
   calculateDecisionMapLayout,
   ConstellationPoint,
+  DECISION_MAP_LANES,
   DECISION_MAP_LANE_LABELS,
+  decisionMapLaneForType,
   getNeighborhood,
   isDecisionMapSecondaryNode,
 } from '@/lib/graph/constellation';
@@ -298,9 +301,6 @@ interface PanState {
   moved: boolean;
 }
 
-const DECISION_MAP_WIDTH = 1200;
-const DECISION_MAP_HEIGHT = 700;
-const DECISION_MAP_LANES = [0, 1, 2, 3, 4] as const;
 const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
   'blocks',
   'supports',
@@ -316,9 +316,10 @@ function relationshipLabel(type: ClarityEdge['type']): string {
 }
 
 function nodeDimensions(node: ClarityNode, secondary: boolean): { width: number; height: number } {
-  if (secondary) return { width: 100, height: 70 };
-  if (node.type === 'GOAL') return { width: 230, height: 90 };
-  return { width: 190, height: 78 };
+  const lineCount = Math.min(6, Math.max(3, Math.ceil(node.text.length / (secondary ? 24 : 42))));
+  if (secondary) return { width: 160, height: 52 + lineCount * 16 };
+  if (node.type === 'GOAL') return { width: 260, height: 62 + lineCount * 16 };
+  return { width: 228, height: 58 + lineCount * 16 };
 }
 
 function edgeBoundaryPoint(
@@ -336,14 +337,17 @@ function edgeBoundaryPoint(
 function edgeGeometry(
   start: { x: number; y: number },
   end: { x: number; y: number },
-  index: number,
+  slot: number,
+  slotCount: number,
 ): { path: string; labelX: number; labelY: number } {
   const midY = (start.y + end.y) / 2;
-  const bend = ((index % 3) - 1) * 28;
+  const offset = (slot - (slotCount - 1) / 2) * 34;
+  const bend = offset + (Math.abs(end.x - start.x) < 36 ? 26 : 0);
+  const labelOffset = offset * 0.55;
   return {
     path: `M ${start.x} ${start.y} C ${start.x + bend} ${midY} ${end.x + bend} ${midY} ${end.x} ${end.y}`,
     labelX: (start.x + end.x) / 2 + bend,
-    labelY: midY - 7,
+    labelY: midY - 7 + labelOffset,
   };
 }
 
@@ -355,7 +359,13 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [draggedPositions, setDraggedPositions] = useState<Record<string, ConstellationPoint>>({});
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [showSecondaryContext, setShowSecondaryContext] = useState(false);
   const layout = useMemo(() => calculateDecisionMapLayout(project), [project]);
+  const metrics = useMemo(() => calculateDecisionMapMetrics(project), [project]);
+  const secondaryNodes = useMemo(
+    () => project.nodes.filter((node) => isDecisionMapSecondaryNode(node, project)),
+    [project],
+  );
   const decisionPath = useMemo(
     () => (selectedNodeId && pathMode ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] }),
     [pathMode, project, selectedNodeId],
@@ -379,6 +389,22 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
     [draggedPositions, layout, project.nodes],
   );
 
+  const edgeSlots = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    project.edges.forEach((edge) => {
+      const source = project.nodes.find((node) => node.id === edge.source);
+      const target = project.nodes.find((node) => node.id === edge.target);
+      if (!source || !target) return;
+      const sourceLane = decisionMapLaneForType(source.type);
+      const targetLane = decisionMapLaneForType(target.type);
+      const key = `${Math.min(sourceLane ?? -1, targetLane ?? -1)}-${Math.max(sourceLane ?? -1, targetLane ?? -1)}`;
+      groups.set(key, [...(groups.get(key) ?? []), edge.id]);
+    });
+    return new Map(
+      [...groups.entries()].flatMap(([, edgeIds]) => edgeIds.map((edgeId, index) => [edgeId, { index, count: edgeIds.length }] as const)),
+    );
+  }, [project.edges, project.nodes]);
+
   const pointFor = (node: ClarityNode): { x: number; y: number } => {
     const point = positions[node.id];
     return { x: point.x, y: point.y };
@@ -388,8 +414,8 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
     const bounds = svgRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
     return {
-      x: ((event.clientX - bounds.left) / bounds.width) * DECISION_MAP_WIDTH,
-      y: ((event.clientY - bounds.top) / bounds.height) * DECISION_MAP_HEIGHT,
+      x: ((event.clientX - bounds.left) / bounds.width) * metrics.width,
+      y: ((event.clientY - bounds.top) / bounds.height) * metrics.height,
     };
   };
 
@@ -418,7 +444,7 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
     <div className="relative h-full w-full">
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${DECISION_MAP_WIDTH} ${DECISION_MAP_HEIGHT}`}
+        viewBox={`0 0 ${metrics.width} ${metrics.height}`}
         className="h-full w-full touch-none select-none"
         role="img"
         aria-label="Interactive two-dimensional Gapswise decision map"
@@ -458,39 +484,62 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
             </marker>
           ))}
         </defs>
-        <rect width={DECISION_MAP_WIDTH} height={DECISION_MAP_HEIGHT} fill="url(#decision-map-grid)" opacity="0.8" />
-        <g aria-hidden="true">
-          {DECISION_MAP_LANES.map((lane) => {
-            const y = [76, 204, 332, 460, 588][lane];
-            return (
-              <g key={lane}>
-                <rect x="48" y={y - 50} width="960" height="100" rx="18" fill={lane === 4 ? '#064e3b' : '#07111f'} opacity={lane === 4 ? 0.32 : 0.66} stroke={lane === 4 ? '#10b981' : '#16304a'} strokeWidth="1" />
-                <text x="68" y={y - 27} className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
-                  {DECISION_MAP_LANE_LABELS[lane]}
-                </text>
-              </g>
-            );
-          })}
-          <rect x="1020" y="42" width="170" height="620" rx="18" fill="#07111f" opacity="0.5" stroke="#16304a" strokeWidth="1" />
-          <text x="1038" y="72" className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">Other context</text>
-        </g>
         <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+          <rect width={metrics.width} height={metrics.height} fill="url(#decision-map-grid)" opacity="0.8" />
+          <g>
+            {DECISION_MAP_LANES.map((lane) => {
+              const y = metrics.laneY[lane];
+              const previousY = lane === 0 ? 28 : metrics.laneY[(lane - 1) as 0 | 1 | 2 | 3 | 4];
+              const nextY = lane === 4 ? metrics.height - 28 : metrics.laneY[(lane + 1) as 0 | 1 | 2 | 3 | 4];
+              const top = lane === 0 ? 28 : (previousY + y) / 2;
+              const bottom = lane === 4 ? metrics.height - 28 : (y + nextY) / 2;
+              return (
+                <g key={lane}>
+                  <rect x="48" y={top + 12} width="1240" height={Math.max(80, bottom - top - 24)} fill={lane === 4 ? '#064e3b' : '#07111f'} opacity={lane === 4 ? 0.18 : 0.2} />
+                  <line x1="48" x2="1288" y1={top} y2={top} stroke={lane === 4 ? '#10b981' : '#16304a'} strokeWidth="1" opacity="0.65" />
+                  <text x="68" y={top + 28} className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
+                    {DECISION_MAP_LANE_LABELS[lane]}
+                  </text>
+                </g>
+              );
+            })}
+            {secondaryNodes.length > 0 && (
+              <>
+                <rect x="1310" y="28" width="180" height={showSecondaryContext ? Math.min(metrics.height - 56, 100 + secondaryNodes.length * 160) : 58} rx="12" fill="#07111f" opacity="0.32" />
+                <foreignObject x="1318" y="36" width="164" height="42">
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setShowSecondaryContext((current) => !current);
+                    }}
+                    className="h-10 w-full rounded-lg border border-slate-700/70 bg-slate-950/70 px-2 text-left text-[10px] font-extrabold uppercase tracking-[0.12em] text-slate-500 hover:border-cyan-800 hover:text-cyan-300"
+                  >
+                    Other context ({secondaryNodes.length}) {showSecondaryContext ? '−' : '+'}
+                  </button>
+                </foreignObject>
+              </>
+            )}
+          </g>
           {project.edges.map((edge, index) => {
             const source = project.nodes.find((node) => node.id === edge.source);
             const target = project.nodes.find((node) => node.id === edge.target);
             if (!source || !target) return null;
+            if (!showSecondaryContext && (isDecisionMapSecondaryNode(source, project) || isDecisionMapSecondaryNode(target, project))) return null;
             const sourcePoint = pointFor(source);
             const targetPoint = pointFor(target);
             const sourceDimensions = nodeDimensions(source, isDecisionMapSecondaryNode(source, project));
             const targetDimensions = nodeDimensions(target, isDecisionMapSecondaryNode(target, project));
             const start = edgeBoundaryPoint(sourcePoint, targetPoint, sourceDimensions);
             const end = edgeBoundaryPoint(targetPoint, sourcePoint, targetDimensions);
-            const geometry = edgeGeometry(start, end, index);
+            const slot = edgeSlots.get(edge.id) ?? { index: index % 3, count: 3 };
+            const geometry = edgeGeometry(start, end, slot.index, slot.count);
             const highlighted = edgeIsHighlighted(edge, emphasizedNodes, pathEdgeIds);
             const muted = Boolean(emphasizedNodes) && !highlighted;
             const important = IMPORTANT_EDGE_TYPES.has(edge.type) && (edge.confidence ?? 1) >= 0.6;
             const opacity = muted ? 0.07 : highlighted ? 1 : important ? 0.62 : 0.2;
-            const showLabel = important || highlighted || pathMode;
+            const showLabel = important || highlighted;
             return (
               <g key={edge.id} opacity={opacity}>
                 <path
@@ -502,22 +551,30 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                   markerEnd={`url(#decision-arrow-${edge.type})`}
                 />
                 {showLabel && (
-                  <text
-                    x={geometry.labelX}
-                    y={geometry.labelY}
-                    textAnchor="middle"
-                    className="fill-slate-300 text-[9px] font-bold uppercase tracking-wide"
-                    stroke="#040b17"
-                    strokeWidth="4"
-                    paintOrder="stroke"
-                  >
-                    {relationshipLabel(edge.type)}
-                  </text>
+                  <g>
+                    <rect
+                      x={geometry.labelX - Math.max(24, relationshipLabel(edge.type).length * 3.2 + 8)}
+                      y={geometry.labelY - 12}
+                      width={Math.max(48, relationshipLabel(edge.type).length * 6.4 + 16)}
+                      height="18"
+                      rx="5"
+                      fill="#040b17"
+                      opacity="0.9"
+                    />
+                    <text
+                      x={geometry.labelX}
+                      y={geometry.labelY}
+                      textAnchor="middle"
+                      className="fill-slate-300 text-[9px] font-bold uppercase tracking-wide"
+                    >
+                      {relationshipLabel(edge.type)}
+                    </text>
+                  </g>
                 )}
               </g>
             );
           })}
-          {project.nodes.map((node, index) => {
+          {showSecondaryContext && secondaryNodes.map((node, index) => {
             const point = pointFor(node);
             const secondary = isDecisionMapSecondaryNode(node, project);
             const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
@@ -558,7 +615,55 @@ function Constellation2D({ project, selectedNodeId, focusMode, pathMode, onSelec
                       <span className="truncate text-[9px] font-extrabold uppercase tracking-[0.14em]" style={{ color }}>{node.type.replace('_', ' ')}</span>
                       {isGoal && <span className="text-[9px] font-bold text-emerald-300">PRIMARY</span>}
                     </div>
-                    <p className={`mt-1 break-words text-[11px] font-semibold leading-tight ${secondary ? 'text-slate-400' : 'text-slate-100'} line-clamp-3`}>
+                    <p className={`mt-1 break-words text-[11px] font-semibold leading-tight ${secondary ? 'text-slate-400' : 'text-slate-100'} line-clamp-6`}>
+                      {node.text}
+                    </p>
+                  </div>
+                </foreignObject>
+              </g>
+            );
+          })}
+          {project.nodes.filter((node) => !isDecisionMapSecondaryNode(node, project)).map((node, index) => {
+            const point = pointFor(node);
+            const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
+            const highlighted = node.id === selectedNodeId || Boolean(emphasizedNodes?.has(node.id));
+            const dimensions = nodeDimensions(node, false);
+            const color = NODE_COLORS[node.type];
+            const isGoal = node.type === 'GOAL';
+            return (
+              <g key={node.id} opacity={muted ? 0.14 : 1} style={{ animationDelay: `${Math.min(index * 28, 420)}ms` }}>
+                <foreignObject
+                  x={point.x - dimensions.width / 2}
+                  y={point.y - dimensions.height / 2}
+                  width={dimensions.width}
+                  height={dimensions.height}
+                  className="constellation-node-enter overflow-visible"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    const local = localPoint(event);
+                    panRef.current = { mode: 'node', nodeId: node.id, startX: local.x, startY: local.y, moved: false };
+                    svgRef.current?.setPointerCapture(event.pointerId);
+                  }}
+                  onPointerOver={(event) => {
+                    event.stopPropagation();
+                    setHoveredNodeId(node.id);
+                  }}
+                  onPointerOut={() => setHoveredNodeId(null)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (!suppressClickRef.current) onSelectNode(node);
+                    suppressClickRef.current = false;
+                  }}
+                >
+                  <div
+                    className={`h-full w-full cursor-grab rounded-xl border p-3 text-left shadow-lg transition active:cursor-grabbing ${highlighted ? 'ring-2 ring-cyan-300/90' : isGoal ? 'ring-2 ring-emerald-400/80' : ''}`}
+                    style={{ borderColor: `${color}${highlighted || isGoal ? 'ee' : '99'}`, backgroundColor: `${color}22` }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[9px] font-extrabold uppercase tracking-[0.14em]" style={{ color }}>{node.type.replace('_', ' ')}</span>
+                      {isGoal && <span className="text-[9px] font-bold text-emerald-300">PRIMARY</span>}
+                    </div>
+                    <p className="mt-2 break-words text-[11px] font-semibold leading-snug text-slate-100 line-clamp-6">
                       {node.text}
                     </p>
                   </div>

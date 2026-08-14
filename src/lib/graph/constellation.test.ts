@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDecisionPath,
   calculateConstellationLayout,
+  calculateDecisionMapMetrics,
   calculateDecisionMapLayout,
   getNeighborhood,
 } from '@/lib/graph/constellation';
@@ -45,5 +46,18 @@ describe('constellation graph view model', () => {
     expect(layout.unknown_target_user.x).toBeGreaterThan(0);
     expect(layout.node_goal.x).toBeGreaterThan(0);
     expect(calculateDecisionMapLayout(project)).toEqual(layout);
+  });
+
+  it('keeps semantic lane metrics stable and ordered', () => {
+    const project = createGoldenDemoProject();
+    const metrics = calculateDecisionMapMetrics(project);
+
+    expect(metrics.width).toBeGreaterThan(metrics.laneY[4]);
+    expect(metrics.laneY[0]).toBeLessThan(metrics.laneY[1]);
+    expect(metrics.laneY[1]).toBeLessThan(metrics.laneY[2]);
+    expect(metrics.laneY[2]).toBeLessThan(metrics.laneY[3]);
+    expect(metrics.laneY[3]).toBeLessThan(metrics.laneY[4]);
+    expect(metrics.height).toBeGreaterThan(metrics.laneY[4]);
+    expect(calculateDecisionMapMetrics(project)).toEqual(metrics);
   });
 });
