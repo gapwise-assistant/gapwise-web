@@ -3,6 +3,7 @@ import { calculateClarityScore, calculateGapPriority, selectTopGap } from '@/lib
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { UserMemoryProfile } from '@/types/clarity';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { classifyAnswer } from '@/lib/questions/answerClassification';
 
 function timestampId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -49,22 +50,27 @@ export function resolveGap(
   gap.confidence = 1;
   gap.updated_at = now;
 
-  const decision = createGraphNode(updated, {
-    type: 'DECISION',
-    text: resolutionText,
+  const classification = classifyAnswer(gap, resolutionText, updated);
+  const understanding = createGraphNode(updated, {
+    type: classification.type,
+    text: classification.text,
     confidence: 1,
     impact: gap.impact,
     source_refs: gap.source_refs,
     x: gap.x ? gap.x + 30 : undefined,
     y: gap.y ? gap.y + 80 : undefined,
   });
-  createGraphEdge(updated, { source: decision.id, target: gap.id, type: 'resolves' });
+  understanding.created_by = 'user';
+  createGraphEdge(updated, { source: understanding.id, target: gap.id, type: 'resolves' });
+  if (classification.supersedesOriginal) {
+    createGraphEdge(updated, { source: understanding.id, target: gap.id, type: 'supersedes' });
+  }
 
   updated.history.push({
-    question: updated.active_question?.question || gap.text,
+    question: gap.text,
     answer: resolutionText,
     timestamp: now,
-    graph_diff_summary: `Resolved "${gap.text}" -> DECISION: "${resolutionText}"`,
+    graph_diff_summary: `Resolved "${gap.text}" -> ${classification.type}: "${classification.text}"`,
   });
 
   updated.clarity_score = calculateClarityScore(updated);

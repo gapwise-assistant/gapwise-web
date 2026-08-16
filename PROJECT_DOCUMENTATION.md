@@ -1952,3 +1952,155 @@ The user can explicitly mark connected UNKNOWN or ASSUMPTION records resolved;
 that creates a `resolves` relationship and preserves the old record. The page
 persists project decisions through the existing project storage path, while
 user-level decisions use the existing general-context persistence path.
+
+## 20. Semantic Question Answers
+
+Question answers now preserve what the user actually meant instead of treating
+every answer as a `DECISION`. The existing answer API and graph persistence
+path call the deterministic classifier in
+`src/lib/questions/answerClassification.ts`:
+
+- budget limits and affordability caps become `CONSTRAINT` nodes;
+- strong preferences become `PREFERENCE` nodes;
+- factual statements become `KNOWN` nodes (or `EVIDENCE` when explicitly
+  described as observed, measured, tested, or confirmed);
+- selected options become `DECISION` nodes;
+- commitments become `NEXT_ACTION` nodes;
+- corrections to an open `ASSUMPTION` become `KNOWN` nodes with a
+  `supersedes` relationship.
+
+The original `UNKNOWN` or `ASSUMPTION` is retained, marked resolved, and
+connected from the new user-created understanding with `resolves`. Source
+references, confidence, history, and project scope remain attached. Editing a
+previous answer locates that existing `resolves` relationship and updates the
+linked node in place, including its type, so edits do not create duplicate
+understandings.
+
+Question cards now point to the most specific connected goal, decision, action,
+or constraint and show human-readable source titles. Important assumptions
+offer `Confirm` and `Correct` actions. The Why explanation uses the linked
+relationship graph and resolved answers, omits empty blocking/change sections,
+and avoids exposing internal source identifiers.
+
+Ask response normalization now removes repeated streamed Markdown blocks and
+prose fragments while preserving headings, lists, code, and inline arithmetic
+such as `$1,450 + $180 utilities = $1,630`.
+
+Regression coverage includes semantic classification, apartment budget
+constraint resolution, edit reclassification, persisted user provenance, Why
+explanations using the new constraint, readable source titles, and repeated
+ADK Markdown responses.
+
+## 21. Decision Map Surface
+
+The project workspace now exposes one graph experience under the `Decision Map`
+tab. The former `Graph` label is removed from project navigation, and the
+alternate 2D/3D, Readable view, and constellation entry controls are hidden
+from the product UI. The underlying optional visualization code remains in the
+repository for later use, but the normal experience is the deterministic 2D
+Decision Map.
+
+Fullscreen keeps the same map instance state: selected node, active filter,
+focus path, zoom, and pan are retained. The node inspector remains visible on
+the right at desktop sizes and can be collapsed from the fullscreen header.
+Escape and the close controls exit fullscreen without clearing the map state.
+
+The map catches wheel input while the pointer is inside it and zooms toward
+the pointer with bounded smooth scaling; page scrolling remains unchanged
+outside the map. Visible `+`, percentage, `-`, and `Fit` controls remain
+available. Touch input preserves vertical page scrolling while supporting
+two-pointer map pinch scaling. `Arrange nodes` is now secondary under the
+map's `...` menu so normal exploration stays focused on reasoning.
+
+The map viewport is fixed to its available panel and the graph content is the
+only layer affected by zoom. Fullscreen is an icon-only expand control in the
+map's top-right corner with `Full screen` / `Exit full screen` tooltips; the
+same mounted map instance is used in both states, so selection, filters, focus
+path, inspector state, pan, and zoom survive the transition. The desktop
+fullscreen layout gives the graph the remaining space beside a stable-width
+inspector.
+
+`Fit` measures the visible node cards, excludes collapsed secondary context,
+centers those bounds, and applies bounded zoom (`72%` to `220%`) so small maps
+remain readable without excessive margins. Entering fullscreen performs that
+fit only for an untouched default viewport; an intentionally positioned or
+zoomed map is preserved. The background/grid stays outside the transformed
+graph layer, and the small viewport controls remain `-`, percentage reset,
+`+`, `Fit`, and `...`.
+
+## 22. Workspace Context Navigation
+
+The primary application navigation is now `Today`, `Ask`, and `Workspace`.
+Settings remains available through the header gear/avatar action. Context is
+no longer a desktop or mobile primary destination.
+
+Workspace keeps the global Everything/project selector. Project workspaces
+use `Overview`, `Questions`, `Decision Map`, and `Context`; the former Sources
+tab is now Context. Everything exposes Projects, Priorities, Still unclear,
+and Context. The My World tab/card is no longer exposed in Workspace.
+
+Both project and Everything Context views reuse `ContextInbox`, including
+Recent, Documents, Add context, source details, discarded/restorable context,
+and the existing project destination selector. Project scope automatically
+targets the selected project. Everything shows active-project and general
+context and allows the user to choose where newly added context belongs.
+
+Ask, Today, decisions, and provenance links open the relevant source inside
+Workspace Context rather than navigating to a removed top-level route. No
+ingestion, storage, PDF, relevance, scope, Context Pack, or ADK behavior was
+changed.
+
+## 23. Archived Projects and Workspace Selection
+
+Archived projects remain persisted and available in Workspace's Archived
+section, but they are removed from the global project selector. If the
+currently selected project is archived from either the project menu or Edit
+project, Gapswise immediately switches the reasoning scope to Everything.
+Persisted scopes that point to archived projects also resolve to Everything on
+reload, so an archived project cannot reappear as the active selector value.
+
+Archived project cards provide a Restore action in their overflow menu and
+direct card action. Restoring returns the project to the active selector and
+does not alter its graph, questions, context, or history. Workspace overview
+and Projects view both separate Active projects from an explicit Archived
+projects section.
+
+## 24. Everything Workspace Views
+
+The Everything workspace now treats `Projects`, `Priorities`, `Still unclear`,
+and `Context` as independent views. Projects is the default view, and only the
+selected tab renders, so project launching is no longer mixed with personal
+priorities, unresolved user-level questions, or context capture.
+
+Projects is a simple launcher with a single `New project` action. Active project
+cards are clickable across their full surface and show only the project name,
+goal, open-question count, and last-updated label. Secondary project actions
+remain under the overflow menu. Archived projects are collapsed by default and
+can be expanded to restore a project without returning it to the selector until
+it is active again.
+
+Priorities has its own durable-memory view and a clear empty state. Still
+unclear shows only the existing cross-project/user-level unresolved questions,
+identifies the related project when available, and keeps Answer, Dismiss, and
+Why actions. Project-specific questions remain in that project's Questions
+view. Everything Context continues to reuse the existing ContextInbox without
+changing ingestion, persistence, scope, or project assignment.
+
+## 25. Project Overview Summary and Actions
+
+Project Overview keeps administration quiet: the project title has a compact
+overflow menu with `Edit project` and `Archive project`, and both actions reuse
+the existing project update/archive behavior. The large standalone Edit project
+button is no longer shown in the header, and project settings are not duplicated
+inside the Overview content.
+
+Current Picture is a deterministic summary of the existing project graph. Its
+`Where things stand` briefing prioritizes important facts and constraints,
+risks, requirements, and recent decisions or changes. Short natural-language
+statements replace raw node and edge phrasing. The highest-priority open UNKNOWN
+that directly blocks a decision or next action appears separately under `Needs
+attention`, with a `Review question` action that opens the existing question
+flow. That blocker is omitted from the general briefing. The project description
+is not repeated at the bottom of the section; the header remains the place for
+the project goal and deadline. No additional Gemini call or graph persistence
+change is involved.

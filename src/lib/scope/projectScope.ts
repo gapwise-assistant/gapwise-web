@@ -55,7 +55,7 @@ export function mergeProjectsForEverything(projects: Project[], generalContext?:
 }
 
 export function resolveScope(scope: AppScope | null | undefined, projects: Project[]): AppScope {
-  if (scope?.type === 'project' && projects.some((project) => project.id === scope.projectId)) {
+  if (scope?.type === 'project' && projects.some((project) => project.id === scope.projectId && project.status !== 'archived')) {
     return scope;
   }
   return EVERYTHING_SCOPE;

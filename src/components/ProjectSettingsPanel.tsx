@@ -7,6 +7,7 @@ import { Project } from '@/types/clarity';
 interface ProjectSettingsPanelProps {
   project: Project;
   onUpdateProject: (updated: Project) => void;
+  onArchived?: () => void;
   mode?: 'inline' | 'modal';
   onClose?: () => void;
 }
@@ -14,6 +15,7 @@ interface ProjectSettingsPanelProps {
 export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   project,
   onUpdateProject,
+  onArchived,
   mode = 'inline',
   onClose,
 }) => {
@@ -104,6 +106,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
         type="button"
         onClick={() => {
           onUpdateProject({ ...project, status: 'archived', updated_at: new Date().toISOString() });
+          onArchived?.();
           onClose?.();
         }}
         disabled={project.status === 'archived'}

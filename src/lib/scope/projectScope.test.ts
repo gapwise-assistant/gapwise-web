@@ -31,6 +31,13 @@ describe('global context scope', () => {
     expect(resolveScope({ type: 'project', projectId: 'deleted' }, projects)).toEqual({ type: 'everything' });
   });
 
+  it('does not restore an archived project as the active scope', () => {
+    const archived = createGoldenDemoProject();
+    archived.status = 'archived';
+
+    expect(resolveScope({ type: 'project', projectId: archived.id }, [archived])).toEqual({ type: 'everything' });
+  });
+
   it('retrieves across projects in Everything and excludes unrelated projects when focused', () => {
     const hackathon = createGoldenDemoProject();
     const jobSearch = createProjectFromInput(

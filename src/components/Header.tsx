@@ -37,6 +37,11 @@ export const Header: React.FC<HeaderProps> = ({
   accountLabel,
   demoMode = false,
 }) => {
+  const selectableProjects = projects.filter((item) => item.status !== 'archived');
+  const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
+    ? scope.projectId
+    : '__everything__';
+
   const handleProjectSelect = (value: string) => {
     if (value === '__new_project__') {
       onOpenNewProject();
@@ -78,14 +83,14 @@ export const Header: React.FC<HeaderProps> = ({
             </p>
           </div>
           <select
-            value={scope.type === 'project' ? scope.projectId : '__everything__'}
+            value={selectedScopeValue}
             onChange={(event) => handleProjectSelect(event.target.value)}
             className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
             aria-label="Workspace selector"
           >
             <option value="__everything__" className="bg-slate-900">Everything</option>
             <optgroup label="Projects">
-              {projects.map((item) => (
+              {selectableProjects.map((item) => (
                 <option key={item.id} value={item.id} className="bg-slate-900">
                   {item.title}
                 </option>
@@ -139,7 +144,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
     </header>
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 grid grid-cols-4 border-t border-slate-800 bg-slate-950/95 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2 backdrop-blur-md">
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 grid grid-cols-3 border-t border-slate-800 bg-slate-950/95 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2 backdrop-blur-md">
       {NAV_ITEMS.map((item) => (
         <button
           key={item.id}

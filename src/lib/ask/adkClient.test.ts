@@ -74,7 +74,7 @@ describe('ADK Ask client', () => {
     expect(result.sources).toEqual([
       {
         id: 'src_2',
-        title: 'planning-note.txt',
+        title: 'Planning Note',
         excerpt: 'Who exactly is the demo for?',
         score: 0.82,
         kind: 'source',
@@ -131,6 +131,30 @@ describe('ADK Ask client', () => {
     });
 
     expect(result.answer.match(/Gapswise service health status/g)).toHaveLength(1);
+  });
+
+  it('removes a repeated Markdown response without flattening its list or arithmetic', async () => {
+    const answer = [
+      '**Current picture**',
+      '',
+      '- Apartment 1: $1,450 + $180 utilities = $1,630',
+      '- Apartment 2: $1,600 with utilities included',
+    ].join('\n');
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_123' });
+      if (target.endsWith('/run_sse')) return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: `${answer}\n\n${answer}` }] } })}\n`);
+      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [] } });
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askGapswise({ userId: 'demo-user', message: 'Compare the apartments.' });
+
+    expect(result.answer).toBe(answer);
+    expect(result.answer.match(/Apartment 1/g)).toHaveLength(1);
+    expect(result.answer).toContain('$1,450 + $180 utilities = $1,630');
+    expect(result.answer).toContain('- Apartment 2');
   });
 
   it('removes repeated trailing fragments from ADK text events', async () => {
@@ -221,7 +245,7 @@ describe('ADK Ask client', () => {
 
     expect(result.answer).toBe('Your birthday is tomorrow.');
     expect(result.sources).toEqual([
-      expect.objectContaining({ id: 'src_birthday', title: 'birthday.txt' }),
+      expect.objectContaining({ id: 'src_birthday', title: 'Birthday' }),
     ]);
   });
 

@@ -1,6 +1,7 @@
 import type { TodayQuestion } from '@/lib/today/sections';
 import { buildDecisionPath } from '@/lib/graph/constellation';
 import { ClarityEdge, ClarityNode, ContextSource, Project } from '@/types/clarity';
+import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 export interface QuestionWhyEvidence {
   sourceId?: string;
@@ -71,7 +72,7 @@ function collectEvidence(project: Project, nodes: ClarityNode[]): QuestionWhyEvi
       }
       const source = project.sources.find((candidate) => candidate.id === sourceId);
       if (source) {
-        evidence.push({ sourceId, title: source.filename, excerpt: sourceExcerpt(source) });
+        evidence.push({ sourceId, title: humanizeSourceTitle(source.filename), excerpt: sourceExcerpt(source) });
       }
     });
   });
@@ -81,7 +82,12 @@ function collectEvidence(project: Project, nodes: ClarityNode[]): QuestionWhyEvi
 
 function supportedNodes(project: Project, nodeId: string): ClarityNode[] {
   return edgesForNode(project, nodeId)
-    .filter((edge) => edge.type === 'supports' || edge.type === 'informs' || edge.type === 'derived_from')
+    .filter((edge) =>
+      edge.type === 'supports' ||
+      edge.type === 'informs' ||
+      edge.type === 'derived_from' ||
+      (edge.type === 'resolves' && edge.target === nodeId)
+    )
     .map((edge) => edgeOtherNode(project, edge, nodeId))
     .filter((node): node is ClarityNode => Boolean(node));
 }
@@ -111,7 +117,7 @@ function changeDescription(node: ClarityNode): string {
   const description = nodeDescription(node);
   if (node.type === 'DECISION') return `decision: ${description}`;
   if (node.type === 'NEXT_ACTION') return `next action: ${description}`;
-  if (node.type === 'GOAL') return `progress toward: ${description}`;
+  if (node.type === 'GOAL') return description;
   if (node.type === 'ASSUMPTION') return `confidence in: ${description}`;
   if (node.type === 'RISK') return `risk assessment for: ${description}`;
   return `${node.type.toLowerCase().replace('_', ' ')}: ${description}`;
@@ -144,9 +150,9 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
   if (!node) {
     return {
       whyThisMatters: 'This question is present in the current context, but its downstream decision impact has not been recorded yet.',
-      whatThisBlocks: ['No specific decision or action is linked to this question yet.'],
-      whatGapswiseKnows: ['There is not enough linked graph information to summarize confirmed understanding yet.'],
-      whatCouldChange: ['The next decision or action will become clearer once this question is connected to the project graph.'],
+      whatThisBlocks: [],
+      whatGapswiseKnows: [],
+      whatCouldChange: [],
       evidence: [],
       reasoningPath: null,
     };
@@ -180,11 +186,11 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
   ], MAX_CHANGES);
 
   const whyThisMatters = blocked[0]
-    ? `The answer to this question is currently blocking ${changeDescription(blocked[0])}.`
+    ? `The answer to this question is currently blocking the ${blocked[0].type.toLowerCase().replace('_', ' ')} “${nodeDescription(blocked[0])}”.`
     : downstream[0]
       ? `Answering this question can change ${changeDescription(downstream[0])}.`
       : goal
-        ? `This question affects progress toward ${changeDescription(goal)}.`
+        ? `This question affects progress toward ${nodeDescription(goal)}.`
         : node.why_it_matters?.[0]
           ? compactText(node.why_it_matters[0])
           : 'This is an open question in the current context, but no downstream decision impact is recorded yet.';
@@ -192,14 +198,10 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
   return {
     whyThisMatters,
     whatThisBlocks: blocked.length
-      ? uniqueText(blocked.map((target) => `Gapswise cannot confidently move to ${changeDescription(target)} until this is answered.`), MAX_CHANGES)
-      : ['No specific decision or action is recorded as blocked by this question yet.'],
-    whatGapswiseKnows: whatGapswiseKnows.length
-      ? whatGapswiseKnows
-      : ['No confirmed supporting understanding is linked to this question yet.'],
-    whatCouldChange: whatCouldChange.length
-      ? whatCouldChange
-      : ['No downstream decision or action is linked yet.'],
+      ? uniqueText(blocked.map((target) => `Gapswise cannot confidently move to ${target.type.toLowerCase().replace('_', ' ')} “${nodeDescription(target)}” until this is answered.`), MAX_CHANGES)
+      : [],
+    whatGapswiseKnows,
+    whatCouldChange,
     evidence,
     reasoningPath: path.nodeIds.length > 1 ? path : null,
   };

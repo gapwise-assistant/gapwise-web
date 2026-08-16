@@ -36,7 +36,7 @@ describe('answerQuestion', () => {
       confidence: 1,
     });
     expect(result.context.nodes.find((node) => node.id === result.createdNodeId)).toMatchObject({
-      type: 'DECISION',
+      type: 'KNOWN',
       text: 'The primary user is an independent hackathon builder.',
       created_by: 'user',
     });
@@ -59,6 +59,35 @@ describe('answerQuestion', () => {
     expect(saveProject).not.toHaveBeenCalled();
   });
 
+  it('stores an apartment budget answer as a constraint and resolves the budget question', async () => {
+    const owner = createGoldenDemoProject();
+    const budget = owner.nodes.find((node) => node.id === 'unknown_target_user')!;
+    budget.text = 'What is your actual affordable monthly housing budget?';
+    budget.impact = 0.9;
+    vi.mocked(listProjects).mockResolvedValue([owner]);
+
+    const result = await answerQuestion({
+      userId: 'demo-user',
+      projectId: owner.id,
+      nodeId: budget.id,
+      answer: "I don't want total housing-related costs above $1,750/month.",
+    });
+
+    const understanding = result.context.nodes.find((node) => node.id === result.createdNodeId);
+    expect(understanding).toMatchObject({
+      type: 'CONSTRAINT',
+      text: 'Housing-related costs should stay at or below $1,750/month.',
+      created_by: 'user',
+    });
+    expect(result.context.edges).toContainEqual(expect.objectContaining({
+      source: understanding?.id,
+      target: budget.id,
+      type: 'resolves',
+    }));
+    expect(budget.status).toBe('OPEN');
+    expect(result.context.nodes.find((node) => node.id === budget.id)?.status).toBe('RESOLVED');
+  });
+
   it('rejects an answer when the question is already resolved', async () => {
     const project = createGoldenDemoProject();
     const node = project.nodes.find((item) => item.id === 'unknown_target_user')!;
@@ -72,7 +101,7 @@ describe('answerQuestion', () => {
     })).rejects.toThrow('already been resolved');
   });
 
-  it('edits the persisted answer and its decision node in place', async () => {
+  it('edits the persisted answer and its understanding node in place', async () => {
     const owner = createGoldenDemoProject();
     const answered = resolveGap(
       owner,
@@ -96,13 +125,35 @@ describe('answerQuestion', () => {
       answer: 'The primary user is a focused technical founder.',
     });
     expect(result.context.nodes).toContainEqual(expect.objectContaining({
-      type: 'DECISION',
+      type: 'KNOWN',
       text: 'The primary user is a focused technical founder.',
     }));
     expect(result.context.nodes).not.toContainEqual(expect.objectContaining({
-      type: 'DECISION',
+      type: 'KNOWN',
       text: 'The primary user is an independent hackathon builder.',
     }));
     expect(saveProject).toHaveBeenCalledWith('demo-user', result.context);
+  });
+
+  it('reclassifies the linked understanding when an answer is edited', async () => {
+    const owner = createGoldenDemoProject();
+    const budget = owner.nodes.find((node) => node.id === 'unknown_target_user')!;
+    budget.text = 'What is your actual affordable monthly housing budget?';
+    const answered = resolveGap(owner, budget.id, "I don't want total housing-related costs above $1,750/month.");
+    const historyItem = answered.history.at(-1)!;
+    vi.mocked(listProjects).mockResolvedValue([answered]);
+
+    const result = await editAnsweredQuestion({
+      userId: 'demo-user',
+      projectId: answered.id,
+      historyTimestamp: historyItem.timestamp,
+      question: historyItem.question,
+      previousAnswer: historyItem.answer,
+      answer: 'I prefer to keep housing costs comfortable and predictable.',
+    });
+
+    const linked = result.context.nodes.find((node) => node.id === answered.edges.find((edge) => edge.type === 'resolves' && edge.target === budget.id)?.source);
+    expect(linked).toMatchObject({ type: 'PREFERENCE', text: 'I prefer to keep housing costs comfortable and predictable.' });
+    expect(result.context.nodes.filter((node) => node.text.includes('housing costs comfortable')).length).toBe(1);
   });
 });

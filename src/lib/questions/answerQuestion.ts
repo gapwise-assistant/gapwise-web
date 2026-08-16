@@ -4,6 +4,7 @@ import { StorageError } from '@/lib/storage/types';
 import { resolveGap } from '@/lib/tools/graphTools';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { Project } from '@/types/clarity';
+import { classifyAnswer } from '@/lib/questions/answerClassification';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -84,7 +85,7 @@ export async function answerQuestion(params: {
   throw new StorageError('This unresolved question was not found for the requested user and scope.', 'VALIDATION_ERROR');
 }
 
-function findAnswerDecision(project: Project, question: string, previousAnswer: string) {
+function findAnswerUnderstanding(project: Project, question: string, previousAnswer: string) {
   const gap = project.nodes.find(
     (node) =>
       node.text === question &&
@@ -93,13 +94,15 @@ function findAnswerDecision(project: Project, question: string, previousAnswer: 
   );
   if (gap) {
     const edge = project.edges.find((item) => item.type === 'resolves' && item.target === gap.id);
-    const decision = edge ? project.nodes.find((node) => node.id === edge.source) : undefined;
-    if (decision?.type === 'DECISION') return decision;
+    const understanding = edge ? project.nodes.find((node) => node.id === edge.source) : undefined;
+    if (understanding) return { gap, understanding };
   }
 
-  return project.nodes.find(
-    (node) => node.type === 'DECISION' && node.created_by === 'user' && node.text === previousAnswer
+  const understanding = project.nodes.find(
+    (node) => node.created_by === 'user' && node.text === previousAnswer &&
+      ['CONSTRAINT', 'PREFERENCE', 'KNOWN', 'EVIDENCE', 'DECISION', 'NEXT_ACTION'].includes(node.type)
   );
+  return understanding ? { gap: undefined, understanding } : undefined;
 }
 
 export async function editAnsweredQuestion(params: {
@@ -128,13 +131,33 @@ export async function editAnsweredQuestion(params: {
   }
 
   const now = new Date().toISOString();
-  const decision = findAnswerDecision(updated, historyItem.question, historyItem.answer);
-  if (decision) {
-    decision.text = params.answer;
-    decision.updated_at = now;
+  const linked = findAnswerUnderstanding(updated, historyItem.question, historyItem.answer);
+  if (linked) {
+    const classification = classifyAnswer(linked.gap ?? {
+      type: 'UNKNOWN',
+      text: historyItem.question,
+    }, params.answer, updated);
+    linked.understanding.type = classification.type;
+    linked.understanding.text = classification.text;
+    linked.understanding.status = 'RESOLVED';
+    linked.understanding.confidence = 1;
+    linked.understanding.updated_at = now;
+    if (linked.gap && linked.gap.source_refs.length && !linked.understanding.source_refs.length) {
+      linked.understanding.source_refs = [...linked.gap.source_refs];
+    }
+    if (classification.supersedesOriginal && linked.gap && !updated.edges.some(
+      (edge) => edge.source === linked.understanding.id && edge.target === linked.gap?.id && edge.type === 'supersedes'
+    )) {
+      updated.edges.push({
+        id: `edge_${Date.now()}_supersedes`,
+        source: linked.understanding.id,
+        target: linked.gap.id,
+        type: 'supersedes',
+      });
+    }
+    historyItem.graph_diff_summary = `Resolved "${historyItem.question}" -> ${classification.type}: "${classification.text}"`;
   }
   historyItem.answer = params.answer;
-  historyItem.graph_diff_summary = `Resolved "${historyItem.question}" -> DECISION: "${params.answer}"`;
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
   updated.updated_at = now;

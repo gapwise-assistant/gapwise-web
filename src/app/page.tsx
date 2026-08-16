@@ -5,7 +5,7 @@ import { Header } from '@/components/Header';
 import { NewProjectModal } from '@/components/NewProjectModal';
 import { Today } from '@/components/Today';
 import { AskGapswise } from '@/components/AskGapswise';
-import { ContextInbox } from '@/components/ContextInbox';
+import type { ContextEntry } from '@/components/ContextInbox';
 import { ScopeDestination } from '@/components/YouDestination';
 import { SettingsDestination } from '@/components/SettingsDestination';
 import { IdontKnowModal } from '@/components/IdontKnowModal';
@@ -202,10 +202,14 @@ export default function Home() {
   const [answerTarget, setAnswerTarget] = useState<AnswerQuestionTarget | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
-  const [contextEntry, setContextEntry] = useState<{ sourceId?: string; tab: 'recent' | 'documents' | 'add' } | null>(null);
+  const [contextEntry, setContextEntry] = useState<ContextEntry | null>(null);
   const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
   const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
+  const openContext = useCallback((entry: ContextEntry = { tab: 'recent' }) => {
+    setContextEntry(entry);
+    setActiveTab('scope');
+  }, []);
 
   // Load project from persistent storage on mount and user switch
   useEffect(() => {
@@ -221,7 +225,7 @@ export default function Home() {
       const nextScope = resolveScope(loaded.scope, nextProjects);
       const selectedProject =
         (nextScope.type === 'project' ? nextProjects.find((item) => item.id === nextScope.projectId) : undefined) ??
-        nextProjects.find((item) => item.id === loaded.activeProjectId) ??
+        nextProjects.find((item) => item.id === loaded.activeProjectId && item.status !== 'archived') ??
         nextProjects.find((item) => item.status !== 'archived') ??
         nextProjects[0] ??
         loadedGeneralContext;
@@ -346,13 +350,15 @@ export default function Home() {
     setIdontKnowGap(null);
   };
 
-  const openGraphQuestion = useCallback((node: Project['nodes'][number]) => {
+  const openGraphQuestion = useCallback((node: Project['nodes'][number], intent?: 'confirm' | 'correct') => {
     const owner = projects.find((candidate) => candidate.nodes.some((item) => item.id === node.id));
     setAnswerTarget({
       nodeId: node.id,
       question: node.text,
       reason: node.why_it_matters?.[0],
       projectId: owner?.id,
+      intent,
+      ...(intent === 'confirm' ? { initialAnswer: node.text } : {}),
     });
   }, [projects]);
 
@@ -541,8 +547,7 @@ export default function Home() {
             }}
             onReviewDecision={openDecisionWorkspace}
             onNavigateToSource={(sourceId) => {
-              setContextEntry({ sourceId, tab: 'recent' });
-              setActiveTab('context');
+              openContext({ sourceId, tab: 'recent' });
             }}
             onViewReasoningPath={(nodeId) => {
               const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
@@ -560,8 +565,7 @@ export default function Home() {
             scopeLabel={scope.type === 'project' ? project.title : 'Everything'}
             onViewSource={(source: AskSource) => {
               if (source.kind === 'source') {
-                setContextEntry({ sourceId: source.id, tab: 'recent' });
-                setActiveTab('context');
+                openContext({ sourceId: source.id, tab: 'recent' });
                 return;
               }
               if (source.kind === 'calendar') {
@@ -572,16 +576,20 @@ export default function Home() {
             }}
           />
         )}
-        {activeTab === 'context' && (
-          <ContextInbox
+        {activeTab === 'scope' && (
+          <ScopeDestination
+            userId={userId}
             project={project}
+            generalContext={generalContext}
             projects={projects}
             scope={scope}
-            generalContext={generalContext}
+            projectFocusKey={projectFocusKey}
             profile={profile}
-            userId={userId}
-            focusedSourceId={contextEntry?.sourceId}
-            entryTab={contextEntry?.tab}
+            memories={memories}
+            contextEntry={contextEntry ?? undefined}
+            onSelectProject={handleSelectProject}
+            onSelectEverything={handleSelectEverything}
+            onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
             onUpdateGeneralContext={(updated) => {
               setGeneralContext(updated);
@@ -589,27 +597,11 @@ export default function Home() {
                 setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
               });
             }}
-          />
-        )}
-        {activeTab === 'scope' && (
-          <ScopeDestination
-            userId={userId}
-            project={project}
-            worldProject={scopedProject}
-            projects={projects}
-            scope={scope}
-            projectFocusKey={projectFocusKey}
-            memories={memories}
-            onSelectProject={handleSelectProject}
-            onOpenNewProject={() => setIsNewProjectOpen(true)}
-            onUpdateProject={updateProject}
             onAnswerQuestion={openGraphQuestion}
             onReviewDecision={openDecisionWorkspace}
             onEditAnsweredQuestion={openAnsweredQuestion}
-            onNavigateToContext={() => setActiveTab('context')}
             onNavigateToSource={(sourceId) => {
-              setContextEntry({ sourceId, tab: 'recent' });
-              setActiveTab('context');
+              openContext({ sourceId, tab: 'recent' });
             }}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
           />
@@ -679,9 +671,8 @@ export default function Home() {
           onClose={() => setDecisionTarget(null)}
           onConfirm={saveDecision}
           onNavigateToSource={(sourceId) => {
-            setContextEntry({ sourceId, tab: 'recent' });
+            openContext({ sourceId, tab: 'recent' });
             setDecisionTarget(null);
-            setActiveTab('context');
           }}
           onViewGraph={viewDecisionGraph}
         />

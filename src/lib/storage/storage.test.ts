@@ -225,7 +225,7 @@ describe('MockStorageProvider', () => {
       DEFAULT_USER_PROFILE
     );
     const answerNode = updated.nodes.find((node) =>
-      node.type === 'DECISION' && node.text === 'The primary user is an independent hackathon builder.'
+      node.type === 'KNOWN' && node.text === 'The primary user is an independent hackathon builder.'
     )!;
     answerNode.created_by = 'user';
 

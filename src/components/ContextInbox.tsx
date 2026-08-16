@@ -22,6 +22,11 @@ interface ContextInboxProps {
   entryTab?: 'recent' | 'documents' | 'add';
 }
 
+export type ContextEntry = {
+  sourceId?: string;
+  tab: 'recent' | 'documents' | 'add';
+};
+
 type ContextTab = 'recent' | 'documents' | 'add';
 
 const sourceTypeOptions: Array<{ type: ContextSource['type']; label: string; icon: React.ReactNode }> = [

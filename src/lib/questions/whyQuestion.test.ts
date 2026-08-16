@@ -71,7 +71,7 @@ describe('question why explanation', () => {
 
     const explanation = buildQuestionWhyExplanation(project, question(budget.id));
 
-    expect(explanation.whyThisMatters).toContain('blocking decision: Which apartment should I choose');
+    expect(explanation.whyThisMatters).toContain('blocking the decision “Which apartment should I choose”');
     expect(explanation.whatThisBlocks[0]).toContain('Which apartment should I choose');
     expect(explanation.whatGapswiseKnows).toEqual(expect.arrayContaining([
       'Two apartments have different all-in costs and commute tradeoffs',
@@ -103,8 +103,30 @@ describe('question why explanation', () => {
 
     const explanation = buildQuestionWhyExplanation(project, question(orphan.id));
 
-    expect(explanation.whatThisBlocks[0]).toContain('No specific decision');
+    expect(explanation.whatThisBlocks).toEqual([]);
+    expect(explanation.whatCouldChange).toEqual([]);
     expect(explanation.evidence).toEqual([]);
     expect(explanation.reasoningPath).toBeNull();
+  });
+
+  it('uses a resolved constraint when explaining the answered budget question', () => {
+    const project = createGoldenDemoProject();
+    const budget = project.nodes.find((node) => node.id === 'unknown_target_user')!;
+    budget.text = 'What is your actual affordable monthly housing budget?';
+    budget.status = 'RESOLVED';
+    const constraint = {
+      ...budget,
+      id: 'housing_constraint',
+      type: 'CONSTRAINT' as const,
+      text: 'Housing-related costs should stay at or below $1,750/month.',
+      created_by: 'user' as const,
+      source_refs: [],
+    };
+    project.nodes.push(constraint);
+    project.edges.push({ id: 'budget_resolved_by_constraint', source: constraint.id, target: budget.id, type: 'resolves' });
+
+    const explanation = buildQuestionWhyExplanation(project, question(budget.id));
+
+    expect(explanation.whatGapswiseKnows).toContain('Housing-related costs should stay at or below $1,750/month');
   });
 });

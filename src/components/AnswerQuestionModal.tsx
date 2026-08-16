@@ -9,6 +9,7 @@ export interface AnswerQuestionTarget {
   reason?: string;
   projectId?: string;
   mode?: 'answer' | 'edit';
+  intent?: 'confirm' | 'correct';
   initialAnswer?: string;
   historyTimestamp?: string;
 }
@@ -53,7 +54,13 @@ export function AnswerQuestionModal({ target, onSubmit, onDontKnow, onClose }: A
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-400">
-              {target.mode === 'edit' ? 'Edit your answer' : 'Update Gapswise'}
+              {target.mode === 'edit'
+                ? 'Edit your answer'
+                : target.intent === 'confirm'
+                  ? 'Confirm assumption'
+                  : target.intent === 'correct'
+                    ? 'Correct assumption'
+                    : 'Update Gapswise'}
             </p>
             <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold text-slate-100">
               {target.question}
@@ -84,14 +91,18 @@ export function AnswerQuestionModal({ target, onSubmit, onDontKnow, onClose }: A
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="mt-5">
-            <label htmlFor="question-answer" className="text-xs font-bold text-slate-300">Your answer</label>
+            <label htmlFor="question-answer" className="text-xs font-bold text-slate-300">
+              {target.intent === 'confirm' ? 'Confirmation' : target.intent === 'correct' ? 'Correction' : 'Your answer'}
+            </label>
             <textarea
               id="question-answer"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
               rows={5}
               autoFocus
-              placeholder="Share the decision, clarification, or fact Gapswise should understand."
+              placeholder={target.intent === 'correct'
+                ? 'Explain what should replace this assumption.'
+                : 'Share the clarification or fact Gapswise should understand.'}
               className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600"
             />
             {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
@@ -106,7 +117,13 @@ export function AnswerQuestionModal({ target, onSubmit, onDontKnow, onClose }: A
                 <button type="button" onClick={onClose} className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200">Cancel</button>
                 <button type="submit" disabled={!answer.trim() || isSaving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
                   {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  {target.mode === 'edit' ? 'Update answer' : 'Save answer'}
+                  {target.mode === 'edit'
+                    ? 'Update answer'
+                    : target.intent === 'confirm'
+                      ? 'Confirm'
+                      : target.intent === 'correct'
+                        ? 'Save correction'
+                        : 'Save answer'}
                 </button>
               </div>
             </div>

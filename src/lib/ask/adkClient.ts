@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GoogleAuth } from 'google-auth-library';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
+import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 export interface AskSource {
   id: string;
@@ -225,11 +226,12 @@ function compactAdkTextChunks(chunks: string[]): string {
 }
 
 function removeRepeatedContent(text: string): string {
-  const paragraphs = text
+  const withoutRepeatedBlocks = removeRepeatedMarkdownBlocks(text);
+  const paragraphs = withoutRepeatedBlocks
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean);
-  if (paragraphs.length < 2) return removeRepeatedSentenceRun(text);
+  if (paragraphs.length < 2) return removeRepeatedSentenceRun(withoutRepeatedBlocks);
 
   const seen = new Set<string>();
   const unique = paragraphs.filter((paragraph) => {
@@ -241,7 +243,30 @@ function removeRepeatedContent(text: string): string {
   return removeRepeatedSentenceRun(unique.join('\n\n').trim());
 }
 
+function removeRepeatedMarkdownBlocks(text: string): string {
+  const lines = text.split('\n');
+  if (lines.length < 4) return text;
+  const normalizeLine = (line: string) => line.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  for (let run = Math.floor(lines.length / 2); run >= 2; run -= 1) {
+    for (let start = 0; start + run * 2 <= lines.length; start += 1) {
+      const first = lines.slice(start, start + run).map(normalizeLine);
+      const second = lines.slice(start + run, start + run * 2).map(normalizeLine);
+      if (first.every((line, index) => line && line === second[index])) {
+        return [
+          ...lines.slice(0, start + run),
+          ...lines.slice(start + run * 2),
+        ].join('\n').replace(/\n{3,}/g, '\n\n').trim();
+      }
+    }
+  }
+  return text;
+}
+
 function removeRepeatedSentenceRun(text: string): string {
+  // Line-oriented Markdown has already been handled above. Avoid flattening
+  // lists/tables/code blocks while removing prose-only repeated fragments.
+  if (text.includes('\n') || text.includes('```')) return text;
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   if (sentences.length < 2) return text;
 
@@ -267,7 +292,7 @@ function removeRepeatedTrailingLine(text: string): string {
   if (lines.length < 2) return text;
   const last = lines[lines.length - 1];
   const previous = lines.slice(0, -1).join('\n');
-  if (last.length > 8 && previous.includes(last)) {
+  if (last.length > 8 && !lines.slice(0, -1).includes(last) && previous.includes(last)) {
     return lines.slice(0, -1).join('\n').trim();
   }
   return text;
@@ -315,7 +340,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
     });
     const evidenceSources: AskSource[] = Array.from(mergedEvidence.values()).map((item) => ({
       id: item.source_id,
-      title: item.filename,
+      title: humanizeSourceTitle(item.filename),
       excerpt: item.excerpt,
       score: item.score,
       kind: 'source',

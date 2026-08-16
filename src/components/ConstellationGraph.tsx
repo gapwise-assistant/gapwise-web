@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, ThreeEvent, useFrame } from '@react-three/fiber';
 import { Html, Line, OrbitControls } from '@react-three/drei';
-import { Minus, Pencil, Plus, Scan } from 'lucide-react';
+import { Maximize2, Minimize2, Minus, MoreHorizontal, Pencil, Plus, Scan } from 'lucide-react';
 import * as THREE from 'three';
 import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
 import {
@@ -21,6 +21,11 @@ import {
 
 type Dimension = '2d' | '3d';
 
+export interface GraphViewport {
+  zoom: number;
+  pan: { x: number; y: number };
+}
+
 interface ConstellationGraphProps {
   project: Project;
   selectedNodeId: string | null;
@@ -28,6 +33,10 @@ interface ConstellationGraphProps {
   pathMode: boolean;
   dimension: Dimension;
   expanded?: boolean;
+  viewport?: GraphViewport;
+  onViewportChange?: (viewport: GraphViewport) => void;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   onSelectNode: (node: ClarityNode) => void;
 }
 
@@ -207,6 +216,12 @@ interface GraphSceneProps {
   onSelectNode: (node: ClarityNode) => void;
 }
 
+interface Constellation2DProps extends GraphSceneProps {
+  expanded?: boolean;
+  viewport?: GraphViewport;
+  onViewportChange?: (viewport: GraphViewport) => void;
+}
+
 function GraphScene({ project, selectedNodeId, focusMode, pathMode, editMode, onSelectNode }: GraphSceneProps) {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [draggedPositions, setDraggedPositions] = useState<Record<string, ConstellationPoint>>({});
@@ -307,8 +322,8 @@ interface PanState {
   moved: boolean;
 }
 
-const MIN_2D_ZOOM = 0.7;
-const MAX_2D_ZOOM = 1.6;
+const MIN_2D_ZOOM = 0.72;
+const MAX_2D_ZOOM = 2.2;
 const ZOOM_STEP = 0.1;
 
 const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
@@ -369,21 +384,38 @@ function Constellation2D({
   editMode,
   onEditModeChange,
   onSelectNode,
-}: GraphSceneProps) {
+  expanded = false,
+  viewport,
+  onViewportChange,
+}: Constellation2DProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const panRef = useRef<PanState | null>(null);
   const suppressClickRef = useRef(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [localZoom, setLocalZoom] = useState(viewport?.zoom ?? 1);
+  const [localPan, setLocalPan] = useState(viewport?.pan ?? { x: 0, y: 0 });
   const [draggedPositions, setDraggedPositions] = useState<Record<string, ConstellationPoint>>({});
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [showSecondaryContext, setShowSecondaryContext] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
+  const zoomTimerRef = useRef<number | null>(null);
+  const previousExpandedRef = useRef(false);
+  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ distance: number; zoom: number; pan: { x: number; y: number } } | null>(null);
+  const zoom = viewport?.zoom ?? localZoom;
+  const pan = viewport?.pan ?? localPan;
   const layout = useMemo(() => calculateDecisionMapLayout(project), [project]);
   const metrics = useMemo(() => calculateDecisionMapMetrics(project), [project]);
   const secondaryNodes = useMemo(
     () => project.nodes.filter((node) => isDecisionMapSecondaryNode(node, project)),
     [project],
   );
+  const primaryMetrics = useMemo(() => calculateDecisionMapMetrics({
+    nodes: project.nodes.filter((node) => !isDecisionMapSecondaryNode(node, project)),
+    edges: project.edges,
+  }), [project]);
+  const mapMetrics = showSecondaryContext && secondaryNodes.length > 0 ? metrics : primaryMetrics;
+  const secondaryPanelX = showSecondaryContext ? 1310 : mapMetrics.width - 198;
   const decisionPath = useMemo(
     () => (selectedNodeId && pathMode ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] }),
     [pathMode, project, selectedNodeId],
@@ -406,6 +438,10 @@ function Constellation2D({
     }, {}),
     [draggedPositions, layout, project.nodes],
   );
+
+  useEffect(() => () => {
+    if (zoomTimerRef.current !== null) window.clearTimeout(zoomTimerRef.current);
+  }, []);
 
   const edgeSlots = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -432,10 +468,38 @@ function Constellation2D({
     const bounds = svgRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
     return {
-      x: ((event.clientX - bounds.left) / bounds.width) * metrics.width,
-      y: ((event.clientY - bounds.top) / bounds.height) * metrics.height,
+      x: ((event.clientX - bounds.left) / bounds.width) * mapMetrics.width,
+      y: ((event.clientY - bounds.top) / bounds.height) * mapMetrics.height,
     };
   };
+
+  const updateViewport = useCallback((nextZoom: number, nextPan: { x: number; y: number }) => {
+    setLocalZoom(nextZoom);
+    setLocalPan(nextPan);
+    onViewportChange?.({ zoom: nextZoom, pan: nextPan });
+  }, [onViewportChange]);
+
+  const markZooming = () => {
+    setIsZooming(true);
+    if (zoomTimerRef.current !== null) window.clearTimeout(zoomTimerRef.current);
+    zoomTimerRef.current = window.setTimeout(() => setIsZooming(false), 180);
+  };
+
+  const clampZoom = (value: number) => Math.max(MIN_2D_ZOOM, Math.min(MAX_2D_ZOOM, value));
+
+  const setClampedZoom = (nextZoom: number, focalPoint?: { x: number; y: number }) => {
+    const boundedZoom = clampZoom(nextZoom);
+    const nextPan = focalPoint
+      ? {
+          x: focalPoint.x - (focalPoint.x - pan.x) * (boundedZoom / zoom),
+          y: focalPoint.y - (focalPoint.y - pan.y) * (boundedZoom / zoom),
+        }
+      : pan;
+    markZooming();
+    updateViewport(boundedZoom, nextPan);
+  };
+
+  const setPanned = (nextPan: { x: number; y: number }) => updateViewport(zoom, nextPan);
 
   const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const drag = panRef.current;
@@ -445,7 +509,7 @@ function Constellation2D({
     const dy = point.y - drag.startY;
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     if (drag.mode === 'canvas') {
-      setPan((current) => ({ x: current.x + dx, y: current.y + dy }));
+      setPanned({ x: pan.x + dx, y: pan.y + dy });
       drag.startX = point.x;
       drag.startY = point.y;
       return;
@@ -458,42 +522,114 @@ function Constellation2D({
     }
   };
 
-  const setClampedZoom = (nextZoom: number) => {
-    setZoom(Math.max(MIN_2D_ZOOM, Math.min(MAX_2D_ZOOM, nextZoom)));
-  };
+  const fitToView = useCallback(() => {
+    const visibleNodes = project.nodes.filter((node) => showSecondaryContext || !isDecisionMapSecondaryNode(node, project));
+    if (visibleNodes.length === 0) {
+      updateViewport(1, { x: 0, y: 0 });
+      return;
+    }
 
-  const fitToView = () => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  };
+    const bounds = visibleNodes.reduce((current, node) => {
+      const point = positions[node.id] ?? { x: 0, y: 0 };
+      const dimensions = nodeDimensions(node, isDecisionMapSecondaryNode(node, project));
+      return {
+        minX: Math.min(current.minX, point.x - dimensions.width / 2),
+        maxX: Math.max(current.maxX, point.x + dimensions.width / 2),
+        minY: Math.min(current.minY, point.y - dimensions.height / 2),
+        maxY: Math.max(current.maxY, point.y + dimensions.height / 2),
+      };
+    }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+
+    const padding = 72;
+    const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const availableWidth = Math.max(1, mapMetrics.width - padding * 2);
+    const availableHeight = Math.max(1, mapMetrics.height - padding * 2);
+    const nextZoom = clampZoom(Math.min(availableWidth / contentWidth, availableHeight / contentHeight));
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+
+    updateViewport(nextZoom, {
+      x: mapMetrics.width / 2 - centerX * nextZoom,
+      y: mapMetrics.height / 2 - centerY * nextZoom,
+    });
+  }, [mapMetrics.height, mapMetrics.width, project, positions, showSecondaryContext, updateViewport]);
+
+  useEffect(() => {
+    const wasExpanded = previousExpandedRef.current;
+    previousExpandedRef.current = expanded;
+    if (!expanded || wasExpanded || zoom !== 1 || pan.x !== 0 || pan.y !== 0) return;
+    const frame = window.requestAnimationFrame(fitToView);
+    return () => window.cancelAnimationFrame(frame);
+  }, [expanded, fitToView, pan.x, pan.y, zoom]);
 
   return (
     <div className="relative h-full w-full">
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${metrics.width} ${metrics.height}`}
+        viewBox={`0 0 ${mapMetrics.width} ${mapMetrics.height}`}
         className="h-full w-full touch-pan-y select-none"
         style={{ touchAction: 'pan-y' }}
         role="img"
         aria-label="Interactive two-dimensional Gapswise decision map"
         onWheel={(event) => {
-          if (!event.ctrlKey && !event.metaKey) return;
           event.preventDefault();
-          setClampedZoom(zoom + (event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP));
+          event.stopPropagation();
+          const point = localPoint(event);
+          const factor = Math.exp(-event.deltaY * 0.0012);
+          setClampedZoom(zoom * factor, point);
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
+          if (event.pointerType === 'touch') {
+            const point = localPoint(event);
+            touchPointsRef.current.set(event.pointerId, point);
+            if (touchPointsRef.current.size === 2) {
+              const points = [...touchPointsRef.current.values()];
+              pinchRef.current = {
+                distance: Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y),
+                zoom,
+                pan,
+              };
+              panRef.current = null;
+              return;
+            }
+          }
           const point = localPoint(event);
           panRef.current = { mode: 'canvas', startX: point.x, startY: point.y, moved: false };
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
-        onPointerMove={handlePointerMove}
+        onPointerMove={(event) => {
+          if (event.pointerType === 'touch') {
+            touchPointsRef.current.set(event.pointerId, localPoint(event));
+            const pinch = pinchRef.current;
+            if (pinch && touchPointsRef.current.size >= 2) {
+              event.preventDefault();
+              const points = [...touchPointsRef.current.values()];
+              const distance = Math.max(1, Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y));
+              const center = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
+              const nextZoom = clampZoom(pinch.zoom * (distance / Math.max(1, pinch.distance)));
+              updateViewport(nextZoom, {
+                x: center.x - (center.x - pinch.pan.x) * (nextZoom / pinch.zoom),
+                y: center.y - (center.y - pinch.pan.y) * (nextZoom / pinch.zoom),
+              });
+              return;
+            }
+          }
+          handlePointerMove(event);
+        }}
         onPointerUp={(event) => {
+          if (event.pointerType === 'touch') {
+            touchPointsRef.current.delete(event.pointerId);
+            if (touchPointsRef.current.size < 2) pinchRef.current = null;
+          }
           suppressClickRef.current = panRef.current?.moved ?? false;
           panRef.current = null;
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={() => {
+          touchPointsRef.current.clear();
+          pinchRef.current = null;
           panRef.current = null;
           suppressClickRef.current = false;
         }}
@@ -518,15 +654,16 @@ function Constellation2D({
             </marker>
           ))}
         </defs>
-        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`} style={{ transition: 'transform 160ms ease-out' }}>
-          <rect width={metrics.width} height={metrics.height} fill="url(#decision-map-grid)" opacity="0.8" />
+        <rect width={mapMetrics.width} height={mapMetrics.height} fill="#040b17" pointerEvents="none" />
+        <rect width={mapMetrics.width} height={mapMetrics.height} fill="url(#decision-map-grid)" opacity="0.8" pointerEvents="none" />
+        <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`} style={{ transition: isZooming ? 'transform 140ms ease-out' : undefined }}>
           <g>
             {DECISION_MAP_LANES.map((lane) => {
-              const y = metrics.laneY[lane];
-              const previousY = lane === 0 ? 28 : metrics.laneY[(lane - 1) as 0 | 1 | 2 | 3 | 4];
-              const nextY = lane === 4 ? metrics.height - 28 : metrics.laneY[(lane + 1) as 0 | 1 | 2 | 3 | 4];
+              const y = mapMetrics.laneY[lane];
+              const previousY = lane === 0 ? 28 : mapMetrics.laneY[(lane - 1) as 0 | 1 | 2 | 3 | 4];
+              const nextY = lane === 4 ? mapMetrics.height - 28 : mapMetrics.laneY[(lane + 1) as 0 | 1 | 2 | 3 | 4];
               const top = lane === 0 ? 28 : (previousY + y) / 2;
-              const bottom = lane === 4 ? metrics.height - 28 : (y + nextY) / 2;
+              const bottom = lane === 4 ? mapMetrics.height - 28 : (y + nextY) / 2;
               return (
                 <g key={lane}>
                   <rect x="48" y={top + 12} width="1240" height={Math.max(80, bottom - top - 24)} fill={lane === 4 ? '#064e3b' : '#07111f'} opacity={lane === 4 ? 0.18 : 0.2} />
@@ -539,8 +676,8 @@ function Constellation2D({
             })}
             {secondaryNodes.length > 0 && (
               <>
-                <rect x="1310" y="28" width="180" height={showSecondaryContext ? Math.min(metrics.height - 56, 100 + secondaryNodes.length * 160) : 58} rx="12" fill="#07111f" opacity="0.32" />
-                <foreignObject x="1318" y="36" width="164" height="42">
+                <rect x={secondaryPanelX} y="28" width="180" height={showSecondaryContext ? Math.min(mapMetrics.height - 56, 100 + secondaryNodes.length * 160) : 58} rx="12" fill="#07111f" opacity="0.32" />
+                <foreignObject x={secondaryPanelX + 8} y="36" width="164" height="42">
                   <button
                     type="button"
                     onPointerDown={(event) => event.stopPropagation()}
@@ -727,7 +864,7 @@ function Constellation2D({
         </button>
         <button
           type="button"
-          onClick={() => setZoom(1)}
+          onClick={() => updateViewport(1, pan)}
           className="min-w-14 rounded-md px-2 text-center text-[11px] font-bold tabular-nums text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
           aria-label="Reset zoom to 100 percent"
           title="Reset zoom"
@@ -753,17 +890,35 @@ function Constellation2D({
           <Scan className="h-4 w-4" />
           <span>Fit</span>
         </button>
-        <button
-          type="button"
-          onClick={() => onEditModeChange(!editMode)}
-          className={`inline-flex h-9 items-center gap-1 rounded-md px-2 text-[11px] font-bold transition ${editMode ? 'bg-cyan-900/70 text-cyan-200' : 'text-slate-300 hover:bg-slate-800 hover:text-cyan-300'}`}
-          aria-label={editMode ? 'Disable arrange mode' : 'Enable arrange mode'}
-          aria-pressed={editMode}
-          title={editMode ? 'Disable arrange mode' : 'Arrange nodes'}
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">{editMode ? 'Arranging' : 'Arrange'}</span>
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowMoreMenu((current) => !current)}
+            onPointerDown={(event) => event.stopPropagation()}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-800 hover:text-cyan-300"
+            aria-label="More Decision Map actions"
+            aria-expanded={showMoreMenu}
+            title="More actions"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {showMoreMenu && (
+            <div className="absolute right-0 top-10 z-30 min-w-40 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  onEditModeChange(!editMode);
+                  setShowMoreMenu(false);
+                }}
+                className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-bold ${editMode ? 'bg-cyan-900/70 text-cyan-200' : 'text-slate-300 hover:bg-slate-800 hover:text-cyan-300'}`}
+                aria-pressed={editMode}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                {editMode ? 'Stop arranging' : 'Arrange nodes'}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -776,13 +931,29 @@ export default function ConstellationGraph({
   pathMode,
   dimension,
   expanded = false,
+  viewport,
+  onViewportChange,
+  isFullscreen = false,
+  onToggleFullscreen,
   onSelectNode,
 }: ConstellationGraphProps) {
   const [editMode, setEditMode] = useState(false);
 
   return (
-    <div className={`relative overflow-hidden rounded-xl border border-cyan-950/80 bg-[#040b17] ${expanded ? 'h-full min-h-0' : 'h-[520px] sm:h-[600px]'}`}>
+    <div className={`relative min-w-0 overflow-hidden rounded-xl border border-cyan-950/80 bg-[#040b17] ${expanded ? 'h-full min-h-0' : 'h-[560px] min-h-[520px] sm:h-[600px]'}`}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(14,116,144,0.16),transparent_42%)]" />
+      {onToggleFullscreen && (
+        <button
+          type="button"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={onToggleFullscreen}
+          className="absolute right-3 top-3 z-20 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700/90 bg-slate-950/90 text-slate-300 shadow-lg backdrop-blur transition hover:border-cyan-700 hover:text-cyan-200"
+          aria-label={isFullscreen ? 'Exit full screen' : 'Open full screen'}
+          title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+        >
+          {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </button>
+      )}
       {dimension === '3d' ? (
         <Canvas
           camera={{ position: [0, 0, 12], fov: 45 }}
@@ -809,6 +980,9 @@ export default function ConstellationGraph({
           pathMode={pathMode}
           editMode={editMode}
           onEditModeChange={setEditMode}
+          expanded={expanded}
+          viewport={viewport}
+          onViewportChange={onViewportChange}
           onSelectNode={onSelectNode}
         />
       )}

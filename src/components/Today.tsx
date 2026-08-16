@@ -277,32 +277,38 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                   <p className="mt-2 text-sm leading-relaxed text-slate-300">{selectedQuestionWhy.whyThisMatters}</p>
                 </section>
 
-                <section>
-                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What Gapswise already knows</h3>
-                  <ul className="mt-2 space-y-2">
-                    {selectedQuestionWhy.whatGapswiseKnows.map((item) => (
-                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                    ))}
-                  </ul>
-                </section>
+                {selectedQuestionWhy.whatGapswiseKnows.length > 0 && (
+                  <section>
+                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What Gapswise already knows</h3>
+                    <ul className="mt-2 space-y-2">
+                      {selectedQuestionWhy.whatGapswiseKnows.map((item) => (
+                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
 
-                <section>
-                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What this is blocking</h3>
-                  <ul className="mt-2 space-y-2">
-                    {selectedQuestionWhy.whatThisBlocks.map((item) => (
-                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                    ))}
-                  </ul>
-                </section>
+                {selectedQuestionWhy.whatThisBlocks.length > 0 && (
+                  <section>
+                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What this is blocking</h3>
+                    <ul className="mt-2 space-y-2">
+                      {selectedQuestionWhy.whatThisBlocks.map((item) => (
+                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
 
-                <section>
-                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What could change if you answer</h3>
-                  <ul className="mt-2 space-y-2">
-                    {selectedQuestionWhy.whatCouldChange.map((item) => (
-                      <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                    ))}
-                  </ul>
-                </section>
+                {selectedQuestionWhy.whatCouldChange.length > 0 && (
+                  <section>
+                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What could change if you answer</h3>
+                    <ul className="mt-2 space-y-2">
+                      {selectedQuestionWhy.whatCouldChange.map((item) => (
+                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
 
                 <section>
                   <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Evidence checked</h3>
