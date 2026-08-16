@@ -46,6 +46,19 @@ export function demoCalendarEvents(now = new Date()): SafeCalendarEvent[] {
   ].sort((a, b) => (a.start ?? '').localeCompare(b.start ?? ''));
 }
 
+/** Calendar fixture used only by the career-conflict demo workflow. */
+export function demoCareerConflictCalendarEvents(now = new Date()): SafeCalendarEvent[] {
+  const callStart = new Date(now.getTime() + 2 * DAY);
+  callStart.setHours(11, 0, 0, 0);
+  return [{
+    id: 'demo_career_recruiter_call',
+    summary: 'Recruiter call — Product Engineer role',
+    description: 'Discuss the primarily frontend role, compensation, and whether it fits your priorities.',
+    start: callStart.toISOString(),
+    end: new Date(callStart.getTime() + HOUR).toISOString(),
+  }];
+}
+
 export function createLocalDemoProjects(): Project[] {
   const hackathon = createGoldenDemoProject();
   const createdAt = '2026-08-10T12:00:00.000Z';

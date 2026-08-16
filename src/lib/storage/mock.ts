@@ -168,6 +168,10 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'feedback', { ...feedback, userId });
   }
 
+  async deleteFeedback(userId: string, feedbackId: string): Promise<void> {
+    await this.remove(userId, 'feedback', feedbackId);
+  }
+
   async getMemories(userId: string): Promise<DurableMemory[]> {
     return (await this.getUser(userId)).memories;
   }
@@ -217,7 +221,7 @@ export class MockStorageProvider implements StorageProvider {
     await this.writeDb(db);
   }
 
-  private async remove<K extends keyof Pick<MockDatabase['users'][string], 'nodes' | 'edges' | 'sources'>>(
+  private async remove<K extends keyof Pick<MockDatabase['users'][string], 'nodes' | 'edges' | 'sources' | 'feedback'>>(
     userId: string,
     collection: K,
     id: string

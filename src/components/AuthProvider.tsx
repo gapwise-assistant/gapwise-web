@@ -1,7 +1,8 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { AuthUser, signOutFromGoogle, subscribeToAuth } from '@/lib/auth/client';
+import { AuthUser, getFirebaseAuth, signOutFromGoogle, subscribeToAuth } from '@/lib/auth/client';
+import { getRedirectResult } from 'firebase/auth';
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -37,6 +38,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsReady(true);
           return;
         }
+        const firebaseAuth = getFirebaseAuth();
+        getRedirectResult(firebaseAuth).catch((caught) => {
+          if (disposed) return;
+          setError(caught instanceof Error ? caught.message : 'Google sign-in could not be completed.');
+        });
         unsubscribe = subscribeToAuth((nextUser) => {
           if (disposed) return;
           setUser(nextUser);

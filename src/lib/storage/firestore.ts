@@ -198,6 +198,10 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'feedback', feedback);
   }
 
+  async deleteFeedback(userId: string, feedbackId: string): Promise<void> {
+    await this.collection(userId, 'feedback').doc(feedbackId).delete();
+  }
+
   async getMemories(userId: string): Promise<DurableMemory[]> {
     return this.list<DurableMemory & { userId: string }>(userId, 'memories');
   }

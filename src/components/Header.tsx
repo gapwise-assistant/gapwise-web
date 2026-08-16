@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { RefreshCw, Settings2, Target } from 'lucide-react';
+import { PlayCircle, RefreshCw, Settings2, Target } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
@@ -14,6 +14,8 @@ interface HeaderProps {
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
   onResetDemo: () => void;
+  onLoadCareerDemo?: () => void;
+  isLoadingCareerDemo?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -30,6 +32,8 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   onResetDemo,
+  onLoadCareerDemo,
+  isLoadingCareerDemo = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -123,8 +127,21 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
+          {onLoadCareerDemo && (
+            <button
+              type="button"
+              onClick={onLoadCareerDemo}
+              disabled={isLoadingCareerDemo}
+              title="Run or reset the career conflict demo"
+              className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-amber-800/80 bg-amber-950/30 px-2.5 text-[10px] font-bold uppercase tracking-wide text-amber-300 transition-colors hover:border-amber-500 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60 sm:h-auto sm:px-3 sm:py-2"
+            >
+              <PlayCircle className="h-4 w-4" />
+              <span className="hidden lg:inline">{isLoadingCareerDemo ? 'Loading…' : 'Career demo'}</span>
+            </button>
+          )}
           {demoMode && (
             <button
+              type="button"
               onClick={onResetDemo}
               title="Reset local demo data"
               className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-400 sm:h-auto sm:w-auto"

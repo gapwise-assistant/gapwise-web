@@ -2104,3 +2104,19 @@ flow. That blocker is omitted from the general briefing. The project description
 is not repeated at the bottom of the section; the header remains the place for
 the project goal and deadline. No additional Gemini call or graph persistence
 change is involved.
+
+## 26. Career Conflict Demo Workflow
+
+The workspace includes a repeatable career-decision scenario at
+`/api/projects/career-demo`, available in both local Demo mode and authenticated
+real mode. The action is available from the workspace header and empty-workspace
+onboarding screen. It seeds a financial-stability goal, an
+avoid-frontend preference, an upcoming recruiter call, and a frontend-heavy
+job document. The deterministic workflow reads that document, detects the
+preference conflict, and exposes an OPEN role-acceptability question. The
+answer resolves the graph question, is persisted as question feedback, updates
+the user’s career-demo memory, and changes the next ranked recruiter action.
+The `Career demo` header button reruns the same seed and clears only the
+career demo’s memories and feedback, so the scenario can be repeated without
+discarding unrelated user state. The broader Demo reset remains limited to
+local Demo mode.

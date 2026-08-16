@@ -87,6 +87,9 @@ function summarizeNode(node: ClarityNode): string {
 
 function summarizeBlockerQuestion(text: string): string {
   const normalized = withoutEndingPunctuation(text);
+  if (/primarily front[- ]?end role remain(?:s)? acceptable/i.test(normalized)) {
+    return "The frontend-heavy role's fit with your priorities is still unresolved.";
+  }
   if (/^who(?: exactly)? is the primary target persona and (?:\d+[- ]minute )?demo scenario(?: for .+)?$/i.test(normalized)) {
     return 'Target persona and demo scenario are still undefined.';
   }
@@ -140,7 +143,9 @@ export function buildNeedsAttention(project: Project): NeedsAttentionItem | null
   return {
     nodeId: blocker.source.id,
     title: summarizeBlockerQuestion(blocker.source.text),
-    detail: blocker.target.type === 'DECISION'
+    detail: /primarily front[- ]?end role remain(?:s)? acceptable/i.test(blocker.source.text)
+      ? 'This is currently blocking the decision about the recruiter call.'
+      : blocker.target.type === 'DECISION'
       ? 'This is currently blocking the next product decision.'
       : 'This is currently blocking the next project step.',
   };

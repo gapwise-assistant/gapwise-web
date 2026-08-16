@@ -74,9 +74,15 @@ export function generateAttentionCandidates(params: {
   const nowTime = now.getTime();
   const candidates: AttentionCandidate[] = [];
   const incomePriority = hasPriority(memories, ['financial', 'income', 'salary', 'stability', 'money']);
+  const careerRoleAccepted = memories.some((memory) =>
+    !memory.forgotten_at && memory.id === 'career_demo_answer_acceptable'
+  );
+  const careerRoleRejected = memories.some((memory) =>
+    !memory.forgotten_at && memory.id === 'career_demo_answer_not_acceptable'
+  );
   const noFrontendPreference = memories.some((memory) =>
     !memory.forgotten_at && /do not|don't|avoid/.test(memory.text.toLowerCase()) && /frontend/.test(memory.text.toLowerCase())
-  );
+  ) && !careerRoleAccepted;
 
   params.contextPack?.upcomingCommitments
     .filter(isCalendarCommitment)
@@ -125,7 +131,6 @@ export function generateAttentionCandidates(params: {
     const sourceText = `${source.filename} ${source.content}`;
     if (includesAny(sourceText, ['recruiter', 'salary', 'paying', 'better-paying', 'role'])) {
       const frontendRole = includesAny(sourceText, ['frontend', 'front-end']);
-      if (frontendRole && noFrontendPreference) return;
       const contextPack = buildContextPack({
         userId,
         query: sourceText,
@@ -140,6 +145,34 @@ export function generateAttentionCandidates(params: {
         },
         durableMemories: memories,
       });
+      if (frontendRole && noFrontendPreference) {
+        if (careerRoleRejected) {
+          candidates.push(
+            withAttentionScore({
+              id: `rec_recruiter_decline_${source.id}`,
+              kind: 'opportunity',
+              title: 'Tell the recruiter this role is not a fit',
+              reason: 'Your confirmed role preference conflicts with this primarily frontend opportunity.',
+              next_action: 'Decline the role or ask whether a less frontend-heavy path is available before the call.',
+              source_node_ids: source.derived_node_ids,
+              source_ids: [source.id],
+              context_pack: contextPack,
+              status: 'active',
+              factors: {
+                goal_alignment: 0.82,
+                impact: 0.84,
+                urgency: 0.82,
+                actionability: 0.94,
+                evidence_confidence: 0.9,
+                unresolved_risk: 0.72,
+                momentum: 0.82,
+                estimated_effort: 0.18,
+              },
+            })
+          );
+        }
+        return;
+      }
       candidates.push(
         withAttentionScore({
           id: `rec_recruiter_${source.id}`,
@@ -229,9 +262,15 @@ export function generateAttentionCandidates(params: {
       withAttentionScore({
         id: `rec_gap_${gap.node_id}`,
         kind: relatedMeeting ? 'preparation' : 'gap',
-        title: gap.question,
-        reason: gap.reasons[0] ?? 'This uncertainty affects the next decision.',
-        next_action: gap.question,
+        title: gap.node_id === 'unknown_career_role_acceptability'
+          ? 'Decide whether the frontend-heavy role fits your priorities'
+          : gap.question,
+        reason: gap.node_id === 'unknown_career_role_acceptability'
+          ? 'The job document conflicts with your preference to avoid frontend-heavy roles.'
+          : gap.reasons[0] ?? 'This uncertainty affects the next decision.',
+        next_action: gap.node_id === 'unknown_career_role_acceptability'
+          ? 'Answer whether the role remains acceptable before the recruiter call.'
+          : gap.question,
         source_node_ids: [gap.node_id, ...gap.blocked_decision_ids],
         source_ids: node?.source_refs ?? [],
         context_pack: contextPack,

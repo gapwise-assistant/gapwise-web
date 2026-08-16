@@ -19,6 +19,12 @@ import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/s
 import { processIdontKnowStrategy } from '@/lib/gemini';
 import { loadMemoriesFromBrowser, memoriesFromProfile, saveMemoriesToBrowser } from '@/lib/memory/store';
 import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/lib/personalization/feedbackStore';
+import { createFeedbackEvent } from '@/lib/personalization/applyFeedback';
+import {
+  CAREER_CONFLICT_QUESTION_ID,
+  careerRoleDisposition,
+  updateCareerConflictMemories,
+} from '@/lib/demo/careerConflict';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope } from '@/lib/scope/projectScope';
@@ -126,6 +132,31 @@ async function loadGoldenDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadCareerConflictDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/career-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The career conflict demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -196,6 +227,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isLoadingDemo, setIsLoadingDemo] = useState(false);
+  const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -314,6 +346,26 @@ export default function Home() {
     }
   }, [userId]);
 
+  const handleLoadCareerConflictDemo = useCallback(async () => {
+    setIsLoadingCareerDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadCareerConflictDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The career conflict demo could not be loaded.');
+    } finally {
+      setIsLoadingCareerDemo(false);
+    }
+  }, [userId]);
+
   const handleResetDemo = async () => {
     try {
       await authFetch('/api/storage', {
@@ -407,6 +459,7 @@ export default function Home() {
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
     const isEditing = answerTarget.mode === 'edit';
+    const isCareerConflictQuestion = answerTarget.nodeId === CAREER_CONFLICT_QUESTION_ID;
     const response = await authFetch('/api/questions/answer', {
       method: isEditing ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -421,6 +474,15 @@ export default function Home() {
         userId,
         nodeId: answerTarget.nodeId,
         answer,
+        ...(isCareerConflictQuestion
+          ? {
+              feedback: {
+                id: `career_demo_feedback_${CAREER_CONFLICT_QUESTION_ID}`,
+                rating: 'helpful' as const,
+                answer,
+              },
+            }
+          : {}),
         ...(answerTarget.projectId ? { projectId: answerTarget.projectId } : {}),
       }),
     });
@@ -433,7 +495,27 @@ export default function Home() {
     } else {
       setGeneralContext(updated);
     }
-  }, [answerTarget, userId]);
+    if (isCareerConflictQuestion) {
+      const disposition = careerRoleDisposition(answer);
+      const feedbackEvent = createFeedbackEvent({
+        userId,
+        targetType: 'question',
+        targetId: CAREER_CONFLICT_QUESTION_ID,
+        rating: 'useful',
+        explanation: answer,
+        metadata: {
+          demo: 'career-conflict',
+          role_acceptable: disposition === 'acceptable',
+        },
+      });
+      setFeedbackEvents((current) => appendFeedbackEvent(userId, current, feedbackEvent));
+      const updatedMemories = updateCareerConflictMemories(memories, answer);
+      setMemories(updatedMemories);
+      persistMemoriesToAPI(userId, updatedMemories).then((savedToApi) => {
+        setStorageMessage(savedToApi ? '' : 'Saved memory locally. Persistent memory API was unavailable.');
+      });
+    }
+  }, [answerTarget, memories, userId]);
 
   const handleUpdateProfile = (updated: UserMemoryProfile) => {
     setProfile(updated);
@@ -482,12 +564,14 @@ export default function Home() {
         <NewUserOnboarding
           accountLabel={auth.user?.displayName}
           isLoadingDemo={isLoadingDemo}
+          isLoadingCareerDemo={isLoadingCareerDemo}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
             setIsNewProjectOpen(true);
           }}
           onLoadDemo={() => void handleLoadDemo()}
+          onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -510,6 +594,8 @@ export default function Home() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onResetDemo={handleResetDemo}
+        onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
+        isLoadingCareerDemo={isLoadingCareerDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}

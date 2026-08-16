@@ -6,18 +6,22 @@ import { FolderPlus, LogOut, PlayCircle } from 'lucide-react';
 interface NewUserOnboardingProps {
   accountLabel?: string;
   isLoadingDemo: boolean;
+  isLoadingCareerDemo?: boolean;
   error?: string;
   onCreateProject: () => void;
   onLoadDemo: () => void;
+  onLoadCareerDemo?: () => void;
   onSignOut: () => void;
 }
 
 export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   accountLabel,
   isLoadingDemo,
+  isLoadingCareerDemo = false,
   error,
   onCreateProject,
   onLoadDemo,
+  onLoadCareerDemo,
   onSignOut,
 }) => (
   <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-12 text-slate-100">
@@ -41,7 +45,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
         </button>
       </div>
 
-      <div className="mt-8 grid gap-3 sm:grid-cols-2">
+      <div className={`mt-8 grid gap-3 ${onLoadCareerDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <button
           type="button"
           onClick={onCreateProject}
@@ -61,6 +65,20 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             {isLoadingDemo ? 'Loading demo...' : 'Load demo'}
           </span>
         </button>
+        {onLoadCareerDemo && (
+          <button
+            type="button"
+            onClick={onLoadCareerDemo}
+            disabled={isLoadingCareerDemo}
+            title="Run or reset the career conflict demo"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-amber-800/80 bg-amber-950/20 p-4 text-left transition hover:border-amber-500 hover:bg-amber-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-amber-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingCareerDemo ? 'Loading career demo...' : 'Career demo'}
+            </span>
+          </button>
+        )}
       </div>
 
       {error && (

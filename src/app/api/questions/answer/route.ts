@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { saveFeedback } from '@/lib/tools/feedbackTools';
 
 export const runtime = 'nodejs';
 
@@ -11,6 +12,11 @@ const requestSchema = z.object({
   nodeId: z.string().trim().min(1),
   answer: z.string().trim().min(1).max(5000),
   projectId: z.string().trim().min(1).optional(),
+  feedback: z.object({
+    id: z.string().trim().min(1).optional(),
+    rating: z.enum(['helpful', 'irrelevant', 'already_answered', 'too_detailed', 'wrong_framing']),
+    answer: z.string().trim().min(1).max(5000).optional(),
+  }).optional(),
 });
 
 const editRequestSchema = z.object({
@@ -41,6 +47,16 @@ export async function POST(request: Request) {
     const body = requestSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await answerQuestion({ ...body, userId });
+    if (body.feedback) {
+      await saveFeedback(userId, {
+        id: body.feedback.id ?? `question_feedback_${body.nodeId}`,
+        question_id: body.nodeId,
+        node_id: body.nodeId,
+        rating: body.feedback.rating,
+        answer: body.feedback.answer ?? body.answer,
+        timestamp: new Date().toISOString(),
+      });
+    }
     return NextResponse.json({
       ...result,
       message: 'Understanding updated. This question is now resolved.',

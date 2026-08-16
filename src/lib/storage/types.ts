@@ -83,6 +83,7 @@ export interface FirestoreFeedback extends BaseEntity {
   question_id: string;
   node_id: string;
   rating: 'helpful' | 'irrelevant' | 'already_answered' | 'too_detailed' | 'wrong_framing';
+  answer?: string;
 }
 
 export interface FirestoreEvent extends BaseEntity {
@@ -119,6 +120,7 @@ export interface StorageProvider {
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;
+  deleteFeedback(userId: string, feedbackId: string): Promise<void>;
 
   getMemories(userId: string): Promise<DurableMemory[]>;
   saveMemory(userId: string, memory: DurableMemory): Promise<void>;

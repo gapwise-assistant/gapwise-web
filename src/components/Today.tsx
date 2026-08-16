@@ -50,6 +50,13 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const brief = serverBrief ?? localBrief;
 
   React.useEffect(() => {
+    // A graph answer or durable-memory update invalidates the server snapshot;
+    // show the locally recalculated brief immediately while the fresh server
+    // brief is fetched below.
+    setServerBrief(null);
+  }, [project.updated_at, memories]);
+
+  React.useEffect(() => {
     const controller = new AbortController();
     authFetch('/api/attention/run', {
       method: 'POST',

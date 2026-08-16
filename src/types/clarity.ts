@@ -108,6 +108,7 @@ export interface QuestionFeedback {
   node_id: string;
   rating: 'helpful' | 'irrelevant' | 'already_answered' | 'too_detailed' | 'wrong_framing';
   timestamp: string;
+  answer?: string;
 }
 
 export interface Project {

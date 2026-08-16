@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { PATCH, POST } from './route';
+import { saveFeedback } from '@/lib/tools/feedbackTools';
 
 vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn(), editAnsweredQuestion: vi.fn() }));
+vi.mock('@/lib/tools/feedbackTools', () => ({ saveFeedback: vi.fn() }));
 
 function request(body: unknown): Request {
   return new Request('http://localhost/api/questions/answer', {
@@ -73,5 +75,35 @@ describe('POST /api/questions/answer', () => {
     await expect(response.json()).resolves.toMatchObject({
       message: 'Answer updated. Gapswise understanding was refreshed.',
     });
+  });
+
+  it('persists an answer as question feedback when requested by the demo flow', async () => {
+    const context = createGoldenDemoProject();
+    vi.mocked(answerQuestion).mockResolvedValue({
+      ownerType: 'project',
+      projectId: context.id,
+      context,
+      resolvedNodeId: 'unknown_target_user',
+      createdNodeId: 'node_answer',
+    });
+
+    const response = await POST(request({
+      userId: 'demo-user',
+      nodeId: 'unknown_target_user',
+      projectId: context.id,
+      answer: 'Yes, this remains acceptable.',
+      feedback: {
+        id: 'career_demo_feedback_unknown_target_user',
+        rating: 'helpful',
+        answer: 'Yes, this remains acceptable.',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(saveFeedback).toHaveBeenCalledWith('demo-user', expect.objectContaining({
+      id: 'career_demo_feedback_unknown_target_user',
+      question_id: 'unknown_target_user',
+      answer: 'Yes, this remains acceptable.',
+    }));
   });
 });

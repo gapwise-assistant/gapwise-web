@@ -9,6 +9,7 @@ export async function saveFeedback(userId: string, feedback: QuestionFeedback): 
     question_id: feedback.question_id,
     node_id: feedback.node_id,
     rating: feedback.rating,
+    answer: feedback.answer,
     status: 'ACTIVE',
     createdAt: feedback.timestamp,
     updatedAt: feedback.timestamp,

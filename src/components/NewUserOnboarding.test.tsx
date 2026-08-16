@@ -8,6 +8,7 @@ describe('NewUserOnboarding', () => {
     const html = renderToStaticMarkup(
       <NewUserOnboarding
         isLoadingDemo={false}
+        onLoadCareerDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}
@@ -17,12 +18,14 @@ describe('NewUserOnboarding', () => {
     expect(html).toContain('No projects yet');
     expect(html).toContain('Create project');
     expect(html).toContain('Load demo');
+    expect(html).toContain('Career demo');
   });
 
   it('shows a loading state while demo data is being copied', () => {
     const html = renderToStaticMarkup(
       <NewUserOnboarding
         isLoadingDemo
+        onLoadCareerDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}

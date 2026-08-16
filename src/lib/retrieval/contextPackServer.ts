@@ -5,7 +5,8 @@ import { hasGoogleOAuthTokens } from '@/lib/google/oauth';
 import { listContextPackCalendarEvents } from '@/lib/google/calendar';
 import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { isTextRelevantToProject } from '@/lib/scope/projectScope';
-import { demoCalendarEvents } from '@/lib/demo/localFixtures';
+import { demoCareerConflictCalendarEvents, demoCalendarEvents } from '@/lib/demo/localFixtures';
+import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 
 export async function buildContextPackForUser(
@@ -29,7 +30,10 @@ export async function buildContextPackForUser(
   }
 
   if (isDemoMode()) {
-    calendarCommitments = calendarEventsToCommitmentNodes(demoCalendarEvents(now), now, 10);
+    const demoEvents = input.project.id === CAREER_CONFLICT_DEMO_ID
+      ? demoCareerConflictCalendarEvents(now)
+      : demoCalendarEvents(now);
+    calendarCommitments = calendarEventsToCommitmentNodes(demoEvents, now, 10);
     if (input.scope?.type === 'project') {
       calendarCommitments = calendarCommitments.filter((commitment) =>
         isTextRelevantToProject(commitment.text, input.project)
