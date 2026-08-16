@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Archive, ChevronDown, Edit3, HelpCircle, MoreHorizontal, Plus, RotateCcw } from 'lucide-react';
+import { Archive, ChevronDown, Edit3, MoreHorizontal, Plus, RotateCcw } from 'lucide-react';
 import { ClarityNode, Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { groupProjectSummaries } from '@/lib/projects/projectSummaries';
@@ -17,7 +17,6 @@ import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
-import { findDecisionForNode } from '@/lib/decisions/workspace';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -87,7 +86,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   const [section, setSection] = useState<ScopeSection>('projects');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
   const [isProjectEditOpen, setIsProjectEditOpen] = useState(false);
-  const [whyNode, setWhyNode] = useState<ClarityNode | null>(null);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const priorities = useMemo(() => currentPriorities(memories), [memories]);
@@ -336,7 +334,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                     onClick={() => onAnswerQuestion(node)}
                     className="min-h-11 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-bold text-slate-950 sm:min-h-0"
                   >
-                    Answer
+                    Resolve
                   </button>
                   <button
                     type="button"
@@ -346,14 +344,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                     className="min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 sm:min-h-0"
                   >
                     Dismiss / Not relevant
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWhyNode(node)}
-                    className="flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-300 sm:min-h-0"
-                  >
-                    <HelpCircle className="h-3.5 w-3.5" />
-                    Why?
                   </button>
                 </div>
               </article>
@@ -424,7 +414,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             }}
             className="mt-4 min-h-11 rounded-lg border border-amber-700/80 bg-amber-950/40 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-500 hover:text-amber-100 sm:min-h-0"
           >
-            Review question
+            Resolve question
           </button>
         </section>
       )}
@@ -462,7 +452,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                 onClick={() => onAnswerQuestion(node, node.type === 'ASSUMPTION' ? 'confirm' : undefined)}
                 className="mt-4 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950"
               >
-                {node.type === 'ASSUMPTION' ? 'Confirm' : 'Answer'}
+                Resolve
               </button>
               {node.type === 'ASSUMPTION' && (
                 <button
@@ -471,15 +461,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                   className="mt-4 ml-2 rounded-lg border border-amber-700/80 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200"
                 >
                   Correct
-                </button>
-              )}
-              {findDecisionForNode(project, node.id) && (
-                <button
-                  type="button"
-                  onClick={() => onReviewDecision(findDecisionForNode(project, node.id)?.id ?? '')}
-                  className="mt-4 ml-2 rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200"
-                >
-                  Review decision
                 </button>
               )}
             </article>
@@ -760,28 +741,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           />
         )}
       </div>
-      {whyNode && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
-          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-none sm:rounded-xl sm:p-5">
-            <h2 className="text-sm font-bold text-slate-100">Why this is still unclear</h2>
-            <p className="mt-3 text-sm text-slate-300">{whyNode.text}</p>
-            <div className="mt-3 space-y-2">
-              {(whyNode.why_it_matters ?? ['This remains unresolved in your existing context.']).map((reason) => (
-                <p key={reason} className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
-                  {reason}
-                </p>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => setWhyNode(null)}
-              className="mt-4 min-h-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

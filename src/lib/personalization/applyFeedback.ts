@@ -16,6 +16,8 @@ export function createFeedbackEvent(params: {
   rating: FeedbackRating;
   explanation?: string;
   suppressDays?: number;
+  suppressMinutes?: number;
+  suppressUntil?: string;
   metadata?: FeedbackEvent['metadata'];
 }): FeedbackEvent {
   const now = new Date();
@@ -27,9 +29,13 @@ export function createFeedbackEvent(params: {
     rating: params.rating,
     explanation: params.explanation,
     created_at: now.toISOString(),
-    suppress_until: params.suppressDays
-      ? new Date(now.getTime() + params.suppressDays * 24 * 60 * 60 * 1000).toISOString()
-      : undefined,
+    suppress_until: params.suppressUntil ?? (
+      params.suppressMinutes
+        ? new Date(now.getTime() + params.suppressMinutes * 60 * 1000).toISOString()
+        : params.suppressDays
+          ? new Date(now.getTime() + params.suppressDays * 24 * 60 * 60 * 1000).toISOString()
+          : undefined
+    ),
     metadata: params.metadata,
   };
 }

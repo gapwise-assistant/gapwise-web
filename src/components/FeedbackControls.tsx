@@ -1,15 +1,16 @@
 'use client';
 
 import React, { useState } from 'react';
-import { MoreHorizontal, ThumbsDown, ThumbsUp, XCircle } from 'lucide-react';
+import { CircleHelp, MoreHorizontal, ThumbsDown, ThumbsUp, XCircle } from 'lucide-react';
 import { FeedbackRating } from '@/types/feedback';
 
 interface FeedbackControlsProps {
   compact?: boolean;
   onFeedback: (rating: FeedbackRating, explanation?: string) => void;
+  onWhy?: () => void;
 }
 
-export const FeedbackControls: React.FC<FeedbackControlsProps> = ({ compact = false, onFeedback }) => {
+export const FeedbackControls: React.FC<FeedbackControlsProps> = ({ compact = false, onFeedback, onWhy }) => {
   const [explanation, setExplanation] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const buttonClass = compact
@@ -21,7 +22,7 @@ export const FeedbackControls: React.FC<FeedbackControlsProps> = ({ compact = fa
       <button
         type="button"
         onClick={() => setIsOpen((current) => !current)}
-        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 p-2 text-slate-400 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
+        className={`inline-flex items-center justify-center border border-slate-700 bg-slate-800 text-slate-400 hover:text-slate-100 ${compact ? 'h-9 w-9 rounded-md p-1.5' : 'min-h-11 min-w-11 rounded-lg p-2 sm:min-h-0 sm:min-w-0'}`}
         aria-label="More feedback options"
         title="More feedback options"
         aria-expanded={isOpen}
@@ -30,6 +31,12 @@ export const FeedbackControls: React.FC<FeedbackControlsProps> = ({ compact = fa
       </button>
       {isOpen && (
         <div className="absolute bottom-12 right-0 z-20 w-48 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl sm:bottom-9">
+          {onWhy && (
+            <button type="button" onClick={() => { setIsOpen(false); onWhy(); }} className={buttonClass}>
+              <CircleHelp className="h-3.5 w-3.5" />
+              Why this matters
+            </button>
+          )}
           <button type="button" onClick={() => { setIsOpen(false); onFeedback('useful', explanation || undefined); }} className={buttonClass}>
             <ThumbsUp className="h-3.5 w-3.5" />
             Useful

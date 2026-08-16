@@ -2110,12 +2110,20 @@ change is involved.
 The workspace includes a repeatable career-decision scenario at
 `/api/projects/career-demo`, available in both local Demo mode and authenticated
 real mode. The action is available from the workspace header and empty-workspace
-onboarding screen. It seeds a financial-stability goal, an
-avoid-frontend preference, an upcoming recruiter call, and a frontend-heavy
-job document. The deterministic workflow reads that document, detects the
-preference conflict, and exposes an OPEN role-acceptability question. The
-answer resolves the graph question, is persisted as question feedback, updates
-the user’s career-demo memory, and changes the next ranked recruiter action.
+onboarding screen. It seeds a detailed Northstar Labs opportunity dossier with
+ten source documents and 30 connected graph nodes: financial and career goals,
+preferences, runway and compensation facts, team and interview context, risks,
+three decisions, next actions, and seven OPEN questions. A career-coach prep
+meeting appears on the career demo’s deterministic Calendar 90 minutes after
+reset, followed by the recruiter call within 24 hours, so both can participate
+in attention ranking in either app mode.
+
+The workflow reads the frontend-heavy job document, detects the preference
+conflict, and keeps role acceptability as the highest-value OPEN question while
+retaining the supporting questions about work mix, backend or AI growth,
+compensation, flexibility, interview timing, and success measures. The answer
+resolves the graph question, is persisted as question feedback, updates the
+user’s career-demo memory, and changes the next ranked recruiter action.
 The `Career demo` header button reruns the same seed and clears only the
 career demo’s memories and feedback, so the scenario can be repeated without
 discarding unrelated user state. The broader Demo reset remains limited to

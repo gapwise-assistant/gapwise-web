@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { TodayQuestion } from '@/lib/today/sections';
-import { hasUsefulSuggestedAnswer, localQuestionSuggestion, parseQuestionSuggestions, questionSuggestionRequestMessage } from '@/lib/today/questionPlans';
+import { TodayQuestion, todayQuestionFromNode } from '@/lib/today/sections';
+import { CAREER_CONFLICT_QUESTION_ID, createCareerConflictDemoState } from '@/lib/demo/careerConflict';
+import {
+  hasUsefulSuggestedAnswer,
+  localQuestionPresentation,
+  localQuestionSuggestion,
+  parseQuestionPresentations,
+  parseQuestionSuggestions,
+  questionSuggestionRequestMessage,
+} from '@/lib/today/questionPlans';
 
 const questions: TodayQuestion[] = [
   {
@@ -20,6 +28,79 @@ const questions: TodayQuestion[] = [
 ];
 
 describe('Today question suggestions', () => {
+  it('creates action-oriented deterministic presentation copy without changing the graph question', () => {
+    const roleQuestion: TodayQuestion = {
+      id: 'question_role',
+      question: 'Does this primarily frontend role remain acceptable given your preference to avoid frontend-heavy roles?',
+      reason: 'This determines whether to prepare for or decline the recruiter call.',
+      provenance: 'Sources: job-description.pdf',
+      sourceNodeIds: ['unknown_role'],
+      presentationContext: [
+        'The job document describes the position as 70–80% frontend during the first year',
+        'Avoid positions dominated by frontend delivery',
+      ],
+    };
+    const presentation = localQuestionPresentation(roleQuestion);
+
+    expect(presentation).toEqual({
+      questionId: 'question_role',
+      title: 'Decide if this primarily frontend role is worth pursuing',
+      summary: 'The role is 70–80% frontend during the first year, which conflicts with your preference to avoid frontend-heavy work.',
+    });
+    expect(roleQuestion.question).toContain('remain acceptable');
+  });
+
+  it('parses only valid action-oriented AI copy and fills missing questions deterministically', () => {
+    expect(parseQuestionPresentations(JSON.stringify({
+      presentations: [{
+        questionId: 'question_budget',
+        title: 'Decide what to spend on the trip',
+        summary: 'The budget determines which hotels are affordable.',
+      }],
+    }), questions)).toEqual([
+      {
+        questionId: 'question_budget',
+        title: 'Decide what to spend on the trip',
+        summary: 'The budget determines which hotels are affordable.',
+      },
+      localQuestionPresentation(questions[1]),
+    ]);
+  });
+
+  it('removes the internal question wrapper from deterministic titles', () => {
+    const presentation = localQuestionPresentation({
+      id: 'question_wrapper',
+      question: 'What should we do about: the launch date?',
+      reason: 'The date affects the release plan.',
+      provenance: 'Graph node: launch_date',
+    });
+
+    expect(presentation.title).toBe('Find out the launch date');
+    expect(presentation.title).not.toContain('What should we do about');
+  });
+
+  it('keeps confirmation titles grammatical for yes/no questions', () => {
+    expect(localQuestionPresentation({
+      id: 'question_path',
+      question: 'Is there a funded path into applied AI?',
+      reason: 'The path affects long-term role fit.',
+      provenance: 'Graph node: path',
+    }).title).toBe('Confirm there is a funded path into applied AI');
+  });
+
+  it('uses supported career-demo details in deterministic fallback copy', () => {
+    const state = createCareerConflictDemoState();
+    const node = state.project.nodes.find((candidate) => candidate.id === CAREER_CONFLICT_QUESTION_ID)!;
+    const question = todayQuestionFromNode(state.project, node);
+    const presentation = localQuestionPresentation(question);
+    const suggestion = localQuestionSuggestion(question);
+
+    expect(presentation.title).toBe('Decide if the Northstar Labs role is worth pursuing');
+    expect(presentation.summary).toContain('70–80% frontend');
+    expect(suggestion.suggestedAnswer).toContain('financial stability');
+    expect(hasUsefulSuggestedAnswer(suggestion)).toBe(true);
+  });
+
   it('provides a safe deterministic fallback answer and existing importance reason', () => {
     expect(localQuestionSuggestion(questions[0])).toEqual({
       questionId: 'question_budget',

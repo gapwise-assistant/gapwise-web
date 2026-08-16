@@ -5,6 +5,8 @@ import { isDemoMode } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import {
   localQuestionSuggestions,
+  localQuestionPresentations,
+  parseQuestionPresentations,
   parseQuestionSuggestions,
   questionSuggestionRequestMessage,
 } from '@/lib/today/questionPlans';
@@ -20,6 +22,7 @@ const requestSchema = z.object({
     question: z.string().trim().min(1).max(300),
     reason: z.string().trim().max(500),
     provenance: z.string().trim().max(500),
+    presentationContext: z.array(z.string().trim().min(1).max(300)).max(6).optional(),
   })).min(1).max(3),
 });
 
@@ -47,6 +50,7 @@ export async function POST(request: Request) {
   if (isDemoMode()) {
     return NextResponse.json({
       suggestions: localQuestionSuggestions(questions),
+      presentations: localQuestionPresentations(questions),
       generatedBy: 'local-context',
     });
   }
@@ -59,6 +63,7 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       suggestions: parseQuestionSuggestions(result.answer, questions),
+      presentations: parseQuestionPresentations(result.answer, questions),
       generatedBy: 'gapswise-agent',
     });
   } catch (error) {
@@ -77,8 +82,9 @@ export async function POST(request: Request) {
     // Keep the page usable when the optional AI enrichment service is offline.
     return NextResponse.json({
       suggestions: localQuestionSuggestions(questions),
+      presentations: localQuestionPresentations(questions),
       generatedBy: 'local-fallback',
-      warning: 'AI answer suggestions are unavailable right now. Showing a local context prompt instead.',
+      warning: 'AI answer suggestions are unavailable right now. Showing deterministic question copy instead.',
       stage,
     });
   }

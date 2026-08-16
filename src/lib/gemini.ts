@@ -35,15 +35,15 @@ export async function processIdontKnowStrategy(
   const activeGap = updated.active_question;
   if (!activeGap) return { updatedProject: updated, strategyMessage: 'No active gap.' };
 
-  const targetNode = updated.nodes.find((n) => n.id === activeGap.node_id);
+  const targetNode = updated.nodes.find((node) => node.id === activeGap.node_id);
   let message = '';
 
   if (strategy === 'rag') {
     const matchingSource = updated.sources.find(
-      (s) =>
-        s.content.toLowerCase().includes('collaborative') ||
-        s.content.toLowerCase().includes('hackathon') ||
-        s.content.toLowerCase().includes('target')
+      (source) =>
+        source.content.toLowerCase().includes('collaborative') ||
+        source.content.toLowerCase().includes('hackathon') ||
+        source.content.toLowerCase().includes('target')
     );
     if (matchingSource && targetNode) {
       targetNode.status = 'RESOLVED';
@@ -68,10 +68,10 @@ export async function processIdontKnowStrategy(
       message = 'Searched all uploaded sources — no conclusive answer found in context inbox.';
     }
   } else if (strategy === 'experiment') {
-    const expNode: ClarityNode = {
+    const experimentNode: ClarityNode = {
       id: `exp_${Date.now()}`,
       type: 'EXPERIMENT',
-      text: `Minimal Experiment: Run 3 user interviews to validate target persona hypothesis.`,
+      text: 'Minimal Experiment: Run 3 user interviews to validate target persona hypothesis.',
       status: 'OPEN',
       confidence: 0.8,
       impact: 0.85,
@@ -82,12 +82,12 @@ export async function processIdontKnowStrategy(
       x: targetNode?.x ? targetNode.x + 60 : 450,
       y: targetNode?.y ? targetNode.y + 80 : 420,
     };
-    updated.nodes.push(expNode);
+    updated.nodes.push(experimentNode);
     message = 'Created EXPERIMENT node: "Run 3 target user interviews to resolve persona gap."';
   } else if (strategy === 'assumption') {
     if (targetNode) {
       targetNode.type = 'ASSUMPTION';
-      targetNode.text = `Temporary Assumption: Target user is a hackathon builder creating complex agentic projects under deadline pressure.`;
+      targetNode.text = 'Temporary Assumption: Target user is a hackathon builder creating complex agentic projects under deadline pressure.';
       targetNode.confidence = 0.5;
       targetNode.updated_at = new Date().toISOString();
     }

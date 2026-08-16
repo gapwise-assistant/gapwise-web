@@ -8,11 +8,15 @@ import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 interface AskGapswiseProps {
   userId: string;
   scope: AppScope;
   scopeLabel: string;
+  initialPrompt?: string;
+  autoSendInitialPrompt?: boolean;
+  onInitialPromptSent?: () => void;
   onViewSource?: (source: AskSource) => void;
 }
 
@@ -31,7 +35,7 @@ function messagesStorageKey(userId: string, scope: AppScope): string {
   return `gapwise_ask_messages_${userId}_${scopeStorageKey(scope)}`;
 }
 
-export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLabel, onViewSource }) => {
+export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLabel, initialPrompt, autoSendInitialPrompt, onInitialPromptSent, onViewSource }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -42,6 +46,9 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
   const [suggestionsWarning, setSuggestionsWarning] = useState('');
   const [error, setError] = useState('');
   const [selectedSources, setSelectedSources] = useState<AskSource[] | null>(null);
+  const initialPromptSentRef = useRef('');
+  const sourcesPanelRef = useRef<HTMLElement | null>(null);
+  useDismissibleModal(() => setSelectedSources(null), sourcesPanelRef, Boolean(selectedSources));
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const hasConversation = messages.length > 0;
   const openSource = (message: ChatMessage, sourceId: string) => {
@@ -65,6 +72,10 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
       setMessages([]);
     }
   }, [userId, scope]);
+
+  useEffect(() => {
+    if (typeof initialPrompt === 'string' && initialPrompt.trim()) setInput(initialPrompt);
+  }, [initialPrompt]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -164,6 +175,14 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    const prompt = initialPrompt?.trim() ?? '';
+    if (!autoSendInitialPrompt || !prompt || initialPromptSentRef.current === prompt) return;
+    initialPromptSentRef.current = prompt;
+    void sendMessage(prompt);
+    onInitialPromptSent?.();
+  }, [autoSendInitialPrompt, initialPrompt]);
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -372,7 +391,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
 
       {selectedSources && (
         <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">
-          <aside className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
+          <aside ref={sourcesPanelRef} className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <h2 className="text-lg font-bold text-slate-100">Why / Sources</h2>
               <button

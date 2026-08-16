@@ -41,6 +41,11 @@ Restart `npm run dev` after changing these values. A small `Demo mode` badge is
 shown in development. Real integrations remain available when
 `GAPSWISE_DEMO_MODE=false`.
 
+During local development, requests from `localhost`, `127.0.0.1`, and `::1`
+use the hardcoded `demo-user` identity and do not require Firebase login. This
+local identity is disabled in production; deployed hosts still require real
+Firebase authentication.
+
 ## Verify
 
 ```bash

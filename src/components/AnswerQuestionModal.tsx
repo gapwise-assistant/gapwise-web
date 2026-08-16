@@ -1,7 +1,28 @@
 'use client';
 
-import React, { FormEvent, useEffect, useState } from 'react';
-import { CheckCircle2, HelpCircle, Loader2, X } from 'lucide-react';
+import React, { FormEvent, useEffect, useRef, useState } from 'react';
+import { CheckCircle2, ChevronRight, FileText, HelpCircle, Loader2, Map, MessageCircle, MoreHorizontal, X } from 'lucide-react';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import type { QuestionWhyExplanation } from '@/lib/questions/whyQuestion';
+
+export interface AnswerQuestionDecisionOption {
+  id: string;
+  label: string;
+  text: string;
+  evidence?: Array<{ text: string; sourceNames?: string[] }>;
+}
+
+export interface AnswerQuestionDecisionSupport {
+  options: AnswerQuestionDecisionOption[];
+  currentPicture: string[];
+  recommendation?: {
+    optionId: string;
+    label: string;
+    explanation: string;
+  } | null;
+}
+
+type ResolveSection = 'know' | 'affects' | 'changes' | 'options' | 'sources';
 
 export interface AnswerQuestionTarget {
   nodeId?: string;
@@ -12,26 +33,125 @@ export interface AnswerQuestionTarget {
   intent?: 'confirm' | 'correct';
   initialAnswer?: string;
   historyTimestamp?: string;
+  decisionNodeId?: string;
+  decisionTitle?: string;
+  explanation?: QuestionWhyExplanation;
+  presentationTitle?: string;
+  presentationSummary?: string;
+  decisionSupport?: AnswerQuestionDecisionSupport;
+  answerSuggestion?: {
+    suggestedAnswer: string;
+    whyItMatters: string;
+  };
 }
 
 interface AnswerQuestionModalProps {
   target: AnswerQuestionTarget;
   onSubmit: (answer: string) => Promise<void>;
   onDontKnow?: () => void;
+  onNavigateToSource?: (sourceId: string) => void;
+  onViewDecisionMap?: (nodeId: string) => void;
+  onOpenChat?: (prompt: string) => void;
   onClose: () => void;
 }
 
-export function AnswerQuestionModal({ target, onSubmit, onDontKnow, onClose }: AnswerQuestionModalProps) {
+interface AccordionSectionProps {
+  id: ResolveSection;
+  label: string;
+  open: boolean;
+  onToggle: (id: ResolveSection) => void;
+  children: React.ReactNode;
+}
+
+function AccordionSection({ id, label, open, onToggle, children }: AccordionSectionProps) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={`${id}-content`}
+        onClick={() => onToggle(id)}
+        className="flex min-h-10 w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-slate-300 hover:bg-slate-800/50 hover:text-slate-100"
+      >
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform ${open ? 'rotate-90 text-cyan-300' : ''}`} aria-hidden="true" />
+        {label}
+      </button>
+      {open && <div id={`${id}-content`} className="border-t border-slate-800 px-3 pb-3 pt-2.5">{children}</div>}
+    </section>
+  );
+}
+
+function presentationImpact(value: string): string {
+  const blocked = value.match(/^Gapswise cannot confidently move to (.+) until this is answered\.?$/i);
+  if (blocked) return `This answer is needed before ${blocked[1].replace(/[.!?]+$/, '')}.`;
+  const decision = value.match(/^decision:\s*(.+)$/i);
+  if (decision) return `The decision “${decision[1].replace(/[.!?]+$/, '')}” may change.`;
+  const nextAction = value.match(/^next action:\s*(.+)$/i);
+  if (nextAction) return `The next action “${nextAction[1].replace(/[.!?]+$/, '')}” may change.`;
+  return value;
+}
+
+export function AnswerQuestionModal({
+  target,
+  onSubmit,
+  onDontKnow,
+  onNavigateToSource,
+  onViewDecisionMap,
+  onOpenChat,
+  onClose,
+}: AnswerQuestionModalProps) {
   const [answer, setAnswer] = useState(target.initialAnswer ?? '');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [openSections, setOpenSections] = useState<ResolveSection[]>([]);
+  const [selectedOptionId, setSelectedOptionId] = useState(target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '');
+  const [simulationOptionId, setSimulationOptionId] = useState('');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useDismissibleModal(onClose, dialogRef);
 
   useEffect(() => {
     setAnswer(target.initialAnswer ?? '');
     setError('');
     setSaved(false);
+    setOpenSections([]);
+    const recommendedOptionId = target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '';
+    setSelectedOptionId(recommendedOptionId);
+    setSimulationOptionId('');
+    setActionsOpen(false);
   }, [target]);
+
+  const knownFacts = Array.from(new Set([
+    ...(target.explanation?.whatGapswiseKnows ?? []),
+    ...(target.decisionSupport?.currentPicture ?? []),
+  ])).filter((fact) => fact.trim()).slice(0, 3);
+  const sources = (target.explanation?.evidence ?? []).filter((source) => source.title.trim());
+  const whatThisAffects = (target.explanation?.whatThisBlocks ?? []).filter((item) => item.trim());
+  const whatCouldChange = (target.explanation?.whatCouldChange ?? []).filter((item) => item.trim());
+  const decisionSupport = target.decisionSupport;
+  const hasOptions = Boolean(decisionSupport && (decisionSupport.options.length > 0 || decisionSupport.recommendation));
+  const selectedOption = decisionSupport?.options.find((option) => option.id === selectedOptionId);
+  const simulatedOption = decisionSupport?.options.find((option) => option.id === simulationOptionId);
+
+  const toggleSection = (section: ResolveSection) => {
+    setOpenSections((current) => current.includes(section)
+      ? current.filter((item) => item !== section)
+      : [...current, section]);
+  };
+
+  const discussPrompt = target.answerSuggestion?.suggestedAnswer
+    ? `Help me think through this suggestion for “${target.question}”: ${target.answerSuggestion.suggestedAnswer}. Use the project context and help me explore the trade-offs before I answer.`
+    : selectedOption
+      ? `Help me evaluate the option “${selectedOption.text}”${target.decisionTitle ? ` for the decision “${target.decisionTitle}”` : ''}. Use the project context and help me explore the trade-offs before I answer.`
+      : `Help me think through “${target.question}” using the project context, evidence, and unresolved questions.`;
+
+  const openSource = (sourceId: string) => {
+    if (!onNavigateToSource || sourceId.startsWith('gcal_')) return;
+    onNavigateToSource(sourceId);
+    onClose();
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -49,83 +169,121 @@ export function AnswerQuestionModal({ target, onSubmit, onDontKnow, onClose }: A
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
-      <div role="dialog" aria-modal="true" aria-labelledby="answer-question-title" className="w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/75 p-2 backdrop-blur-sm sm:items-center sm:p-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="answer-question-title" className="max-h-[calc(100dvh-1rem)] w-full max-w-xl overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl sm:p-6 sm:pb-6">
+        <header className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-400">
-              {target.mode === 'edit'
-                ? 'Edit your answer'
-                : target.intent === 'confirm'
-                  ? 'Confirm assumption'
-                  : target.intent === 'correct'
-                    ? 'Correct assumption'
-                    : 'Update Gapswise'}
-            </p>
-            <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold text-slate-100">
-              {target.question}
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Resolve</p>
+            <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold leading-relaxed text-slate-100">
+              {target.presentationTitle ?? target.question}
             </h2>
-            {target.reason && <p className="mt-2 text-xs text-slate-400">{target.reason}</p>}
+            {(target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason) && (
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">{target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason}</p>
+            )}
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {saved ? (
-          <div className="mt-5 rounded-lg border border-emerald-800 bg-emerald-950/40 p-4">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" />
-              <div>
-                <p className="text-sm font-bold text-emerald-200">Understanding updated</p>
-                <p className="mt-1 text-xs text-emerald-300/80">
-                  {target.mode === 'edit'
-                    ? 'Your answer was updated and Today will refresh from the updated context.'
-                    : 'This question is resolved and Today will refresh from the updated context.'}
-                </p>
-              </div>
-            </div>
-            <button type="button" onClick={onClose} className="mt-4 rounded-lg bg-emerald-400 px-4 py-2 text-xs font-bold text-slate-950">
-              Done
+          <div className="relative flex shrink-0 items-center gap-1">
+            {target.nodeId && onViewDecisionMap && target.explanation?.reasoningPath && (
+              <>
+                <button type="button" onClick={() => setActionsOpen((current) => !current)} aria-label="More actions" aria-haspopup="menu" aria-expanded={actionsOpen} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+                {actionsOpen && (
+                  <div role="menu" className="absolute right-9 top-0 z-20 w-48 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl">
+                    <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); onClose(); onViewDecisionMap(target.nodeId as string); }} className="flex min-h-10 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-slate-100">
+                      <Map className="h-3.5 w-3.5" /> View in Decision Map
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+            <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
+              <X className="h-4 w-4" />
             </button>
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="mt-5">
-            <label htmlFor="question-answer" className="text-xs font-bold text-slate-300">
-              {target.intent === 'confirm' ? 'Confirmation' : target.intent === 'correct' ? 'Correction' : 'Your answer'}
-            </label>
-            <textarea
-              id="question-answer"
-              value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
-              rows={5}
-              autoFocus
-              placeholder={target.intent === 'correct'
-                ? 'Explain what should replace this assumption.'
-                : 'Share the clarification or fact Gapswise should understand.'}
-              className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600"
-            />
-            {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              {onDontKnow ? (
-                <button type="button" onClick={onDontKnow} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200">
-                  <HelpCircle className="h-3.5 w-3.5" />
-                  I don't know yet
-                </button>
-              ) : <span />}
-              <div className="flex gap-2">
-                <button type="button" onClick={onClose} className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200">Cancel</button>
-                <button type="submit" disabled={!answer.trim() || isSaving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
-                  {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  {target.mode === 'edit'
-                    ? 'Update answer'
-                    : target.intent === 'confirm'
-                      ? 'Confirm'
-                      : target.intent === 'correct'
-                        ? 'Save correction'
-                        : 'Save answer'}
-                </button>
+        </header>
+
+        {saved ? (
+          <div className="mt-5 rounded-xl border border-emerald-800 bg-emerald-950/30 p-4">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+              <div>
+                <p className="text-sm font-bold text-emerald-200">Updated</p>
+                <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">Gapswise now understands this question as resolved. The related decision and Today recommendations have been refreshed.</p>
               </div>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={onClose} className="rounded-lg bg-emerald-400 px-4 py-2 text-xs font-bold text-slate-950">Done</button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+            <div className="space-y-1.5">
+              {knownFacts.length > 0 && (
+                <AccordionSection id="know" label="What we know" open={openSections.includes('know')} onToggle={toggleSection}>
+                  <ul className="space-y-2">{knownFacts.map((fact) => <li key={fact} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />{fact}</li>)}</ul>
+                </AccordionSection>
+              )}
+              {whatThisAffects.length > 0 && (
+                <AccordionSection id="affects" label="What this affects" open={openSections.includes('affects')} onToggle={toggleSection}>
+                  <ul className="space-y-2">{whatThisAffects.slice(0, 3).map((item) => <li key={item} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-300" />{presentationImpact(item)}</li>)}</ul>
+                </AccordionSection>
+              )}
+              {whatCouldChange.length > 0 && (
+                <AccordionSection id="changes" label="What your answer could change" open={openSections.includes('changes')} onToggle={toggleSection}>
+                  <ul className="space-y-2">{whatCouldChange.slice(0, 3).map((item) => <li key={item} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />{presentationImpact(item)}</li>)}</ul>
+                </AccordionSection>
+              )}
+              {hasOptions && decisionSupport && (
+                <AccordionSection id="options" label="Decision options" open={openSections.includes('options')} onToggle={toggleSection}>
+                  <div className="space-y-3">
+                    {decisionSupport.recommendation && <div className="rounded-lg border border-cyan-900/70 bg-cyan-950/20 p-3"><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Current recommendation · {decisionSupport.recommendation.label}</p><p className="mt-1 text-xs leading-relaxed text-slate-300">{decisionSupport.recommendation.explanation}</p></div>}
+                    {decisionSupport.options.slice(0, decisionSupport.recommendation ? 3 : 4).map((option) => (
+                      <label key={option.id} className={`block cursor-pointer rounded-lg border p-3 transition ${selectedOptionId === option.id ? 'border-cyan-700 bg-cyan-950/20' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>
+                        <span className="flex items-start gap-2">
+                          <input type="radio" name="decision-option" value={option.id} checked={selectedOptionId === option.id} onChange={() => { setSelectedOptionId(option.id); setSimulationOptionId(''); }} className="mt-0.5 accent-cyan-400" />
+                          <span className="min-w-0"><span className="block text-xs font-bold text-slate-100">{option.label}</span><span className="mt-1 block text-xs leading-relaxed text-slate-400">{option.text}</span>{option.evidence && option.evidence.length > 0 && <span className="mt-2 block text-[11px] leading-relaxed text-slate-500">Evidence: {option.evidence[0].text}{option.evidence[0].sourceNames && option.evidence[0].sourceNames.length > 0 ? ` · ${option.evidence[0].sourceNames[0]}` : ''}</span>}</span>
+                        </span>
+                      </label>
+                    ))}
+                    {selectedOption && <button type="button" onClick={() => setSimulationOptionId(selectedOption.id)} className="rounded-lg border border-cyan-800 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600">Simulate on Decision Map</button>}
+                    {simulatedOption && <div className="rounded-lg border border-indigo-800/70 bg-indigo-950/20 p-3" role="status"><p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-indigo-300">Decision Map preview</p><p className="mt-1 text-xs font-semibold text-slate-200">{target.decisionTitle ?? 'The related decision'} would become: {simulatedOption.text}</p><p className="mt-1 text-[11px] text-indigo-200">Selected path: {simulatedOption.label}</p><p className="mt-2 text-[11px] text-slate-500">This is a simulation only; your decision map has not been changed.</p></div>}
+                  </div>
+                </AccordionSection>
+              )}
+              {sources.length > 0 && (
+                <AccordionSection id="sources" label="Sources" open={openSections.includes('sources')} onToggle={toggleSection}>
+                  <div className="space-y-1.5">{sources.slice(0, 4).map((source) => source.sourceId && onNavigateToSource && !source.sourceId.startsWith('gcal_') ? (
+                    <button key={`${source.sourceId}-${source.title}`} type="button" onClick={() => openSource(source.sourceId as string)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-cyan-200 hover:border-cyan-700"><FileText className="h-3.5 w-3.5 shrink-0" />{source.title}<ChevronRight className="ml-auto h-3.5 w-3.5" /></button>
+                  ) : <div key={`${source.sourceId ?? source.title}-${source.excerpt}`} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300"><FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />{source.title}</div>)}</div>
+                </AccordionSection>
+              )}
+            </div>
+
+            <section>
+              <label htmlFor="question-answer" className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Your answer</label>
+              <textarea
+                id="question-answer"
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                rows={4}
+                autoFocus
+                placeholder={target.intent === 'correct' ? 'Explain what should replace this assumption.' : 'Type your answer...'}
+                className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600"
+              />
+            </section>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              {onOpenChat && <button type="button" onClick={() => onOpenChat(discussPrompt)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"><MessageCircle className="h-3.5 w-3.5" /> Discuss with Gapswise</button>}
+              {onDontKnow && <button type="button" onClick={onDontKnow} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200"><HelpCircle className="h-3.5 w-3.5" /> I don't know yet</button>}
+            </div>
+
+            {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
+
+            <div className="flex justify-end border-t border-slate-800 pt-4">
+              <button type="submit" disabled={!answer.trim() || isSaving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
+                  {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Save answer
+              </button>
             </div>
           </form>
         )}

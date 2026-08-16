@@ -8,6 +8,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   userId: string | null;
   demoMode: boolean;
+  localAuth: boolean;
   isReady: boolean;
   error: string;
   signOut: () => Promise<void>;
@@ -18,6 +19,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [demoMode, setDemoMode] = useState(false);
+  const [localAuth, setLocalAuth] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState('');
 
@@ -28,13 +30,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fetch('/api/runtime')
       .then(async (response) => {
         if (!response.ok) throw new Error('Runtime configuration could not be loaded.');
-        return response.json() as Promise<{ demoMode?: boolean }>;
+        return response.json() as Promise<{ demoMode?: boolean; localAuth?: boolean }>;
       })
       .then((runtime) => {
         if (disposed) return;
-        if (runtime.demoMode === true) {
-          setDemoMode(true);
-          setUser({ uid: 'demo-user', displayName: 'Local demo', email: '' });
+        if (runtime.demoMode === true || runtime.localAuth === true) {
+          setDemoMode(runtime.demoMode === true);
+          setLocalAuth(runtime.localAuth === true);
+          setUser({ uid: 'demo-user', displayName: runtime.localAuth ? 'Local development user' : 'Local demo', email: '' });
           setIsReady(true);
           return;
         }
@@ -65,12 +68,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     user,
     userId: user?.uid ?? null,
     demoMode,
+    localAuth,
     isReady,
     error,
     signOut: async () => {
-      if (!demoMode) await signOutFromGoogle();
+      if (!demoMode && !localAuth) await signOutFromGoogle();
     },
-  }), [demoMode, error, isReady, user]);
+  }), [demoMode, error, isReady, localAuth, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

@@ -55,7 +55,7 @@ function directNodeForQuestion(project: Project, question: TodayQuestion): Clari
 }
 
 function sourceExcerpt(source: ContextSource): string {
-  return compactText(source.content || source.extraction_summary || 'This source was checked for the question.');
+  return compactText(source.extraction_summary || source.content || 'This source was checked for the question.', 160);
 }
 
 function collectEvidence(project: Project, nodes: ClarityNode[]): QuestionWhyEvidence[] {

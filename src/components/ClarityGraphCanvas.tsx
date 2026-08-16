@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Filter,
@@ -15,6 +15,7 @@ import { ClarityNode, NodeType, Project } from '@/types/clarity';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { buildDecisionPath } from '@/lib/graph/constellation';
 import type { GraphViewport } from '@/components/ConstellationGraph';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
   ssr: false,
@@ -82,18 +83,16 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isInspectorCollapsed, setIsInspectorCollapsed] = useState(false);
   const [viewport, setViewport] = useState<GraphViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const fullscreenPanelRef = useRef<HTMLDivElement | null>(null);
+
+  useDismissibleModal(() => setIsFullscreen(false), fullscreenPanelRef, isFullscreen);
 
   useEffect(() => {
     if (!isFullscreen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsFullscreen(false);
-    };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', handleKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isFullscreen]);
 
@@ -160,7 +159,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </div>
           {selectedNode.type === 'DECISION' && onReviewDecision && (
             <button type="button" onClick={() => onReviewDecision(selectedNode)} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500">
-              Review decision
+              Open decision workspace
             </button>
           )}
           <div className="space-y-2 border-t border-slate-800 pt-3">
@@ -229,7 +228,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       aria-modal={isFullscreen || undefined}
       aria-labelledby={isFullscreen ? 'decision-map-title' : undefined}
     >
-      <div className={isFullscreen ? 'flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-cyan-900/70 bg-slate-950 shadow-2xl' : 'space-y-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl sm:p-5'}>
+      <div ref={isFullscreen ? fullscreenPanelRef : undefined} className={isFullscreen ? 'flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-cyan-900/70 bg-slate-950 shadow-2xl' : 'space-y-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl sm:p-5'}>
         <header className="flex shrink-0 flex-col gap-4 border-b border-slate-800 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex items-center gap-2">

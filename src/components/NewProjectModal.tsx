@@ -1,8 +1,9 @@
 'use client';
 
-import React, { FormEvent, useState } from 'react';
+import React, { FormEvent, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 interface NewProjectModalProps {
   onCreateProject: (input: CreateProjectInput) => Promise<void>;
@@ -16,6 +17,9 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
   const [deadline, setDeadline] = useState('');
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const dialogRef = useRef<HTMLFormElement | null>(null);
+
+  useDismissibleModal(onClose, dialogRef);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -38,6 +42,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
       <form
         onSubmit={handleSubmit}
+        ref={dialogRef}
         className="w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-2xl"
       >
         <div className="flex items-start justify-between gap-4">

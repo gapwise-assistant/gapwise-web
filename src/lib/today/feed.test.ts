@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTodayFeed } from '@/lib/today/feed';
+import { buildTodayFeed, compactQuestionContext } from '@/lib/today/feed';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { todayQuestionFromNode } from '@/lib/today/sections';
@@ -66,5 +66,17 @@ describe('Today primary feed', () => {
 
     expect(feed[0].itemType).toBe('REMINDER');
     expect(feed[0].recommendation.score).toBeDefined();
+  });
+
+  it('turns graph reasons into short natural question context', () => {
+    const project = createGoldenDemoProject();
+    const questionNode = project.nodes.find((node) => node.id === 'unknown_target_user')!;
+    const question = todayQuestionFromNode(project, questionNode);
+    const feedItem = buildTodayFeed([candidate(project, 'rec_question', [questionNode.id])], [question], project)[0];
+
+    expect(compactQuestionContext(feedItem, project)).toBe('Your answer will shape the next project decision.');
+
+    question.question = 'Does this primarily frontend role remain acceptable given your preference to avoid frontend-heavy roles?';
+    expect(compactQuestionContext({ ...feedItem, question }, project)).toBe('Conflicts with your role preferences.');
   });
 });

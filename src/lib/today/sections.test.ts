@@ -4,6 +4,7 @@ import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retriev
 import { buildComingUp, buildTodayQuestions } from '@/lib/today/sections';
 import { AttentionCandidate, DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
+import { formatCalendarSchedule } from '@/lib/google/calendarFormatting';
 
 function briefWithContextPack(contextPack: ContextPack): DailyBrief {
   const recommendation: AttentionCandidate = {
@@ -38,7 +39,7 @@ function briefWithContextPack(contextPack: ContextPack): DailyBrief {
 }
 
 describe('Today sections', () => {
-  it('surfaces at most three deterministic questions with provenance', () => {
+  it('surfaces at most four deterministic questions with provenance', () => {
     const project = createGoldenDemoProject();
     project.nodes.push({
       id: 'unknown_extra',
@@ -65,7 +66,7 @@ describe('Today sections', () => {
       now: new Date('2026-08-11T20:00:00Z'),
     });
 
-    expect(questions.length).toBeLessThanOrEqual(3);
+    expect(questions.length).toBeLessThanOrEqual(4);
     expect(questions[0].question).toContain('primary target persona');
     expect(questions[0].provenance).toMatch(/src_|Graph node/);
   });
@@ -183,8 +184,10 @@ describe('Today sections', () => {
     expect(comingUp).toEqual([
       expect.objectContaining({
         title: 'Gapswise calendar test',
-        provenance: 'Source: Google Calendar',
+        time: formatCalendarSchedule('2026-08-11T21:00:00Z', '2026-08-11T21:30:00Z', now),
+        provenance: 'Google Calendar',
       }),
     ]);
+    expect(buildComingUp(briefWithContextPack(contextPack), now, 4, ['gcal_commitment_cal_soon'])).toEqual([]);
   });
 });

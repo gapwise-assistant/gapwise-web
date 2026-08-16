@@ -224,13 +224,18 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
     ...options.flatMap((option) => option.sourceIds),
     ...constraints.flatMap((node) => node.source_refs),
     ...assumptionsRisks.flatMap((node) => node.source_refs),
+    ...remainingQuestions.flatMap((question) => question.node.source_refs),
   ]);
   const sources = activeContextSources(project).filter((source) => relevantSourceIds.includes(source.id));
   const recommendation = buildRecommendation(options, remainingQuestions.length > 0);
   const currentPicture = recommendation
     ? [`Gapswise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]
     : remainingQuestions.length
-      ? [`${remainingQuestions[0].node.text} still needs to be resolved before this decision can be made with confidence.`]
+      ? decision.why_it_matters?.[0]
+        ? [decision.why_it_matters[0]]
+        : assumptionsRisks.length
+          ? [`This decision is shaped by ${assumptionsRisks[0].text.replace(/[.!?]+$/, '')}.`]
+          : ['This decision still needs an answer before it can be made with confidence.']
       : supportingEvidence.length
         ? ['The decision has some supporting context, but no option has enough clearly separated evidence for a recommendation.']
         : ['There is not enough structured context to recommend an option yet.'];

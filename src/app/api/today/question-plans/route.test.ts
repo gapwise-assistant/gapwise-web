@@ -36,7 +36,10 @@ describe('POST /api/today/question-plans', () => {
   it('uses the existing ADK flow once for contextual answer suggestions', async () => {
     process.env.GAPSWISE_DEMO_MODE = 'false';
     vi.mocked(askGapswise).mockResolvedValue({
-      answer: JSON.stringify({ suggestions: [{ questionId: question.id, suggestedAnswer: 'The budget is not recorded yet.', whyItMatters: 'It controls the hotel decision.' }] }),
+      answer: JSON.stringify({
+        suggestions: [{ questionId: question.id, suggestedAnswer: 'The budget is not recorded yet.', whyItMatters: 'It controls the hotel decision.' }],
+        presentations: [{ questionId: question.id, title: 'Decide what to spend on the trip', summary: 'The budget determines which hotels are affordable.' }],
+      }),
       sessionId: 'today_plans_session',
       sources: [],
     });
@@ -53,6 +56,7 @@ describe('POST /api/today/question-plans', () => {
     await expect(response.json()).resolves.toMatchObject({
       generatedBy: 'gapswise-agent',
       suggestions: [{ questionId: 'question_budget', suggestedAnswer: 'The budget is not recorded yet.', whyItMatters: 'It controls the hotel decision.' }],
+      presentations: [{ questionId: 'question_budget', title: 'Decide what to spend on the trip', summary: 'The budget determines which hotels are affordable.' }],
     });
   });
 
@@ -63,7 +67,7 @@ describe('POST /api/today/question-plans', () => {
 
     expect(response.status).toBe(200);
     expect(askGapswise).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toMatchObject({ generatedBy: 'local-context', suggestions: [{ questionId: 'question_budget' }] });
+    await expect(response.json()).resolves.toMatchObject({ generatedBy: 'local-context', suggestions: [{ questionId: 'question_budget' }], presentations: [{ questionId: 'question_budget' }] });
   });
 
   it('keeps Today usable with a labeled local fallback when the agent is unavailable', async () => {
@@ -78,6 +82,7 @@ describe('POST /api/today/question-plans', () => {
       stage: 'agent-unavailable',
       warning: expect.stringContaining('AI answer suggestions are unavailable'),
       suggestions: [{ questionId: 'question_budget' }],
+      presentations: [{ questionId: 'question_budget' }],
     });
   });
 });

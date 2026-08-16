@@ -29,10 +29,19 @@ export async function buildContextPackForUser(
     durableMemories = await listMemories(input.userId, input.profile);
   }
 
-  if (isDemoMode()) {
-    const demoEvents = input.project.id === CAREER_CONFLICT_DEMO_ID
-      ? demoCareerConflictCalendarEvents(now)
-      : demoCalendarEvents(now);
+  if (input.project.id === CAREER_CONFLICT_DEMO_ID) {
+    calendarCommitments = calendarEventsToCommitmentNodes(
+      demoCareerConflictCalendarEvents(now),
+      now,
+      10
+    );
+    if (input.scope?.type === 'project') {
+      calendarCommitments = calendarCommitments.filter((commitment) =>
+        isTextRelevantToProject(commitment.text, input.project)
+      );
+    }
+  } else if (isDemoMode()) {
+    const demoEvents = demoCalendarEvents(now);
     calendarCommitments = calendarEventsToCommitmentNodes(demoEvents, now, 10);
     if (input.scope?.type === 'project') {
       calendarCommitments = calendarCommitments.filter((commitment) =>

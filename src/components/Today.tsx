@@ -8,14 +8,23 @@ import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/at
 import { FeedbackEvent, FeedbackRating } from '@/types/feedback';
 import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
 import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
-import { buildComingUp, buildTodayQuestions, TodayQuestion } from '@/lib/today/sections';
-import { localQuestionSuggestions, TodayQuestionSuggestion } from '@/lib/today/questionPlans';
-import { buildTodayFeed } from '@/lib/today/feed';
-import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
-import { RecommendationCard } from '@/components/RecommendationCard';
+import { buildComingUp, buildTodayQuestions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
+import {
+  hasUsefulSuggestedAnswer,
+  localQuestionPresentation,
+  localQuestionPresentations,
+  localQuestionSuggestions,
+  parseQuestionPresentations,
+  TodayQuestionPresentation,
+  TodayQuestionSuggestion,
+} from '@/lib/today/questionPlans';
+import { buildTodayFeed, compactQuestionContext } from '@/lib/today/feed';
+import { RecommendationCard, SnoozeOption } from '@/components/RecommendationCard';
 import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
 import { authFetch } from '@/lib/auth/client';
+import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
+import { OpenQuestions, OpenQuestionRowItem } from '@/components/OpenQuestions';
 
 interface TodayProps {
   userId: string;
@@ -33,12 +42,62 @@ interface TodayProps {
   onViewReasoningPath?: (nodeId: string) => void;
 }
 
+function decisionForQuestion(project: Project, nodeId: string): string | undefined {
+  const edge = project.edges.find((candidate) =>
+    ['blocks', 'depends_on', 'affects', 'informs'].includes(candidate.type) &&
+    (candidate.source === nodeId || candidate.target === nodeId) &&
+    project.nodes.some((node) => node.id === (candidate.source === nodeId ? candidate.target : candidate.source) && node.type === 'DECISION')
+  );
+  if (!edge) return undefined;
+  const otherId = edge.source === nodeId ? edge.target : edge.source;
+  return project.nodes.find((node) => node.id === otherId && node.type === 'DECISION')?.id;
+}
+
+function answeredQuestionItems(project: Project): OpenQuestionRowItem[] {
+  const resolvedQuestions = new Map(
+    project.nodes
+      .filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type) && node.status === 'RESOLVED')
+      .map((node) => [node.text, node])
+  );
+  const seen = new Set<string>();
+  return project.history
+    .slice()
+    .reverse()
+    .flatMap((historyItem) => {
+      const node = resolvedQuestions.get(historyItem.question);
+      if (!node || seen.has(node.id)) return [];
+      seen.add(node.id);
+      const question = todayQuestionFromNode(project, node);
+      question.mode = 'edit';
+      question.initialAnswer = historyItem.answer;
+      question.historyTimestamp = historyItem.timestamp;
+      question.projectId = project.id;
+      return [{
+        id: `answered:${node.id}`,
+        question,
+        context: 'Answered and saved to project context.',
+        decisionNodeId: decisionForQuestion(project, node.id),
+        answered: true,
+        answer: historyItem.answer,
+      }];
+    });
+}
+
+function questionSectionSummary(items: OpenQuestionRowItem[], project: Project): string {
+  const decisionId = items.find((item) => !item.answered)?.decisionNodeId;
+  const decision = decisionId ? project.nodes.find((node) => node.id === decisionId) : undefined;
+  if (!decision) return 'Resolve these before the next important project decision.';
+  if (/interview/i.test(decision.text)) return 'Resolve these before continuing the interview process.';
+  const decisionText = decision.text.replace(/[.?!]+$/, '').replace(/^Decide whether\s+/i, 'deciding whether ');
+  return `Resolve these before ${decisionText.charAt(0).toLowerCase()}${decisionText.slice(1)}.`;
+}
+
 export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
-  const [selectedQuestion, setSelectedQuestion] = useState<TodayQuestion | null>(null);
   const [questionSuggestions, setQuestionSuggestions] = useState<Record<string, TodayQuestionSuggestion>>({});
+  const [questionPresentations, setQuestionPresentations] = useState<Record<string, TodayQuestionPresentation>>({});
   const [questionSuggestionSource, setQuestionSuggestionSource] = useState<'gapswise-agent' | 'local-context' | 'local-fallback'>('local-context');
   const [questionSuggestionWarning, setQuestionSuggestionWarning] = useState('');
   const [hiddenStatuses, setHiddenStatuses] = useState<Record<string, RecommendationStatus>>({});
@@ -87,21 +146,62 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const questions = buildTodayQuestions({ project, brief });
   const feedItems = useMemo(() => buildTodayFeed(recommendations, questions, project), [recommendations, questions, project]);
   const feedQuestions = feedItems.flatMap((item) => item.question ? [item.question] : []);
-  const comingUp = buildComingUp(brief);
-  const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })));
-  const selectedQuestionWhy = selectedQuestion ? buildQuestionWhyExplanation(project, selectedQuestion) : null;
-  const selectedReasoningPathNodeId = selectedQuestionWhy?.reasoningPath?.nodeIds[0] ?? null;
+  const openQuestionItems = feedItems
+    .filter((item) => item.itemType === 'QUESTION' && item.question)
+    .map((item, index) => {
+      const presentation = questionPresentations[item.question!.id];
+      const suggestion = questionSuggestions[item.question!.id];
+      const question = presentation
+        ? { ...item.question!, presentationTitle: presentation.title, presentationSummary: presentation.summary }
+        : item.question!;
+      return {
+        id: item.recommendation.id,
+        question: suggestion && hasUsefulSuggestedAnswer(suggestion)
+          ? { ...question, answerSuggestion: suggestion }
+          : question,
+        context: compactQuestionContext(item, project),
+        decisionNodeId: item.decisionNodeId,
+        recommendation: item.recommendation,
+        priority: index === 0,
+      } satisfies OpenQuestionRowItem;
+    });
+  const answeredItems = useMemo(() => answeredQuestionItems(project), [project]);
+  const answeredItemsWithPresentation = useMemo(() => answeredItems.map((item) => {
+    const presentation = localQuestionPresentation(item.question);
+    return {
+      ...item,
+      question: {
+        ...item.question,
+        presentationTitle: presentation.title,
+        presentationSummary: presentation.summary,
+      },
+    } satisfies OpenQuestionRowItem;
+  }), [answeredItems]);
+  const questionItems: OpenQuestionRowItem[] = [...openQuestionItems, ...answeredItemsWithPresentation];
+  const nonQuestionItems = feedItems.filter((item) => item.itemType !== 'QUESTION');
+  const reminderCount = nonQuestionItems.filter((item) => item.itemType === 'REMINDER').length;
+  const openQuestionCount = questionItems.filter((item) => !item.answered).length;
+  const promotedCommitmentIds = new Set(
+    feedItems
+      .filter((item) => item.itemType === 'REMINDER' && item.calendarCommitmentId)
+      .map((item) => item.calendarCommitmentId as string)
+  );
+  const comingUp = buildComingUp(brief, new Date(), 4, promotedCommitmentIds);
+  const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })));
 
   React.useEffect(() => {
     if (!feedQuestions.length) {
       setQuestionSuggestions({});
+      setQuestionPresentations({});
       setQuestionSuggestionSource('local-context');
       setQuestionSuggestionWarning('');
       return;
     }
 
     const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(feedQuestions).map((suggestion) => [suggestion.questionId, suggestion]));
+    const fallbackPresentations = Object.fromEntries(localQuestionPresentations(feedQuestions).map((presentation) => [presentation.questionId, presentation]));
     setQuestionSuggestions(fallbackSuggestions);
+    setQuestionPresentations(fallbackPresentations);
     setQuestionSuggestionSource('local-context');
     setQuestionSuggestionWarning('');
     const controller = new AbortController();
@@ -115,7 +215,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         userId,
         ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
         scopeLabel,
-        questions: feedQuestions.map(({ id, question, reason, provenance }) => ({ id, question, reason, provenance })),
+        questions: feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })),
       }),
       signal: controller.signal,
     })
@@ -126,6 +226,10 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       .then((body) => {
         const suggestions = Array.isArray(body.suggestions) ? body.suggestions as TodayQuestionSuggestion[] : [];
         setQuestionSuggestions(Object.fromEntries(suggestions.map((suggestion) => [suggestion.questionId, suggestion])));
+        const presentations = Array.isArray(body.presentations)
+          ? parseQuestionPresentations(JSON.stringify({ presentations: body.presentations }), feedQuestions)
+          : localQuestionPresentations(feedQuestions);
+        setQuestionPresentations(Object.fromEntries(presentations.map((presentation) => [presentation.questionId, presentation])));
         setQuestionSuggestionSource(
           body.generatedBy === 'gapswise-agent'
             ? 'gapswise-agent'
@@ -170,9 +274,33 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     }
   };
 
+  const handleSnooze = (recommendation: AttentionCandidate, option: SnoozeOption) => {
+    const now = new Date();
+    const commitment = recommendation.context_pack.upcomingCommitments.find((node) =>
+      recommendation.source_node_ids.includes(node.id)
+    );
+    const startValue = commitment ? calendarTimestampFromText(commitment.text, 'Starts') : undefined;
+    const startTime = startValue ? new Date(startValue).getTime() : Number.NaN;
+    const suppressUntil = option === 'before_event' && Number.isFinite(startTime)
+      ? new Date(Math.max(now.getTime() + 60 * 1000, startTime - 10 * 60 * 1000)).toISOString()
+      : undefined;
+    const event = createFeedbackEvent({
+      userId,
+      targetType: 'recommendation',
+      targetId: recommendation.id,
+      rating: 'not_now',
+      suppressUntil,
+      suppressMinutes: suppressUntil ? undefined : option === 'before_event' ? 15 : option,
+      metadata: { snooze: option },
+    });
+    onFeedbackEvent(event);
+    updateRecommendationStatus(recommendation.id, 'not_now');
+    setHiddenStatuses((current) => ({ ...current, [recommendation.id]: 'not_now' }));
+  };
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
-      <div className="border-b border-slate-800 pb-5">
+    <div className="mx-auto max-w-[1080px] space-y-5 px-3 py-4 sm:px-6 sm:py-6">
+      <div className="border-b border-slate-800 pb-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="shrink-0 rounded-xl border border-cyan-800 bg-cyan-950 p-2.5 text-cyan-300">
@@ -182,68 +310,90 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
               <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
               <p className="text-xs text-slate-400">
-                {feedItems.length} items for {brief.period}
+                {reminderCount} reminder{reminderCount === 1 ? '' : 's'} · {openQuestionCount} question{openQuestionCount === 1 ? '' : 's'} · {scope.type === 'project' ? project.title : 'Everything'}
               </p>
-              {scope.type === 'project' && (
-                <p className="mt-1 text-xs font-semibold text-cyan-300">Focused on: {project.title}</p>
-              )}
             </div>
           </div>
 
           <button
             type="button"
             onClick={() => setRefreshCounter((value) => value + 1)}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300 sm:min-h-0 sm:w-auto"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-400 hover:border-cyan-700 hover:text-cyan-300"
+            aria-label="Refresh"
+            title="Refresh"
           >
-            <RefreshCw className="w-4 h-4" />
-            Refresh
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      <section className="space-y-4">
-        <h2 className="text-lg font-extrabold text-slate-100">What deserves attention</h2>
-        {questionSuggestionWarning && (
-          <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
-        )}
-        {feedItems.length > 0 ? (
-          <div className="space-y-4">
-            {feedItems.map((item) => (
+      {nonQuestionItems.length > 0 && (
+        <section className="space-y-2">
+          <div className="space-y-2">
+            {nonQuestionItems.map((item) => (
               <RecommendationCard
                 key={item.recommendation.id}
                 recommendation={item.recommendation}
                 itemType={item.itemType}
                 title={item.title}
                 description={item.description}
+                calendarStart={item.calendarStart}
+                calendarEnd={item.calendarEnd}
+                calendarSource={item.calendarSource}
                 question={item.question}
                 decisionNodeId={item.decisionNodeId}
                 questionSuggestion={item.question ? questionSuggestions[item.question.id] : undefined}
                 questionSuggestionSource={questionSuggestionSource}
                 onOpenWhy={setSelectedRecommendation}
-                onOpenQuestionWhy={setSelectedQuestion}
                 onAnswerQuestion={onAnswerQuestion}
                 onReviewDecision={onReviewDecision}
                 onFeedback={handleFeedback}
+                onSnooze={handleSnooze}
               />
             ))}
           </div>
-        ) : (
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
-            <h3 className="text-sm font-bold text-slate-100">Nothing needs your attention right now</h3>
-            <p className="mt-2 text-xs text-slate-500">Refresh after adding new context or memory.</p>
-          </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      <section className="space-y-4">
-        <h2 className="text-lg font-extrabold text-slate-100">Coming up</h2>
+      {questionSuggestionWarning && (
+        <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
+      )}
+
+      {questionItems.length > 0 && (
+        <OpenQuestions
+          items={questionItems}
+          summary={questionSectionSummary(questionItems, project)}
+          onAnswer={(question) => onAnswerQuestion?.(question)}
+          onSnooze={handleSnooze}
+        />
+      )}
+
+      {feedItems.length === 0 && questionItems.length === 0 && (
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
+          <h3 className="text-sm font-bold text-slate-100">Nothing needs your attention right now</h3>
+          <p className="mt-2 text-xs text-slate-500">Refresh after adding new context or memory.</p>
+        </div>
+      )}
+
+      <section className="space-y-2">
+        <h2 className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Coming up</h2>
         {comingUp.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
             {comingUp.map((commitment) => (
-              <article key={commitment.id} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <p className="text-sm font-bold text-slate-100">{commitment.title}</p>
-                <p className="mt-1 text-xs text-slate-400">{commitment.time}</p>
-                <p className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-cyan-400">{commitment.provenance}</p>
+              <article
+                key={commitment.id}
+                role={onViewReasoningPath ? 'button' : undefined}
+                tabIndex={onViewReasoningPath ? 0 : undefined}
+                onClick={onViewReasoningPath ? () => onViewReasoningPath(commitment.id) : undefined}
+                onKeyDown={onViewReasoningPath ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onViewReasoningPath(commitment.id); } } : undefined}
+                className={`flex items-center gap-4 border-b border-slate-800 px-3 py-3 last:border-b-0 sm:px-4 ${onViewReasoningPath ? 'cursor-pointer hover:bg-slate-800/40' : ''}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-slate-400">{commitment.time}</p>
+                  <p className="mt-1 truncate text-sm font-bold text-slate-100">{commitment.title}</p>
+                  <p className="mt-1 text-[10px] font-semibold text-slate-500">{commitment.provenance}</p>
+                </div>
+                <span className="shrink-0 text-lg text-slate-500" aria-hidden="true">→</span>
               </article>
             ))}
           </div>
@@ -258,120 +408,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         recommendation={selectedRecommendation}
         onClose={() => setSelectedRecommendation(null)}
       />
-      {selectedQuestion && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
-          <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-none sm:rounded-xl sm:p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Decision value</p>
-                <h2 className="mt-1 text-sm font-bold text-slate-100">Why this matters</h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedQuestion(null)}
-                className="min-h-11 min-w-11 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0 sm:min-w-0"
-                aria-label="Close question explanation"
-              >
-                Close
-              </button>
-            </div>
-            <p className="mt-3 text-sm font-semibold leading-relaxed text-slate-200">{selectedQuestion.question}</p>
-
-            {selectedQuestionWhy && (
-              <div className="mt-5 space-y-5">
-                <section>
-                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-cyan-300">Why this matters</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-slate-300">{selectedQuestionWhy.whyThisMatters}</p>
-                </section>
-
-                {selectedQuestionWhy.whatGapswiseKnows.length > 0 && (
-                  <section>
-                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What Gapswise already knows</h3>
-                    <ul className="mt-2 space-y-2">
-                      {selectedQuestionWhy.whatGapswiseKnows.map((item) => (
-                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                {selectedQuestionWhy.whatThisBlocks.length > 0 && (
-                  <section>
-                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What this is blocking</h3>
-                    <ul className="mt-2 space-y-2">
-                      {selectedQuestionWhy.whatThisBlocks.map((item) => (
-                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                {selectedQuestionWhy.whatCouldChange.length > 0 && (
-                  <section>
-                    <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">What could change if you answer</h3>
-                    <ul className="mt-2 space-y-2">
-                      {selectedQuestionWhy.whatCouldChange.map((item) => (
-                        <li key={item} className="text-xs leading-relaxed text-slate-300">• {item}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                <section>
-                  <h3 className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Evidence checked</h3>
-                  {selectedQuestionWhy.evidence.length ? (
-                    <div className="mt-2 space-y-2">
-                      {selectedQuestionWhy.evidence.map((evidence) => (
-                        evidence.sourceId && onNavigateToSource && !evidence.sourceId.startsWith('gcal_') ? (
-                          <button
-                            key={evidence.sourceId}
-                            type="button"
-                            onClick={() => {
-                              onNavigateToSource(evidence.sourceId as string);
-                              setSelectedQuestion(null);
-                            }}
-                            className="block min-h-11 w-full rounded-lg border border-slate-800 bg-slate-950 p-3 text-left hover:border-cyan-700"
-                          >
-                            <span className="block text-xs font-semibold text-cyan-300">{evidence.title}</span>
-                            <span className="mt-1 block text-xs leading-relaxed text-slate-400">{evidence.excerpt}</span>
-                          </button>
-                        ) : (
-                          <div key={`${evidence.title}-${evidence.excerpt}`} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-                            <span className="block text-xs font-semibold text-slate-300">{evidence.title}</span>
-                            <span className="mt-1 block text-xs leading-relaxed text-slate-400">{evidence.excerpt}</span>
-                          </div>
-                        )
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-500">No named source is linked to this question yet.</p>
-                  )}
-                </section>
-
-                {selectedReasoningPathNodeId && onViewReasoningPath && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onViewReasoningPath(selectedReasoningPathNodeId);
-                      setSelectedQuestion(null);
-                    }}
-                    className="min-h-11 w-full rounded-lg border border-cyan-800 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600"
-                  >
-                    View reasoning path
-                  </button>
-                )}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => setSelectedQuestion(null)}
-              className="mt-5 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 sm:min-h-0"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

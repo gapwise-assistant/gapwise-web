@@ -92,6 +92,22 @@ describe('feedback-driven personalization', () => {
     expect(expiredSuppression.recommendations.some((recommendation) => recommendation.id === 'rec_recruiter_src_recruiter')).toBe(true);
   });
 
+  it('supports minute-level snooze suppression for reminder actions', () => {
+    const before = Date.now();
+    const feedback = createFeedbackEvent({
+      userId: 'demo-user',
+      targetType: 'recommendation',
+      targetId: 'rec_calendar_demo',
+      rating: 'not_now',
+      suppressMinutes: 15,
+    });
+    const after = Date.now();
+    const suppressUntil = new Date(feedback.suppress_until!).getTime();
+
+    expect(suppressUntil).toBeGreaterThanOrEqual(before + 15 * 60 * 1000);
+    expect(suppressUntil).toBeLessThanOrEqual(after + 15 * 60 * 1000);
+  });
+
   it('question frequency threshold changes Partner Agent behavior', () => {
     const gapOutput: GapAgentOutput = {
       selectedGapNodeId: 'gap_low',

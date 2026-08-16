@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, Eye, FileArchive, FileText, Image, Info, Mic, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { ContextSource, Project, UserMemoryProfile } from '@/types/clarity';
 import { discardContextSource, makeId, restoreContextSource } from '@/lib/context/ingestion';
@@ -8,6 +8,7 @@ import { makeLocalDemoStorageUrl } from '@/lib/storage/assets';
 import { AppScope } from '@/types/scope';
 import { contextTargetForScope, GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 interface ContextInboxProps {
   project: Project;
@@ -107,6 +108,9 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [targetProjectId, setTargetProjectId] = useState(GENERAL_CONTEXT_ID);
   const [selectedSource, setSelectedSource] = useState<ContextSource | null>(null);
+  const sourceDetailsRef = useRef<HTMLElement | null>(null);
+
+  useDismissibleModal(() => setSelectedSource(null), sourceDetailsRef, Boolean(selectedSource));
 
   useEffect(() => {
     if (entryTab) setActiveTab(entryTab);
@@ -383,6 +387,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         }}
       >
         <section
+          ref={sourceDetailsRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="context-source-details-title"

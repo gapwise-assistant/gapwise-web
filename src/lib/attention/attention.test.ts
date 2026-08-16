@@ -151,6 +151,7 @@ describe('Attention Engine and Daily Brief', () => {
 
     expect(brief.recommendations[0].id).toBe('rec_calendar_gcal_commitment_cal_soon');
     expect(brief.recommendations[0].score).toBeGreaterThan(0.75);
+    expect(brief.recommendations[0].reason).toBe('From Google Calendar.');
     expect(brief.recommendations).toHaveLength(5);
   });
 

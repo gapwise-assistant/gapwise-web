@@ -32,6 +32,16 @@ describe('server authentication boundary', () => {
     )).resolves.toBe('demo-user');
   });
 
+  it('uses the hardcoded local identity on the development localhost origin', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.stubEnv('NODE_ENV', 'development');
+
+    await expect(requireAuthenticatedUserId(
+      new Request('http://localhost/api/projects'),
+      'firebase-user-123'
+    )).resolves.toBe('demo-user');
+  });
+
   it('accepts the private server-to-server secret for an ADK request', async () => {
     process.env.GAPSWISE_DEMO_MODE = 'false';
     process.env.GAPSWISE_INTERNAL_API_SECRET = 'internal-test-secret';

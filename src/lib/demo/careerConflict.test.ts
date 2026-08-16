@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,28 +14,84 @@ import {
 import { generateDailyBrief, clearBriefStoreForTests } from '@/lib/attention/generateBrief';
 import { MockStorageProvider } from '@/lib/storage/mock';
 import { buildNeedsAttention } from '@/lib/projects/projectOverview';
+import { demoCareerConflictCalendarEvents } from '@/lib/demo/localFixtures';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 
 const tempDirs: string[] = [];
+const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 
 afterEach(async () => {
+  if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
+  else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe('career conflict demo workflow', () => {
   beforeEach(() => clearBriefStoreForTests());
 
-  it('seeds a readable job document, user goal/preference, recruiter call, and unresolved conflict question', () => {
+  it('seeds a detailed career dossier with connected context, decisions, risks, and unresolved questions', () => {
     const state = createCareerConflictDemoState();
     const question = state.project.nodes.find((node) => node.id === CAREER_CONFLICT_QUESTION_ID);
 
-    expect(state.memories.map((memory) => memory.text)).toEqual([
+    expect(state.memories.map((memory) => memory.text)).toEqual(expect.arrayContaining([
       'Financial stability is my top priority.',
       'I prefer to avoid frontend-heavy roles.',
-    ]);
+      'I want meaningful backend or applied AI ownership in my next role.',
+    ]));
+    expect(state.project.sources.length).toBeGreaterThanOrEqual(10);
+    expect(state.project.nodes.length).toBeGreaterThanOrEqual(30);
+    expect(state.project.edges.length).toBeGreaterThanOrEqual(25);
+    expect(state.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN')).toHaveLength(7);
+    expect(state.project.nodes.filter((node) => node.type === 'DECISION')).toHaveLength(3);
+    expect(state.project.nodes.filter((node) => node.type === 'RISK')).toHaveLength(2);
     expect(state.project.sources.find((source) => source.id === CAREER_CONFLICT_JOB_SOURCE_ID)?.content).toMatch(/primarily frontend/i);
     expect(state.project.nodes.some((node) => node.text.includes('upcoming recruiter call'))).toBe(true);
     expect(question).toMatchObject({ type: 'UNKNOWN', status: 'OPEN' });
+    expect(state.project.active_question?.node_id).toBe(CAREER_CONFLICT_QUESTION_ID);
     expect(detectCareerConflict(readCareerConflictJobDocument(), state.memories)).toBe(true);
+  });
+
+  it('includes a Google Meet soon enough to become an actionable briefing item in any app mode', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    const now = new Date('2026-08-16T12:00:00.000Z');
+    const events = demoCareerConflictCalendarEvents(now);
+    const state = createCareerConflictDemoState();
+    const hasCalendarTokens = vi.fn(async () => true);
+    const listCalendarEvents = vi.fn(async () => []);
+    const contextPack = await buildContextPackForUser({
+      userId: 'demo-user',
+      query: 'What needs my attention today?',
+      project: state.project,
+      profile: DEFAULT_USER_PROFILE,
+      durableMemories: state.memories,
+    }, {
+      now,
+      hasCalendarTokens,
+      listCalendarEvents,
+    });
+    const brief = generateDailyBrief({
+      userId: 'demo-user',
+      project: state.project,
+      memories: state.memories,
+      contextPack,
+      period: '2026-08-16',
+      force: true,
+      now,
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      id: 'demo_career_coach_prep',
+      summary: 'Career decision prep with Alex',
+      location: 'Google Meet',
+    });
+    expect(new Date(events[0].start!).getTime() - now.getTime()).toBe(90 * 60 * 1000);
+    expect(hasCalendarTokens).not.toHaveBeenCalled();
+    expect(listCalendarEvents).not.toHaveBeenCalled();
+    expect(brief.recommendations.some((recommendation) =>
+      recommendation.id === 'rec_calendar_gcal_commitment_demo_career_coach_prep'
+    )).toBe(true);
   });
 
   it('asks the role-fit question before recommending a recruiter action', () => {

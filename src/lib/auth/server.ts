@@ -1,5 +1,6 @@
 import { DEMO_USER_ID } from '@/lib/demo/seed';
 import { isDemoMode } from '@/lib/runtime/demoMode';
+import { isLocalhostRequest } from '@/lib/runtime/localAuth';
 import { getFirebaseAdminAuth } from '@/lib/firebase-admin';
 import { StorageError } from '@/lib/storage/types';
 
@@ -32,6 +33,10 @@ export async function requireAuthenticatedUser(
 ): Promise<AuthenticatedUser> {
   if (isDemoMode()) {
     return { uid: DEMO_USER_ID, name: 'Local demo user' };
+  }
+
+  if (isLocalhostRequest(request)) {
+    return { uid: DEMO_USER_ID, name: 'Local development user' };
   }
 
   const internalSecret = process.env.GAPSWISE_INTERNAL_API_SECRET?.trim();

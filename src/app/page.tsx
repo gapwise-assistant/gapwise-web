@@ -8,7 +8,7 @@ import { AskGapswise } from '@/components/AskGapswise';
 import type { ContextEntry } from '@/components/ContextInbox';
 import { ScopeDestination } from '@/components/YouDestination';
 import { SettingsDestination } from '@/components/SettingsDestination';
-import { IdontKnowModal } from '@/components/IdontKnowModal';
+import { IdontKnowModal, type IdontKnowStrategy, type IdontKnowStrategyResult } from '@/components/IdontKnowModal';
 import { AnswerQuestionModal, AnswerQuestionTarget } from '@/components/AnswerQuestionModal';
 import { TracePanel } from '@/components/dev/TracePanel';
 import { Project, UserMemoryProfile, CandidateGap } from '@/types/clarity';
@@ -16,7 +16,7 @@ import { DurableMemory } from '@/types/contextPack';
 import { AskSource } from '@/lib/ask/adkClient';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
-import { processIdontKnowStrategy } from '@/lib/gemini';
+import { previewIdontKnowContext, processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
 import { loadMemoriesFromBrowser, memoriesFromProfile, saveMemoriesToBrowser } from '@/lib/memory/store';
 import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/lib/personalization/feedbackStore';
 import { createFeedbackEvent } from '@/lib/personalization/applyFeedback';
@@ -27,6 +27,8 @@ import {
 } from '@/lib/demo/careerConflict';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import type { TodayQuestion } from '@/lib/today/sections';
+import { localQuestionPresentation } from '@/lib/today/questionPlans';
 import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
 import { useAuth } from '@/components/AuthProvider';
@@ -34,6 +36,9 @@ import { LoginScreen } from '@/components/LoginScreen';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
+import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
+import { buildDecisionWorkspace, findDecisionForNode } from '@/lib/decisions/workspace';
+import { calculateGapPriority } from '@/lib/prioritization';
 
 type AppTab = AppDestination;
 
@@ -225,12 +230,14 @@ export default function Home() {
   const [memories, setMemories] = useState<DurableMemory[]>([]);
   const [feedbackEvents, setFeedbackEvents] = useState<FeedbackEvent[]>([]);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
+  const [askInitialPrompt, setAskInitialPrompt] = useState('');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isLoadingDemo, setIsLoadingDemo] = useState(false);
   const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
+  const [idontKnowProjectId, setIdontKnowProjectId] = useState<string | null>(null);
   const [answerTarget, setAnswerTarget] = useState<AnswerQuestionTarget | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
@@ -395,24 +402,101 @@ export default function Home() {
     setActiveTab('today');
   };
 
-  const handleSelectStrategy = async (strategy: 'rag' | 'experiment' | 'assumption' | 'defer') => {
-    if (!idontKnowGap) return;
-    const { updatedProject } = await processIdontKnowStrategy(project, strategy, profile);
-    updateProject(updatedProject);
-    setIdontKnowGap(null);
+  const handleSelectStrategy = async (strategy: IdontKnowStrategy): Promise<IdontKnowStrategyResult> => {
+    if (!idontKnowGap) throw new Error('This question is no longer active.');
+    const owner = idontKnowProjectId === GENERAL_CONTEXT_ID
+      ? generalContext
+      : projects.find((candidate) => candidate.id === idontKnowProjectId) ?? project;
+    const projectWithSelectedGap: Project = {
+      ...owner,
+      active_question: idontKnowGap,
+    };
+    if (strategy === 'rag') {
+      const preview = previewIdontKnowContext(projectWithSelectedGap);
+      if (!preview.findings.length) {
+        return { heading: 'No relevant context found', message: 'The uploaded PDFs and notes did not contain a strong match for this question. Nothing was changed.', canTryAnother: true };
+      }
+      return {
+        heading: 'Relevant context found',
+        message: `Found ${preview.findings.length} relevant source${preview.findings.length === 1 ? '' : 's'}. Review the evidence and proposed map update before saving anything.`,
+        findings: preview.findings,
+        proposedChange: preview.proposedChange,
+        requiresConfirmation: true,
+      };
+    }
+    const { updatedProject, strategyMessage, didChange } = await processIdontKnowStrategy(projectWithSelectedGap, strategy, profile);
+    if (didChange && owner.id === GENERAL_CONTEXT_ID) {
+      setGeneralContext(updatedProject);
+      persistGeneralContextToAPI(userId, updatedProject).then((savedToApi) => {
+        setStorageMessage(savedToApi ? '' : 'Saved locally. General context API was unavailable.');
+      });
+    } else if (didChange) {
+      updateProject(updatedProject);
+    }
+    return { message: strategyMessage };
   };
 
-  const openGraphQuestion = useCallback((node: Project['nodes'][number], intent?: 'confirm' | 'correct') => {
-    const owner = projects.find((candidate) => candidate.nodes.some((item) => item.id === node.id));
+  const acceptIdontKnowContextChange = async (): Promise<IdontKnowStrategyResult> => {
+    if (!idontKnowGap) throw new Error('This question is no longer active.');
+    const owner = idontKnowProjectId === GENERAL_CONTEXT_ID
+      ? generalContext
+      : projects.find((candidate) => candidate.id === idontKnowProjectId) ?? project;
+    const projectWithSelectedGap: Project = { ...owner, active_question: idontKnowGap };
+    const { updatedProject, strategyMessage, didChange, changedNodeId } = await processIdontKnowStrategy(projectWithSelectedGap, 'rag', profile);
+    if (!didChange || !changedNodeId) throw new Error('The relevant context is no longer available. Run the search again.');
+    if (owner.id === GENERAL_CONTEXT_ID) {
+      setGeneralContext(updatedProject);
+      persistGeneralContextToAPI(userId, updatedProject).then((savedToApi) => {
+        setStorageMessage(savedToApi ? '' : 'Saved locally. General context API was unavailable.');
+      });
+    } else {
+      updateProject(updatedProject);
+    }
+    return { heading: 'Decision Map updated', message: strategyMessage, ...(owner.id !== GENERAL_CONTEXT_ID ? { decisionMapNodeId: changedNodeId } : {}) };
+  };
+
+  const openGraphQuestion = useCallback((
+    node: Project['nodes'][number],
+    intent?: 'confirm' | 'correct',
+    answerSuggestion?: TodayQuestion['answerSuggestion'],
+    presentation?: Pick<TodayQuestion, 'presentationTitle' | 'presentationSummary'>,
+  ) => {
+    const owner = projects.find((candidate) => candidate.nodes.some((item) => item.id === node.id))
+      ?? (generalContext.nodes.some((item) => item.id === node.id) ? generalContext : undefined);
+    const questionContext: TodayQuestion = {
+      id: `question_${node.id}`,
+      question: node.text,
+      reason: node.why_it_matters?.[0] ?? 'This unresolved item can affect the next decision.',
+      provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
+      sourceNodeIds: [node.id],
+    };
+    const fallbackPresentation = localQuestionPresentation(questionContext);
+    const decision = owner ? findDecisionForNode(owner, node.id) : null;
+    const decisionWorkspace = owner ? buildDecisionWorkspace(owner, node.id) : null;
     setAnswerTarget({
       nodeId: node.id,
       question: node.text,
+      presentationTitle: presentation?.presentationTitle ?? fallbackPresentation.title,
+      presentationSummary: presentation?.presentationSummary ?? fallbackPresentation.summary,
       reason: node.why_it_matters?.[0],
       projectId: owner?.id,
       intent,
+      decisionNodeId: decision?.id,
+      decisionTitle: decision?.text,
+      decisionSupport: decisionWorkspace ? {
+        options: decisionWorkspace.options.map((option) => ({ id: option.id, label: option.label, text: option.text, evidence: option.evidence.slice(0, 2).map((evidence) => ({ text: evidence.text, sourceNames: evidence.sourceNames })) })),
+        currentPicture: decisionWorkspace.currentPicture,
+        recommendation: decisionWorkspace.recommendation ? {
+          optionId: decisionWorkspace.recommendation.option.id,
+          label: decisionWorkspace.recommendation.option.label,
+          explanation: decisionWorkspace.recommendation.explanation,
+        } : null,
+      } : undefined,
+      explanation: owner ? buildQuestionWhyExplanation(owner, questionContext) : undefined,
+      answerSuggestion,
       ...(intent === 'confirm' ? { initialAnswer: node.text } : {}),
     });
-  }, [projects]);
+  }, [generalContext, projects]);
 
   const openDecisionWorkspace = useCallback((nodeId: string) => {
     const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId))
@@ -447,13 +531,50 @@ export default function Home() {
   }, [handleSelectProject, projects]);
 
   const openAnsweredQuestion = useCallback((item: Project['history'][number], projectId: string) => {
+    const owner = projects.find((candidate) => candidate.id === projectId);
+    const node = owner?.nodes.find((candidate) => candidate.text === item.question || item.question.includes(candidate.text));
+    const questionContext = node ? {
+      id: `question_${node.id}`,
+      question: node.text,
+      reason: node.why_it_matters?.[0] ?? 'This resolved item remains part of the current decision context.',
+      provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
+      sourceNodeIds: [node.id],
+    } satisfies TodayQuestion : undefined;
+    const decision = owner && node ? findDecisionForNode(owner, node.id) : null;
+    const decisionWorkspace = owner && node ? buildDecisionWorkspace(owner, node.id) : null;
     setAnswerTarget({
+      nodeId: node?.id,
       question: item.question,
       initialAnswer: item.answer,
       historyTimestamp: item.timestamp,
       projectId,
       mode: 'edit',
+      decisionNodeId: decision?.id,
+      decisionTitle: decision?.text,
+      decisionSupport: decisionWorkspace ? {
+        options: decisionWorkspace.options.map((option) => ({ id: option.id, label: option.label, text: option.text, evidence: option.evidence.slice(0, 2).map((evidence) => ({ text: evidence.text, sourceNames: evidence.sourceNames })) })),
+        currentPicture: decisionWorkspace.currentPicture,
+        recommendation: decisionWorkspace.recommendation ? {
+          optionId: decisionWorkspace.recommendation.option.id,
+          label: decisionWorkspace.recommendation.option.label,
+          explanation: decisionWorkspace.recommendation.explanation,
+        } : null,
+      } : undefined,
+      explanation: owner && questionContext ? buildQuestionWhyExplanation(owner, questionContext) : undefined,
+      ...(questionContext ? (() => {
+        const localPresentation = localQuestionPresentation(questionContext);
+        return {
+          presentationTitle: localPresentation.title,
+          presentationSummary: localPresentation.summary,
+        };
+      })() : {}),
     });
+  }, [projects]);
+
+  const openChatWithPrompt = useCallback((prompt: string) => {
+    setAnswerTarget(null);
+    setAskInitialPrompt(prompt);
+    setActiveTab('ask');
   }, []);
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
@@ -532,6 +653,28 @@ export default function Home() {
   const handleFeedbackEvent = (event: FeedbackEvent) => {
     setFeedbackEvents((current) => appendFeedbackEvent(userId, current, event));
   };
+
+  const answerNode = useMemo(() => {
+    if (!answerTarget?.nodeId) return undefined;
+    return [...projects.flatMap((item) => item.nodes), ...generalContext.nodes]
+      .find((item) => item.id === answerTarget.nodeId);
+  }, [answerTarget?.nodeId, generalContext.nodes, projects]);
+  const canUseDontKnow = Boolean(
+    answerTarget &&
+    answerTarget.mode !== 'edit' &&
+    answerNode &&
+    answerNode.status === 'OPEN' &&
+    (answerNode.type === 'UNKNOWN' || answerNode.type === 'ASSUMPTION'),
+  );
+  const handleDontKnow = useCallback(() => {
+    if (!answerTarget || !answerNode || !canUseDontKnow) return;
+    const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === answerNode.id))
+      ?? (generalContext.nodes.some((node) => node.id === answerNode.id) ? generalContext : undefined)
+      ?? project;
+    setIdontKnowProjectId(owner.id);
+    setIdontKnowGap(calculateGapPriority(answerNode, owner, profile));
+    setAnswerTarget(null);
+  }, [answerNode, answerTarget, canUseDontKnow, generalContext, profile, project, projects]);
 
   if (!auth.isReady) {
     return (
@@ -624,11 +767,28 @@ export default function Home() {
             onFeedbackEvent={handleFeedbackEvent}
             onUpdateProfile={handleUpdateProfile}
             onAnswerQuestion={(question) => {
+              if (question.mode === 'edit' && question.historyTimestamp) {
+                const owningProjectId = projects.find((candidate) => candidate.nodes.some((node) => question.sourceNodeIds.includes(node.id)))?.id
+                  ?? question.projectId
+                  ?? project.id;
+                openAnsweredQuestion({
+                  question: question.question,
+                  answer: question.initialAnswer ?? '',
+                  timestamp: question.historyTimestamp,
+                  graph_diff_summary: '',
+                }, owningProjectId);
+                return;
+              }
               const nodeId = question.sourceNodeIds.find((id) => !id.startsWith('gcal_'));
               const node = nodeId
                 ? [...projects.flatMap((item) => item.nodes), ...generalContext.nodes].find((item) => item.id === nodeId)
                 : undefined;
-              if (node) openGraphQuestion(node);
+              if (node) {
+                openGraphQuestion(node, undefined, question.answerSuggestion, {
+                  presentationTitle: question.presentationTitle,
+                  presentationSummary: question.presentationSummary,
+                });
+              }
               else setActiveTab('ask');
             }}
             onReviewDecision={openDecisionWorkspace}
@@ -649,6 +809,9 @@ export default function Home() {
             userId={userId}
             scope={scope}
             scopeLabel={scope.type === 'project' ? project.title : 'Everything'}
+            initialPrompt={askInitialPrompt}
+            autoSendInitialPrompt
+            onInitialPromptSent={() => setAskInitialPrompt('')}
             onViewSource={(source: AskSource) => {
               if (source.kind === 'source') {
                 openContext({ sourceId: source.id, tab: 'recent' });
@@ -719,34 +882,28 @@ export default function Home() {
         <IdontKnowModal
           gap={idontKnowGap}
           onSelectStrategy={handleSelectStrategy}
-          onClose={() => setIdontKnowGap(null)}
+          onAcceptProposedChange={acceptIdontKnowContextChange}
+          onViewDecisionMap={viewDecisionGraph}
+          onClose={() => {
+            setIdontKnowGap(null);
+            setIdontKnowProjectId(null);
+          }}
         />
       )}
       {answerTarget && (
         <AnswerQuestionModal
           target={answerTarget}
           onSubmit={submitQuestionAnswer}
-          onDontKnow={project.id === answerTarget.projectId && project.active_question?.node_id === answerTarget.nodeId ? () => {
-            const node = [...projects.flatMap((item) => item.nodes), ...generalContext.nodes]
-              .find((item) => item.id === answerTarget.nodeId);
-            if (node) {
-              setIdontKnowGap({
-                node_id: node.id,
-                question: node.text,
-                uncertainty: 1 - node.confidence,
-                downstream_impact: node.impact,
-                dependency_count: 0,
-                urgency: node.priority ?? node.impact,
-                answerability: 0.75,
-                user_relevance: node.impact,
-                interruption_cost: 0.35,
-                priority: node.priority ?? node.impact,
-                reasons: node.why_it_matters ?? ['This is still unresolved in your context.'],
-                blocked_decision_ids: [],
-              });
-            }
+          onDontKnow={canUseDontKnow ? handleDontKnow : undefined}
+          onNavigateToSource={(sourceId) => {
             setAnswerTarget(null);
-          } : undefined}
+            openContext({ sourceId, tab: 'recent' });
+          }}
+          onViewDecisionMap={(nodeId) => {
+            setAnswerTarget(null);
+            viewDecisionGraph(nodeId);
+          }}
+          onOpenChat={openChatWithPrompt}
           onClose={() => setAnswerTarget(null)}
         />
       )}
@@ -759,6 +916,13 @@ export default function Home() {
           onNavigateToSource={(sourceId) => {
             openContext({ sourceId, tab: 'recent' });
             setDecisionTarget(null);
+          }}
+          onResolveQuestion={(nodeId) => {
+            const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
+            const node = owner?.nodes.find((candidate) => candidate.id === nodeId);
+            if (!node) return;
+            setDecisionTarget(null);
+            openGraphQuestion(node);
           }}
           onViewGraph={viewDecisionGraph}
         />

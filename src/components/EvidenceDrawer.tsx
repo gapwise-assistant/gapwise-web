@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { BookOpen, Brain, FileText, GitBranch, X } from 'lucide-react';
 import { ContextPack } from '@/types/contextPack';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 interface EvidenceDrawerProps {
   contextPack: ContextPack | null;
@@ -11,11 +12,14 @@ interface EvidenceDrawerProps {
 }
 
 export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ contextPack, isOpen, onClose }) => {
+  const panelRef = useRef<HTMLElement | null>(null);
+  useDismissibleModal(onClose, panelRef, isOpen && Boolean(contextPack));
+
   if (!isOpen || !contextPack) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
-      <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-800 bg-slate-950 p-6 shadow-2xl">
+      <aside ref={panelRef} className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-800 bg-slate-950 p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">

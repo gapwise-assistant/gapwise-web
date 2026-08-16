@@ -5,6 +5,12 @@ import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { rankGaps } from '@/lib/tools/graphTools';
 import { withAttentionScore } from '@/lib/attention/scoring';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import {
+  CAREER_CONFLICT_DEMO_ID,
+  CAREER_CONFLICT_QUESTION_ID,
+  CAREER_CONFLICT_RECRUITER_SOURCE_ID,
+} from '@/lib/demo/careerConflict';
+import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
 
 function includesAny(text: string, terms: string[]): boolean {
   const lower = text.toLowerCase();
@@ -22,14 +28,10 @@ function dueSoon(project: Project): boolean {
 }
 
 function nodeTimestamp(nodeText: string, label: 'Starts' | 'Ends'): number {
-  const match = nodeText.match(new RegExp(`${label} ([^.]+)\\.`));
-  if (!match) return 0;
-  const time = new Date(match[1]).getTime();
+  const timestamp = calendarTimestampFromText(nodeText, label);
+  if (!timestamp) return 0;
+  const time = new Date(timestamp).getTime();
   return Number.isFinite(time) ? time : 0;
-}
-
-function sourceDetail(node: { why_it_matters?: string[] }, prefix: string): string | undefined {
-  return node.why_it_matters?.find((item) => item.startsWith(prefix))?.slice(prefix.length).trim();
 }
 
 function calendarEventTitle(text: string): string {
@@ -94,8 +96,6 @@ export function generateAttentionCandidates(params: {
 
       const title = calendarEventTitle(commitment.text);
       const urgency = calendarUrgency(startTime, endTime, nowTime);
-      const start = sourceDetail(commitment, 'Start:') ?? '';
-      const end = sourceDetail(commitment, 'End:') ?? '';
       const sourceRef = commitment.source_refs[0];
 
       candidates.push(
@@ -103,7 +103,7 @@ export function generateAttentionCandidates(params: {
           id: `rec_calendar_${commitment.id}`,
           kind: 'commitment',
           title: startTime > 0 && startTime <= nowTime ? `Stay with ${title}` : `Prepare for ${title}`,
-          reason: `Source: Google Calendar${start ? `, ${start}` : ''}${end ? ` to ${end}` : ''}.`,
+          reason: 'From Google Calendar.',
           next_action: startTime > 0 && startTime <= nowTime
             ? 'Focus on the current commitment and capture any follow-up decision afterward.'
             : `Review what you need before ${title}.`,
@@ -129,7 +129,9 @@ export function generateAttentionCandidates(params: {
 
   reasoningProject.sources.forEach((source) => {
     const sourceText = `${source.filename} ${source.content}`;
-    if (includesAny(sourceText, ['recruiter', 'salary', 'paying', 'better-paying', 'role'])) {
+    const isCareerDemoRecruiterSignal = project.id !== CAREER_CONFLICT_DEMO_ID
+      || source.id === CAREER_CONFLICT_RECRUITER_SOURCE_ID;
+    if (isCareerDemoRecruiterSignal && includesAny(sourceText, ['recruiter', 'salary', 'paying', 'better-paying', 'role'])) {
       const frontendRole = includesAny(sourceText, ['frontend', 'front-end']);
       const contextPack = buildContextPack({
         userId,
@@ -262,13 +264,13 @@ export function generateAttentionCandidates(params: {
       withAttentionScore({
         id: `rec_gap_${gap.node_id}`,
         kind: relatedMeeting ? 'preparation' : 'gap',
-        title: gap.node_id === 'unknown_career_role_acceptability'
+        title: gap.node_id === CAREER_CONFLICT_QUESTION_ID
           ? 'Decide whether the frontend-heavy role fits your priorities'
           : gap.question,
-        reason: gap.node_id === 'unknown_career_role_acceptability'
+        reason: gap.node_id === CAREER_CONFLICT_QUESTION_ID
           ? 'The job document conflicts with your preference to avoid frontend-heavy roles.'
           : gap.reasons[0] ?? 'This uncertainty affects the next decision.',
-        next_action: gap.node_id === 'unknown_career_role_acceptability'
+        next_action: gap.node_id === CAREER_CONFLICT_QUESTION_ID
           ? 'Answer whether the role remains acceptable before the recruiter call.'
           : gap.question,
         source_node_ids: [gap.node_id, ...gap.blocked_decision_ids],

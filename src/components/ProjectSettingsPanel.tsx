@@ -1,8 +1,9 @@
 'use client';
 
-import React, { FormEvent, useEffect, useState } from 'react';
+import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { Archive, X } from 'lucide-react';
 import { Project } from '@/types/clarity';
+import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
 interface ProjectSettingsPanelProps {
   project: Project;
@@ -24,6 +25,9 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   const [description, setDescription] = useState(project.one_sentence_context ?? '');
   const [deadline, setDeadline] = useState(project.deadline ?? '');
   const [saved, setSaved] = useState(false);
+  const modalRef = useRef<HTMLElement | null>(null);
+
+  useDismissibleModal(onClose ?? (() => undefined), modalRef, mode === 'modal');
 
   useEffect(() => {
     setName(project.title);
@@ -121,7 +125,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   if (mode === 'modal') {
     return (
       <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-2 backdrop-blur-sm sm:items-center sm:p-4">
-        <section className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[90vh] sm:rounded-xl sm:p-5">
+        <section ref={modalRef} className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[90vh] sm:rounded-xl sm:p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace</p>

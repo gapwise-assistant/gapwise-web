@@ -3,6 +3,12 @@ import { DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
+import {
+  calendarTimestampFromText,
+  formatCalendarDateTime,
+  formatCalendarSchedule,
+  formatCalendarTimeUntil,
+} from '@/lib/google/calendarFormatting';
 
 export interface TodayQuestion {
   id: string;
@@ -10,6 +16,43 @@ export interface TodayQuestion {
   reason: string;
   provenance: string;
   sourceNodeIds: string[];
+  /**
+   * Presentation-only copy. The graph question above remains the source of
+   * truth for answer routing, persistence, and ranking.
+   */
+  presentationTitle?: string;
+  presentationSummary?: string;
+  presentationContext?: string[];
+  mode?: 'answer' | 'edit';
+  initialAnswer?: string;
+  historyTimestamp?: string;
+  projectId?: string;
+  answerSuggestion?: {
+    suggestedAnswer: string;
+    whyItMatters: string;
+  };
+}
+
+function presentationContextForNode(project: Project, node: ClarityNode): string[] {
+  const relatedIds = project.edges
+    .filter((edge) => edge.source === node.id || edge.target === node.id)
+    .map((edge) => edge.source === node.id ? edge.target : edge.source);
+  const relatedNodes = relatedIds
+    .map((id) => project.nodes.find((candidate) => candidate.id === id))
+    .filter((candidate): candidate is ClarityNode => Boolean(candidate))
+    .filter((candidate) => candidate.id !== node.id)
+    .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact));
+  const sourceFacts = node.source_refs
+    .map((sourceId) => project.sources.find((source) => source.id === sourceId))
+    .filter(Boolean)
+    .flatMap((source) => [source?.extraction_summary, source?.content.split(/[.!?]\s/)[0]])
+    .filter((fact): fact is string => Boolean(fact));
+
+  return [...sourceFacts, ...relatedNodes.map((candidate) => candidate.text)]
+    .map((fact) => fact.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter((fact, index, facts) => facts.indexOf(fact) === index)
+    .slice(0, 6);
 }
 
 export interface TodayCommitment {
@@ -24,7 +67,7 @@ function parseCalendarTitle(text: string): string {
 }
 
 function parseTime(text: string, label: 'Starts' | 'Ends'): string | undefined {
-  return text.match(new RegExp(`${label} ([^.]+)\\.`))?.[1];
+  return calendarTimestampFromText(text, label);
 }
 
 function timestamp(value: string | undefined): number {
@@ -55,13 +98,16 @@ function bestContextPack(brief: DailyBrief): ContextPack | null {
 
 export function todayQuestionFromNode(project: Project, node: ClarityNode): TodayQuestion {
   const reasons = relationshipReasons(project, node.id, 2);
-  return {
+  const question: TodayQuestion = {
     id: `question_${node.id}`,
     question: node.text.endsWith('?') ? node.text : `What should we do about: ${node.text}?`,
     reason: [node.why_it_matters?.[0], ...reasons].filter(Boolean).slice(0, 2).join(' ') || 'This unresolved item can affect the next decision.',
     provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
     sourceNodeIds: [node.id],
   };
+  const context = presentationContextForNode(project, node);
+  if (context.length) question.presentationContext = context;
+  return question;
 }
 
 function calendarQuestion(node: ClarityNode, now: Date): TodayQuestion | null {
@@ -71,12 +117,14 @@ function calendarQuestion(node: ClarityNode, now: Date): TodayQuestion | null {
   const hoursUntilStart = (startTime - now.getTime()) / (60 * 60 * 1000);
   if (hoursUntilStart < -1 || hoursUntilStart > 48) return null;
   const title = parseCalendarTitle(node.text);
+  const readableStart = formatCalendarDateTime(start);
   return {
     id: `question_prepare_${node.id}`,
     question: `Are you prepared for ${title}?`,
     reason: 'Your Calendar shows it is approaching.',
-    provenance: `Source: Google Calendar${start ? `, ${start}` : ''}`,
+    provenance: `Source: Google Calendar${readableStart ? `, ${readableStart}` : ''}`,
     sourceNodeIds: [node.id],
+    presentationContext: [node.text],
   };
 }
 
@@ -114,13 +162,20 @@ export function buildTodayQuestions(params: {
       seen.add(question.id);
       return true;
     })
-    .slice(0, 3);
+    .slice(0, 4);
 }
 
-export function buildComingUp(brief: DailyBrief, now = new Date(), limit = 4): TodayCommitment[] {
+export function buildComingUp(
+  brief: DailyBrief,
+  now = new Date(),
+  limit = 4,
+  excludedCommitmentIds: Iterable<string> = []
+): TodayCommitment[] {
+  const excluded = new Set(excludedCommitmentIds);
   const commitments = contextPacksFromBrief(brief)
     .flatMap((pack) => pack.upcomingCommitments)
     .filter(isCalendarNode)
+    .filter((node) => !excluded.has(node.id))
     .filter((node) => {
       const end = timestamp(parseTime(node.text, 'Ends')) || timestamp(parseTime(node.text, 'Starts'));
       return end === 0 || end > now.getTime();
@@ -138,11 +193,12 @@ export function buildComingUp(brief: DailyBrief, now = new Date(), limit = 4): T
     .map((node) => {
       const start = parseTime(node.text, 'Starts');
       const end = parseTime(node.text, 'Ends');
+      const timing = formatCalendarTimeUntil(start, end, now);
       return {
         id: node.id,
         title: parseCalendarTitle(node.text),
-        time: [start, end].filter(Boolean).join(' - '),
-        provenance: 'Source: Google Calendar',
+        time: formatCalendarSchedule(start, end, now) ?? timing ?? 'Upcoming',
+        provenance: 'Google Calendar',
       };
     });
 }
