@@ -28,8 +28,18 @@ interface ChatMessage {
   text: string;
   sources?: AskSource[];
   responseDetails?: {
-    promptUsed: string;
+    promptUsed?: string;
     systemPrompt?: string;
+    modelConfig?: {
+      provider: string;
+      agent: string;
+      model: string;
+      thinkingLevel: string;
+      maxOutputTokens: number;
+      retryAttempts: number;
+      profile: string;
+      execution: string;
+    };
     contextUsed?: {
       projectTitle: string;
       items: string[];
@@ -356,10 +366,21 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
         : typeof body.fallbackPrompt === 'string'
           ? body.fallbackPrompt
           : undefined;
-      const responseDetails = promptUsed
+      const responseDetails = promptUsed || body.modelConfig
         ? {
-            promptUsed,
+            ...(promptUsed ? { promptUsed } : {}),
             systemPrompt: typeof body.fallbackSystemPrompt === 'string' ? body.fallbackSystemPrompt : undefined,
+            modelConfig: body.modelConfig && typeof body.modelConfig === 'object'
+              && typeof body.modelConfig.provider === 'string'
+              && typeof body.modelConfig.agent === 'string'
+              && typeof body.modelConfig.model === 'string'
+              && typeof body.modelConfig.thinkingLevel === 'string'
+              && typeof body.modelConfig.maxOutputTokens === 'number'
+              && typeof body.modelConfig.retryAttempts === 'number'
+              && typeof body.modelConfig.profile === 'string'
+              && typeof body.modelConfig.execution === 'string'
+              ? body.modelConfig
+              : undefined,
             contextUsed: body.contextUsed && typeof body.contextUsed === 'object'
               && typeof body.contextUsed.projectTitle === 'string'
               && Array.isArray(body.contextUsed.items)
@@ -558,10 +579,25 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                           Response details
                         </summary>
                         <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs">
-                          <div>
+                          {message.responseDetails.modelConfig && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Model configuration</p>
+                              <dl className="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-slate-400">
+                                <dt className="text-slate-600">Provider</dt><dd>{message.responseDetails.modelConfig.provider}</dd>
+                                <dt className="text-slate-600">Agent</dt><dd>{message.responseDetails.modelConfig.agent}</dd>
+                                <dt className="text-slate-600">Model</dt><dd className="font-mono text-cyan-300">{message.responseDetails.modelConfig.model}</dd>
+                                <dt className="text-slate-600">Thinking</dt><dd>{message.responseDetails.modelConfig.thinkingLevel}</dd>
+                                <dt className="text-slate-600">Output limit</dt><dd>{message.responseDetails.modelConfig.maxOutputTokens.toLocaleString()} tokens</dd>
+                                <dt className="text-slate-600">Retries</dt><dd>{message.responseDetails.modelConfig.retryAttempts}</dd>
+                                <dt className="text-slate-600">Profile</dt><dd>{message.responseDetails.modelConfig.profile}</dd>
+                                <dt className="text-slate-600">Execution</dt><dd>{message.responseDetails.modelConfig.execution}</dd>
+                              </dl>
+                            </div>
+                          )}
+                          {message.responseDetails.promptUsed && <div>
                             <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Exact prompt sent to the AI</p>
                             <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-300">{message.responseDetails.promptUsed}</pre>
-                          </div>
+                          </div>}
                           {message.responseDetails.systemPrompt && (
                             <div>
                               <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Fallback system instruction</p>

@@ -12,6 +12,8 @@ import { StorageError } from '@/lib/storage/types';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 
 export const runtime = 'nodejs';
 
@@ -126,6 +128,7 @@ async function parseRequest(request: Request): Promise<{
 }
 
 export async function POST(request: Request) {
+  const started = Date.now();
   let parsed: { source: SourceRequest; file?: File; bytes?: Buffer };
   try {
     parsed = await parseRequest(request);
@@ -217,6 +220,70 @@ export async function POST(request: Request) {
       sourceId: source.sourceId,
       storageUrl,
     }, { status: 503 });
+  }
+
+  if (!isDemoMode() && !result.skipped && result.modelUsed) {
+    const contextConfig = getAgentModelConfig('context');
+    recordTrace({
+      userId: source.userId,
+      route: '/api/context/ingest',
+      label: 'Decision Map context extraction',
+      started_at: new Date(started).toISOString(),
+      duration_ms: Date.now() - started,
+      agentNames: ['Context Agent'],
+      contextIds: result.project.sources.find((item) => item.id === source.sourceId)?.derived_node_ids ?? [],
+      scores: [],
+      toolCalls: ['processContextSource', 'graph extraction'],
+      model: result.modelUsed,
+      agentConfigs: [{
+        agentName: 'Context Agent',
+        model: contextConfig.model,
+        thinkingLevel: contextConfig.thinkingLevel,
+        maxOutputTokens: contextConfig.maxOutputTokens,
+        execution: 'used',
+      }],
+      agentRuns: [{
+        runId: `context_${source.sourceId}_${started}`,
+        agent: 'Context Agent',
+        model: result.modelUsed,
+        thinkingLevel: contextConfig.thinkingLevel,
+        inputTokens: estimateTokenCount(source.content),
+        outputTokens: estimateTokenCount(JSON.stringify(result.analysis ?? {})),
+        latencyMs: Date.now() - started,
+        estimatedCost: 0,
+        costSource: 'unavailable',
+        validationStatus: result.analysis ? 'passed' : 'failed',
+        confidence: result.analysis?.nodes.length
+          ? Number((result.analysis.nodes.reduce((sum, node) => sum + node.confidence, 0) / result.analysis.nodes.length).toFixed(3))
+          : null,
+        escalated: false,
+        execution: 'used',
+        inputSummary: `One ${source.type} source (${source.sourceId})`,
+        outputSummary: `${result.analysis?.nodes.length ?? 0} nodes and ${result.analysis?.relationships.length ?? 0} relationships`,
+      }],
+      contextSummary: {
+        scope: target.isGeneral ? 'General context' : target.project.id,
+        includedContextCount: result.project.sources.find((item) => item.id === source.sourceId)?.derived_node_ids.length ?? 0,
+        goalCount: result.analysis?.nodes.filter((node) => node.type === 'GOAL').length ?? 0,
+        unresolvedGapCount: result.analysis?.nodes.filter((node) => node.type === 'UNKNOWN').length ?? 0,
+        evidenceCount: result.analysis?.nodes.filter((node) => node.type === 'EVIDENCE').length ?? 0,
+        preferenceCount: result.analysis?.nodes.filter((node) => node.type === 'PREFERENCE').length ?? 0,
+        decisionCount: result.analysis?.nodes.filter((node) => node.type === 'DECISION').length ?? 0,
+        commitmentCount: result.analysis?.nodes.filter((node) => node.type === 'NEXT_ACTION').length ?? 0,
+      },
+      pipelineSteps: [{
+        name: 'Context Agent / graph extraction',
+        agentName: 'Context Agent',
+        summary: `Extracted ${result.analysis?.nodes.length ?? 0} candidate graph nodes from the uploaded context source.`,
+        execution: 'used',
+        contextCount: result.analysis?.nodes.length ?? 0,
+      }, {
+        name: 'Update Decision Map data',
+        summary: 'Stored the extracted nodes and relationships for the project graph.',
+        execution: 'deterministic',
+        contextCount: result.project.nodes.length,
+      }],
+    });
   }
 
   return NextResponse.json({

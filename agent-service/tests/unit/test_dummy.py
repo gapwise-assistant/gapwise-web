@@ -43,8 +43,8 @@ def test_health_check() -> None:
 
 def test_agent_uses_configured_low_cost_model(monkeypatch) -> None:
     """The ADK model is configurable and has a low-cost cloud default."""
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-test-model")
-    assert get_configured_model() == "gemini-test-model"
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-test-model")
+    assert get_configured_model() == "gemini-3.5-test-model"
 
     monkeypatch.setenv("GEMINI_MODEL", "  ")
     assert get_configured_model() == DEFAULT_MODEL

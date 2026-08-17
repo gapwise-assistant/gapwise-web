@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import logging
 import os
 from collections.abc import AsyncIterator
 
@@ -27,11 +28,13 @@ from google.cloud import logging as google_cloud_logging
 from app.app_utils import services
 from app.app_utils.a2a import attach_a2a_routes
 from app.app_utils.typing import Feedback
+from app.model_policy import is_demo_mode
 
 load_dotenv()
 _, project_id = google.auth.default()
 logging_client = google_cloud_logging.Client()
 logger = logging_client.logger(__name__)
+startup_logger = logging.getLogger(__name__)
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
@@ -41,6 +44,21 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    if is_demo_mode():
+        raise RuntimeError(
+            "ADK is disabled while GAPSWISE_DEMO_MODE=true; use the deterministic local demo adapter."
+        )
+    from app.model_policy import validate_live_model_policy
+
+    policy = validate_live_model_policy()
+    policy_summary = {role: config.model for role, config in policy.items()}
+    startup_logger.info("Live ADK model policy validated: %s", policy_summary)
+    # The model identifiers are safe developer metadata; do not log prompts,
+    # Context Packs, credentials, or model output.
+    logger.log_struct(
+        {"event": "live_model_policy_validated", "models": policy_summary},
+        severity="INFO",
+    )
     from app.agent import app as adk_app
     from app.agent import root_agent
 

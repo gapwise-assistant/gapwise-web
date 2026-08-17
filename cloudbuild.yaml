@@ -9,7 +9,9 @@ substitutions:
   _WEB_URL: https://gapswise-web-r3zqs7f2gq-uc.a.run.app
   _PUBLIC_WEB_URL: https://gapwise.web.app
   _AGENT_URL: https://gapswise-agent-r3zqs7f2gq-uc.a.run.app
-  _GEMINI_MODEL: gemini-2.5-flash-lite
+  # Verified in Vertex AI for gapwise-505217/global (lowest-cost eligible live model).
+  _GEMINI_MODEL: gemini-3.5-flash-lite
+  _GEMINI_EVAL_MODEL: gemini-3.5-flash-lite
   _NEXT_PUBLIC_FIREBASE_API_KEY: ''
   _NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ''
   _NEXT_PUBLIC_FIREBASE_PROJECT_ID: ''
@@ -25,6 +27,11 @@ steps:
     args:
       - -ceu
       - |
+        echo "Checking live Gemini model: ${_GEMINI_MODEL}"
+        echo "${_GEMINI_MODEL}" | grep -Eq '^gemini-([4-9][0-9]*|3\.[5-9][0-9]*)-' || {
+          echo "_GEMINI_MODEL must be Gemini 3.5 or newer; refusing deployment." >&2
+          exit 1
+        }
         for value in \
           "${_NEXT_PUBLIC_FIREBASE_API_KEY}" \
           "${_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}" \
@@ -106,7 +113,7 @@ steps:
       - --memory=1Gi
       - --concurrency=4
       - --cpu-throttling
-      - --set-env-vars=GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=${_GEMINI_MODEL},GEMINI_EVAL_MODEL=${_GEMINI_MODEL},GAPSWISE_APP_URL=${_WEB_URL},AGENT_VERSION=$BUILD_ID,ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false
+      - --set-env-vars=GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=global,GEMINI_MODEL=${_GEMINI_MODEL},GEMINI_EVAL_MODEL=${_GEMINI_EVAL_MODEL},GAPSWISE_APP_URL=${_WEB_URL},AGENT_VERSION=$BUILD_ID,ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false
       - --set-secrets=GAPSWISE_INTERNAL_API_SECRET=gapswise-internal-api-secret:latest
 
   - id: deploy-web

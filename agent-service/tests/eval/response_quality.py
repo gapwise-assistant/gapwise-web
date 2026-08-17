@@ -9,12 +9,12 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-DEFAULT_EVAL_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_EVAL_MODEL = "gemini-3.5-flash-lite"
 
 
 def get_eval_model() -> str:
     """Return the explicitly configured low-cost evaluation model."""
-    configured = os.environ.get("GEMINI_EVAL_MODEL") or os.environ.get("GEMINI_MODEL")
+    configured = os.environ.get("GEMINI_EVAL_MODEL")
     return (
         configured.strip() if configured and configured.strip() else DEFAULT_EVAL_MODEL
     )

@@ -581,7 +581,7 @@ Implemented:
   - `GOOGLE_CLOUD_PROJECT=gapwise-505217`
   - `GOOGLE_CLOUD_LOCATION=global`
   - `GOOGLE_GENAI_USE_VERTEXAI=true`
-  - `GEMINI_MODEL=gemini-2.5-flash-lite`
+  - `GEMINI_MODEL=gemini-3.5-flash-lite`
 - Structured extraction schema in `src/lib/context/pdfAnalysis.ts` compatible with the existing Gapswise graph node model:
   - summary
   - node type
@@ -622,7 +622,7 @@ Context Inbox
   -> POST /api/context/ingest
   -> load the user-scoped project or General context
   -> upload a PDF privately when applicable
-  -> one structured Gemini/Vertex call using gemini-2.5-flash-lite
+  -> one structured Gemini/Vertex call using gemini-3.5-flash-lite
   -> conservative node deduplication and provenance assignment
   -> persist the updated project through the existing storage provider
   -> recalculate clarity_score and active_question
@@ -1327,13 +1327,13 @@ USE_FIRESTORE=true
 GOOGLE_CLOUD_PROJECT=gapwise-505217
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_GENAI_USE_VERTEXAI=true
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
 The Next.js app and `agent-service/` have separate environment files, so both now
-set `GEMINI_MODEL=gemini-2.5-flash-lite`. The ADK agent reads this value instead of
-hardcoding a model and falls back to the same low-cost model if the variable is
-missing or blank.
+set `GEMINI_MODEL=gemini-3.5-flash-lite`. The ADK agent reads this value instead of
+hardcoding a model. Live startup validation rejects older model selections rather
+than silently falling back.
 
 Authentication continues to use Google Application Default Credentials. No API
 key or service-account JSON file was added. LLM-as-judge evaluations use the
@@ -1341,10 +1341,10 @@ separate `GEMINI_EVAL_MODEL` setting and now default to Flash-Lite as well; a mo
 capable judge must be selected explicitly when its additional cost is justified.
 
 The August 2026 billing review reported 6.87 MXN total Vertex/Agent Platform spend,
-including 6.77 MXN categorized as an unattributed model. The code now avoids moving
-`latest` aliases and names `gemini-2.5-flash-lite` explicitly in the Next.js Gemini
-adapter, ADK runtime, agent metadata, and evaluation configuration. Cloud Audit Logs
-did not contain Vertex data-access entries for the reviewed period, so historical
+including 6.77 MXN categorized as an unattributed model. The current code names
+`gemini-3.5-flash-lite` explicitly in the Next.js Gemini adapter, ADK runtime, agent
+metadata, and evaluation configuration. Cloud Audit Logs did not contain Vertex
+data-access entries for the reviewed period, so historical
 unattributed calls could not be mapped back to individual model requests from logs.
 
 Current standard global list pricing is $0.10 per million input tokens and $0.40
@@ -1540,7 +1540,7 @@ Staging runtime values include:
 - `USE_FIRESTORE=true`
 - `GOOGLE_CLOUD_PROJECT=gapwise-505217`
 - `GOOGLE_CLOUD_LOCATION=global`
-- `GEMINI_MODEL=gemini-2.5-flash-lite`
+- `GEMINI_MODEL=gemini-3.5-flash-lite`
 - `CLOUD_STORAGE_BUCKET=gapwise-505217-context`
 - `GAPSWISE_AGENT_AUTH=true`
 

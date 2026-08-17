@@ -29,6 +29,7 @@ from app.model_policy import (
     DEFAULT_FALLBACK_MODEL,
     generation_config_for,
     get_agent_model_config,
+    validate_live_model,
 )
 
 
@@ -39,8 +40,8 @@ DEFAULT_MODEL = DEFAULT_FALLBACK_MODEL
 
 
 def get_configured_model() -> str:
-    """Return the configured Vertex model, falling back to the low-cost default."""
-    return get_agent_model_config("partner").model
+    """Return the configured Vertex model, rejecting legacy live selections."""
+    return validate_live_model(get_agent_model_config("partner").model)
 
 
 MODEL = get_configured_model()

@@ -657,7 +657,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'questions' && renderProjectQuestions()}
-      {projectSection === 'graph' && <ClarityGraphCanvas project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />}
       {projectSection === 'context' && (
         <ContextInbox
           project={project}

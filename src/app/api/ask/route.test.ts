@@ -67,6 +67,15 @@ describe('POST /api/ask', () => {
     await expect(response.json()).resolves.toMatchObject({
       answer: 'Focus on the target-persona decision.',
       sessionId: 'session_123',
+      modelConfig: expect.objectContaining({
+        provider: 'Vertex AI / Google ADK',
+        agent: 'Partner Agent',
+        model: 'gemini-3.5-flash-lite',
+        thinkingLevel: 'low',
+        maxOutputTokens: 1024,
+        retryAttempts: 3,
+        execution: 'Used',
+      }),
     });
   });
 
@@ -107,6 +116,12 @@ describe('POST /api/ask', () => {
     await expect(response.json()).resolves.toMatchObject({
       answer: expect.stringContaining('Focus on the unresolved decision.'),
       generatedBy: 'local-fallback',
+      modelConfig: expect.objectContaining({
+        provider: 'Deterministic local response',
+        agent: 'Partner Agent',
+        model: 'gemini-3.5-flash-lite',
+        execution: 'Not called locally; Partner Agent would be used when ADK is available',
+      }),
       sessionId: 'local_fallback_session',
     });
     expect(askGapswiseLocally).toHaveBeenCalledWith({

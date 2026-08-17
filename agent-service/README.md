@@ -29,15 +29,12 @@ Local development is configured to use existing Google Cloud ADC credentials wit
 `GOOGLE_CLOUD_PROJECT=gapwise-505217` and Vertex AI in `global`. Live agent runs,
 integration tests, and evals require billing to be enabled for that project.
 
-The agent model is configured through `GEMINI_MODEL`. Gapswise uses
-`gemini-2.5-flash-lite` as its low-cost default for normal ADK traffic. Set a
-different supported Vertex model explicitly when higher model capability is worth
-the additional cost. Local LLM-as-judge evaluations use `GEMINI_EVAL_MODEL`, which
-also defaults to Flash-Lite so an explicit eval run cannot silently select a more
-expensive model.
-
-Google lists October 20, 2026 as the retirement date for this model. Re-evaluate
-the low-cost default before that date rather than relying on an automatic alias.
+The live agent model is configured through `GEMINI_MODEL`. Gapswise uses the
+Vertex-verified `gemini-3.5-flash-lite` model in `gapwise-505217/global` as its
+lowest-cost eligible default. Live startup validation rejects Gemini 2.x and
+3.0–3.4 selections instead of silently falling back. Set a supported Gemini 3.5+
+model explicitly when higher capability is worth the additional cost. Local
+LLM-as-judge evaluations remain separate through `GEMINI_EVAL_MODEL`.
 
 
 ## Quick Start
@@ -107,14 +104,14 @@ Local development uses:
 GAPSWISE_APP_URL=http://localhost:3000
 GAPSWISE_INTERNAL_API_SECRET=the-same-secret-as-the-next-js-app
 GAPSWISE_DEFAULT_USER_ID=demo-user
-GEMINI_MODEL=gemini-2.5-flash-lite
-GEMINI_EVAL_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_EVAL_MODEL=gemini-3.5-flash-lite
 ```
 
 The upcoming four-agent workflow uses the centralized policy in
 `app/model_policy.py`. Local development defaults to the cheap profile:
-Context and Attention use Flash-Lite, Gap uses Flash with the largest reasoning
-budget, and Partner uses Flash-Lite. Each role can be overridden independently
+Context, Gap, Attention, and Partner use the cost-controlled Gemini 3.5
+Flash-Lite default; the Gap role retains the largest reasoning budget. Each role can be overridden independently
 with `AGENT_<ROLE>_MODEL`, `AGENT_<ROLE>_THINKING`, and
 `AGENT_<ROLE>_MAX_OUTPUT_TOKENS`. Set `AGENT_MODEL_PROFILE=flagship` only for a
 deliberate higher-cost run; it is never selected automatically.

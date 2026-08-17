@@ -6,15 +6,23 @@ import { retrieveGmailSignals } from '@/lib/google/gmail';
 import { collectWorkspaceSignals } from '@/lib/google/workspace';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
-import { getConfiguredGeminiModel } from '@/lib/google/genai';
+import { getConfiguredGeminiModel, isEligibleGeminiModel } from '@/lib/google/genai';
 
 describe('Google Workspace awareness', () => {
   it('uses an explicit low-cost Gemini model by default', () => {
     vi.stubEnv('GEMINI_MODEL', '');
-    expect(getConfiguredGeminiModel()).toBe('gemini-2.5-flash-lite');
+    expect(getConfiguredGeminiModel()).toBe('gemini-3.5-flash-lite');
 
-    vi.stubEnv('GEMINI_MODEL', 'gemini-explicit-model');
-    expect(getConfiguredGeminiModel()).toBe('gemini-explicit-model');
+    vi.stubEnv('GEMINI_MODEL', 'gemini-3.5-explicit-model');
+    expect(getConfiguredGeminiModel()).toBe('gemini-3.5-explicit-model');
+    vi.unstubAllEnvs();
+  });
+
+  it('rejects legacy Gemini selections for live paths', () => {
+    vi.stubEnv('GEMINI_MODEL', 'gemini-2.5-flash-lite');
+    expect(() => getConfiguredGeminiModel()).toThrow(/Gemini 3\.5 or newer/);
+    expect(isEligibleGeminiModel('gemini-3.5-flash-lite')).toBe(true);
+    expect(isEligibleGeminiModel('gemini-3.1-flash-lite')).toBe(false);
     vi.unstubAllEnvs();
   });
 

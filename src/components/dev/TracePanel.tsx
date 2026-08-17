@@ -49,10 +49,52 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
                     <span className="text-cyan-300">{trace.duration_ms}ms</span>
                   </div>
                   <p className="mt-1 text-slate-500">{trace.route}</p>
+                  {trace.model && <p className="mt-1 text-cyan-200">Model: {trace.model}</p>}
+                  {trace.agentConfigs && trace.agentConfigs.length > 0 && (
+                    <div className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
+                      <p className="font-semibold text-slate-400">AI routing</p>
+                      <ul className="mt-1 space-y-1">
+                        {trace.agentConfigs.map((config) => (
+                          <li key={config.agentName}>
+                            {config.agentName}: <span className="text-cyan-200">{config.model}</span>
+                            {' · '}{config.thinkingLevel} thinking · {config.maxOutputTokens.toLocaleString()} tokens
+                            {' · '}{config.execution === 'would_use' ? 'would use' : config.execution}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {trace.agentRuns && trace.agentRuns.length > 0 && (
+                    <div className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
+                      <p className="font-semibold text-slate-400">Run metrics</p>
+                      {trace.agentRuns.map((run) => (
+                        <p key={run.runId} className="mt-1">
+                          {run.agent}: {run.execution} · {run.latencyMs}ms · {run.inputTokens} in / {run.outputTokens} out · validation {run.validationStatus} · confidence {run.confidence === null ? 'n/a' : run.confidence.toFixed(3)} · escalated {run.escalated ? 'yes' : 'no'}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {trace.gapAnalysis && (
+                    <p className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
+                      Gap candidates: {trace.gapAnalysis.candidates.map((candidate) => `${candidate.rank}:${candidate.id}`).join(', ') || 'none'} · selected {trace.gapAnalysis.selectedGapId ?? 'none'} · confidence {trace.gapAnalysis.confidence === null ? 'n/a' : trace.gapAnalysis.confidence.toFixed(3)} · escalated {trace.gapAnalysis.escalated ? 'yes' : 'no'}
+                    </p>
+                  )}
+                  {trace.handoffs && trace.handoffs.length > 0 && (
+                    <p className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
+                      Handoffs: {trace.handoffs.map((handoff) => `${handoff.from}→${handoff.to} (${handoff.inputCount}/${handoff.outputCount})`).join(' · ')}
+                    </p>
+                  )}
+                  {trace.contextSummary && (
+                    <p className="mt-2 text-slate-500">
+                      Context: {trace.contextSummary.includedContextCount} selected IDs · {trace.contextSummary.goalCount} goals · {trace.contextSummary.unresolvedGapCount} open gaps · {trace.contextSummary.evidenceCount} evidence · {trace.contextSummary.preferenceCount} preferences · {trace.contextSummary.decisionCount} decisions · {trace.contextSummary.commitmentCount} commitments
+                    </p>
+                  )}
                   <p className="mt-2 text-slate-400">
                     Agents: {trace.agentNames.join(', ') || 'none'}
                   </p>
-                  <p className="text-slate-500">Context IDs: {trace.contextIds.length}</p>
+                  <p className="text-slate-500">
+                    Context IDs ({trace.contextIds.length}): {trace.contextIds.slice(0, 8).join(', ') || 'none'}{trace.contextIds.length > 8 ? '…' : ''}
+                  </p>
                   {trace.scores.length > 0 && (
                     <p className="text-slate-500">Scores: {trace.scores.map((score) => `${score.id}:${score.score}`).join(', ')}</p>
                   )}

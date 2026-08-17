@@ -16,6 +16,7 @@ import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { buildDecisionPath } from '@/lib/graph/constellation';
 import type { GraphViewport } from '@/components/ConstellationGraph';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { DecisionMapActivity } from '@/components/DecisionMapActivity';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
   ssr: false,
@@ -27,6 +28,7 @@ const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationG
 });
 
 interface ClarityGraphCanvasProps {
+  userId: string;
   project: Project;
   onSelectNode: (node: ClarityNode) => void;
   onReviewDecision?: (node: ClarityNode) => void;
@@ -70,6 +72,7 @@ function readableStatus(status: ClarityNode['status']): string {
 }
 
 export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
+  userId,
   project,
   onSelectNode,
   onReviewDecision,
@@ -257,6 +260,8 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             )}
           </div>
         </header>
+
+        <DecisionMapActivity userId={userId} />
 
         <div className="touch-scroll flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
           <Filter className="ml-2 mr-1 h-3.5 w-3.5 shrink-0 text-slate-500" />

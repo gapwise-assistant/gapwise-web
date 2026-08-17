@@ -280,7 +280,7 @@ describe('AI context graph analysis', () => {
     await analyzeContextItem({ ...input({ sourceId: 'src_schema' }), genAI }, projectWithGoal());
 
     expect(genAI.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.5-flash-lite',
       config: expect.objectContaining({
         responseMimeType: 'application/json',
         responseSchema: expect.objectContaining({

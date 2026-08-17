@@ -7,6 +7,7 @@ import { recordTrace } from '@/lib/observability/trace';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 
 export const runtime = 'nodejs';
 
@@ -59,6 +60,23 @@ export async function POST(request: Request) {
       contextIds: brief.recommendations.flatMap((recommendation) => recommendation.context_pack.includedContextIds),
       scores: brief.recommendations.map((recommendation) => ({ id: recommendation.id, score: recommendation.score })),
       toolCalls: ['generateDailyBrief', 'generateAttentionCandidates'],
+      agentRuns: [{
+        runId: `attention_${started}`,
+        agent: 'Attention Agent',
+        model: getAgentModelConfig('attention').model,
+        thinkingLevel: getAgentModelConfig('attention').thinkingLevel,
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: Date.now() - started,
+        estimatedCost: 0,
+        costSource: 'zero_cost_deterministic',
+        validationStatus: 'passed',
+        confidence: brief.recommendations[0]?.score ?? null,
+        escalated: false,
+        execution: 'deterministic',
+        inputSummary: `${contextPack.includedContextIds.length} selected context IDs`,
+        outputSummary: `${brief.recommendations.length} attention recommendations`,
+      }],
     });
 
     return NextResponse.json({ brief });
