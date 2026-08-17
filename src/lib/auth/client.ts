@@ -7,7 +7,7 @@ import {
   User,
   getAuth,
   onAuthStateChanged,
-  signInWithRedirect,
+  signInWithPopup,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 
@@ -61,7 +61,7 @@ export function subscribeToAuth(callback: (user: AuthUser | null) => void): () =
 export async function signInWithGoogle(): Promise<void> {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  await signInWithRedirect(getFirebaseAuth(), provider);
+  await signInWithPopup(getFirebaseAuth(), provider);
 }
 
 export async function signOutFromGoogle(): Promise<void> {

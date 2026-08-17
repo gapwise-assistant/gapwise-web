@@ -36,6 +36,7 @@ import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope 
 import { authFetch } from '@/lib/auth/client';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
+import { DemoLoadingState } from '@/components/DemoLoadingState';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
@@ -321,6 +322,15 @@ export default function Home() {
   const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
   const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
+  const loadingDemoLabel = isLoadingCareerDemo
+    ? 'Career demo'
+    : isLoadingHackathonDemo
+      ? 'Voluntary demo'
+      : isLoadingKintaGenDemo
+        ? 'Scientific AI assistant'
+        : isLoadingDemo
+          ? 'demo'
+          : null;
   const openContext = useCallback((entry: ContextEntry = { tab: 'recent' }) => {
     setContextEntry(entry);
     setActiveTab('scope');
@@ -891,6 +901,9 @@ export default function Home() {
       />
 
       <main className="pb-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] md:pb-16">
+        {loadingDemoLabel ? (
+          <DemoLoadingState label={loadingDemoLabel} />
+        ) : <>
         {storageMessage && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
             <div className="rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-xs text-amber-200">
@@ -1022,6 +1035,7 @@ export default function Home() {
             onSignOut={() => { void auth.signOut(); }}
           />
         )}
+        </>}
       </main>
 
       {idontKnowGap && (

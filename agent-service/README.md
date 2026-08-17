@@ -111,6 +111,14 @@ GEMINI_MODEL=gemini-2.5-flash-lite
 GEMINI_EVAL_MODEL=gemini-2.5-flash-lite
 ```
 
+The upcoming four-agent workflow uses the centralized policy in
+`app/model_policy.py`. Local development defaults to the cheap profile:
+Context and Attention use Flash-Lite, Gap uses Flash with the largest reasoning
+budget, and Partner uses Flash-Lite. Each role can be overridden independently
+with `AGENT_<ROLE>_MODEL`, `AGENT_<ROLE>_THINKING`, and
+`AGENT_<ROLE>_MAX_OUTPUT_TOKENS`. Set `AGENT_MODEL_PROFILE=flagship` only for a
+deliberate higher-cost run; it is never selected automatically.
+
 Python does not recreate or duplicate Context Pack retrieval logic.
 The ADK dev UI may pass placeholder user IDs such as `default`; the tool maps
 those to `GAPSWISE_DEFAULT_USER_ID` so local testing reads the same Gapswise

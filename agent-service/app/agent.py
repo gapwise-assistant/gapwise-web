@@ -25,20 +25,26 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.adk.tools import ToolContext
 from google.genai import types
+from app.model_policy import (
+    DEFAULT_FALLBACK_MODEL,
+    generation_config_for,
+    get_agent_model_config,
+)
 
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = DEFAULT_FALLBACK_MODEL
 
 
 def get_configured_model() -> str:
     """Return the configured Vertex model, falling back to the low-cost default."""
-    return os.environ.get("GEMINI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    return get_agent_model_config("partner").model
 
 
 MODEL = get_configured_model()
+MODEL_CONFIG = get_agent_model_config("partner")
 
 
 def health_check() -> dict[str, str]:
@@ -148,6 +154,7 @@ root_agent = Agent(
         model=MODEL,
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
+    generate_content_config=generation_config_for(MODEL_CONFIG),
     instruction=(
         "You are the Gapswise root agent. When the user asks exactly "
         '"Check Gapswise health", call the health_check tool and report its result. '

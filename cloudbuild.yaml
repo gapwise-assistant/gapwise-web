@@ -7,7 +7,7 @@
 substitutions:
   _REGION: us-central1
   _WEB_URL: https://gapswise-web-r3zqs7f2gq-uc.a.run.app
-  _PUBLIC_WEB_URL: https://gapswise.web.app
+  _PUBLIC_WEB_URL: https://gapwise.web.app
   _AGENT_URL: https://gapswise-agent-r3zqs7f2gq-uc.a.run.app
   _GEMINI_MODEL: gemini-2.5-flash-lite
   _NEXT_PUBLIC_FIREBASE_API_KEY: ''

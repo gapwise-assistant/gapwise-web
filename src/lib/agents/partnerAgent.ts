@@ -1,10 +1,15 @@
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { AttentionAgentOutput, agentNames, GapAgentOutput, partnerAgentOutputSchema, PartnerAgentOutput, validateStructuredOutput } from '@/lib/agents/schemas';
 import { questionPriorityThreshold } from '@/lib/personalization/preferences';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+
+const partnerModelConfig = getAgentModelConfig('partner');
 
 export const partnerAgentDefinition = {
   name: agentNames.partner,
-  model: 'gemini-2.5-flash-lite',
+  model: partnerModelConfig.model,
+  thinkingLevel: partnerModelConfig.thinkingLevel,
+  maxOutputTokens: partnerModelConfig.maxOutputTokens,
   description: 'Chooses one question or action and communicates according to user preferences.',
   adkReady: true,
 };

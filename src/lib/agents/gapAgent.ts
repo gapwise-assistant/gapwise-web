@@ -2,10 +2,15 @@ import { Project } from '@/types/clarity';
 import { agentNames, gapAgentOutputSchema, GapAgentOutput, validateStructuredOutput } from '@/lib/agents/schemas';
 import { retrieveRelevantSources } from '@/lib/tools/contextTools';
 import { rankGaps } from '@/lib/tools/graphTools';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+
+const gapModelConfig = getAgentModelConfig('gap');
 
 export const gapAgentDefinition = {
   name: agentNames.gap,
-  model: 'gemini-2.5-flash-lite',
+  model: gapModelConfig.model,
+  thinkingLevel: gapModelConfig.thinkingLevel,
+  maxOutputTokens: gapModelConfig.maxOutputTokens,
   description: 'Ranks unresolved uncertainty and avoids asking questions already answered by retrieved context.',
   adkReady: true,
 };

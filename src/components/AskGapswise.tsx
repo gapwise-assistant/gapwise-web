@@ -37,7 +37,7 @@ interface ChatMessage {
   };
 }
 
-interface ChatSession {
+export interface ChatSession {
   id: string;
   title: string;
   createdAt: string;
@@ -101,6 +101,13 @@ function chatLabel(chat: ChatSession): string {
 
 function chatHoverLabel(chat: ChatSession): string {
   return `${chatTimestamp(chat.createdAt)} · ${chatQuestion(chat)}`;
+}
+
+export function chatPickerOptions(chats: ChatSession[], draftChat: ChatSession | null): Array<{ id: string; label: string; title?: string }> {
+  return [
+    ...(draftChat ? [{ id: draftChat.id, label: 'New chat (unsent)', title: chatHoverLabel(draftChat) }] : []),
+    ...chats.map((chat) => ({ id: chat.id, label: chatLabel(chat), title: chatHoverLabel(chat) })),
+  ];
 }
 
 function normalizeChat(chat: ChatSession): ChatSession {
@@ -411,9 +418,23 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <p className="text-xs font-semibold text-cyan-300">Focused on: {scopeLabel}</p>
-          {chats.length > 1 && !draftChat && <select aria-label="Choose chat" title={activeChat ? chatHoverLabel(activeChat) : undefined} value={activeChat?.id ?? ''} onChange={(event) => { setActiveChatId(event.target.value); setInput(''); setError(''); }} className="max-w-full rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs font-semibold text-slate-300 outline-none focus:border-cyan-700">
-            {chats.map((chat) => <option key={chat.id} value={chat.id} title={chatHoverLabel(chat)}>{chatLabel(chat)}</option>)}
-          </select>}
+          {(chats.length > 0 || draftChat) && (
+            <select
+              aria-label="Choose chat"
+              title={activeChat ? chatHoverLabel(activeChat) : undefined}
+              value={activeChatId ?? ''}
+              onChange={(event) => {
+                setActiveChatId(event.target.value);
+                setInput('');
+                setError('');
+              }}
+              className="min-w-0 max-w-full rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs font-semibold text-slate-300 outline-none focus:border-cyan-700"
+            >
+              {chatPickerOptions(chats, draftChat).map((option) => (
+                <option key={option.id} value={option.id} title={option.title}>{option.label}</option>
+              ))}
+            </select>
+          )}
           <button type="button" onClick={handleDeleteChat} aria-label="Delete chat" title="Delete chat" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 text-slate-500 hover:border-rose-900 hover:bg-rose-950/30 hover:text-rose-300">
             <Trash2 className="h-3.5 w-3.5" />
           </button>

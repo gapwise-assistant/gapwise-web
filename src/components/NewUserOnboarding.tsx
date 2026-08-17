@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { FolderPlus, LogOut, PlayCircle } from 'lucide-react';
+import { FolderPlus, LoaderCircle, LogOut, PlayCircle } from 'lucide-react';
 
 interface NewUserOnboardingProps {
   accountLabel?: string;
@@ -116,6 +116,18 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
           </button>
         )}
       </div>
+
+      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo) && (
+        <div className="mt-5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-4" aria-live="polite" role="status">
+          <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
+            <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Loading your demo data…
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {[0, 1, 2].map((item) => <div key={item} className="h-2 animate-pulse rounded-full bg-slate-800" />)}
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="mt-5 rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs leading-5 text-rose-200">

@@ -5,8 +5,8 @@
   "targets": {
     "gapwise-505217": {
       "hosting": {
-        "gapswise": [
-          "gapswise"
+        "gapwise": [
+          "gapwise"
         ]
       }
     }

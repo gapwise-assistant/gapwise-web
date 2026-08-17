@@ -125,6 +125,12 @@ Cloud Storage, and Vertex AI use the dedicated Cloud Run service identities and
 Application Default Credentials. Never place secret values in substitutions or
 build arguments.
 
+Google sign-in uses Firebase's popup flow, so its provider callback remains the
+Firebase-managed URI:
+`https://gapwise-505217.firebaseapp.com/__/auth/handler`.
+Keep `gapwise.web.app` in Firebase Authentication's Authorized domains so the
+Hosting origin is allowed to use the popup.
+
 The deployment file intentionally omits `GAPSWISE_DEFAULT_USER_ID`; staging
 requests must carry the authenticated Firebase UID. The local agent example may
 set it to `demo-user` only for local demo development.

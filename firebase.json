@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "gapswise",
+    "site": "gapwise",
     "public": "public",
     "ignore": [
       "firebase.json",

@@ -8,10 +8,15 @@ import {
   validateStructuredOutput,
 } from '@/lib/agents/schemas';
 import { activeContextSources } from '@/lib/context/sourceState';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+
+const contextModelConfig = getAgentModelConfig('context');
 
 export const contextAgentDefinition = {
   name: agentNames.context,
-  model: 'gemini-2.5-flash-lite',
+  model: contextModelConfig.model,
+  thinkingLevel: contextModelConfig.thinkingLevel,
+  maxOutputTokens: contextModelConfig.maxOutputTokens,
   description: 'Extracts facts, goals, constraints, commitments, and candidate unknowns from new context.',
   adkReady: true,
 };

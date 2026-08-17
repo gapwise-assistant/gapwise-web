@@ -1546,7 +1546,7 @@ Staging runtime values include:
 
 The public staging Calendar callback is:
 
-`https://gapswise.web.app/api/integrations/google/calendar/callback`
+`https://gapwise.web.app/api/integrations/google/calendar/callback`
 
 That exact URI must also be listed under the existing Google OAuth Web Client
 in Google Cloud Console → APIs & Services → Credentials. The existing
@@ -1559,7 +1559,7 @@ Firebase Authentication authorized domains include both Cloud Run hostnames:
 
 The Firebase Hosting frontend hostname must also be authorized:
 
-- `gapswise.web.app`
+- `gapwise.web.app`
 
 Authorized domains contain only hostnames, without `https://`, paths, or a
 trailing slash.
@@ -1591,7 +1591,7 @@ need permission to change IAM policy for every release.
 
 Firebase Hosting site `gapswise` is deployed in project `gapwise-505217`:
 
-- Public URL: `https://gapswise.web.app`
+- Public URL: `https://gapwise.web.app`
 - Hosting configuration: `firebase.json`
 - Firebase project mapping: `.firebaserc`
 - Live Hosting version: `1bf889afccd62146`
@@ -1604,7 +1604,7 @@ redirect uses the Hosting URL.
 
 The root document is explicitly `no-store` at both Next.js and Firebase
 Hosting, so a new Cloud Run revision is picked up at the normal
-`https://gapswise.web.app` URL without a cache-busting query parameter. Hashed
+`https://gapwise.web.app` URL without a cache-busting query parameter. Hashed
 `_next/static` assets remain cacheable and immutable.
 
 ### Billing budget alert

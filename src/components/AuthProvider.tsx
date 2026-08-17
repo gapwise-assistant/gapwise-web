@@ -42,15 +42,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
         const firebaseAuth = getFirebaseAuth();
-        getRedirectResult(firebaseAuth).catch((caught) => {
-          if (disposed) return;
-          setError(caught instanceof Error ? caught.message : 'Google sign-in could not be completed.');
-        });
-        unsubscribe = subscribeToAuth((nextUser) => {
-          if (disposed) return;
-          setUser(nextUser);
-          setIsReady(true);
-        });
+        // Finish the redirect callback before subscribing to auth state. The
+        // callback can restore a user asynchronously; subscribing first can
+        // briefly publish `null`, render the login screen, and restart the
+        // redirect flow in browsers with strict storage isolation.
+        void getRedirectResult(firebaseAuth)
+          .catch((caught) => {
+            if (disposed) return;
+            setError(caught instanceof Error ? caught.message : 'Google sign-in could not be completed.');
+          })
+          .finally(() => {
+            if (disposed) return;
+            unsubscribe = subscribeToAuth((nextUser) => {
+              if (disposed) return;
+              setUser(nextUser);
+              setIsReady(true);
+            });
+          });
       })
       .catch((caught) => {
         if (disposed) return;

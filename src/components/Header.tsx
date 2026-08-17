@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { PlayCircle, RefreshCw, Settings2, Target } from 'lucide-react';
+import { LoaderCircle, PlayCircle, RefreshCw, Settings2, Target } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
@@ -54,6 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
+  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo;
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
@@ -164,10 +165,10 @@ export const Header: React.FC<HeaderProps> = ({
                     <button
                       type="button"
                       onClick={() => { setDemoMenuOpen(false); onLoadCareerDemo(); }}
-                      disabled={isLoadingCareerDemo}
+                      disabled={isAnyDemoLoading}
                       className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60"
                     >
-                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-amber-300" />
+                      {isLoadingCareerDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-amber-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-amber-300" />}
                       {isLoadingCareerDemo ? 'Loading career demo…' : 'Career demo'}
                     </button>
                   )}
@@ -175,10 +176,10 @@ export const Header: React.FC<HeaderProps> = ({
                     <button
                       type="button"
                       onClick={() => { setDemoMenuOpen(false); onLoadHackathonDemo(); }}
-                      disabled={isLoadingHackathonDemo}
+                      disabled={isAnyDemoLoading}
                       className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
                     >
-                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />
+                      {isLoadingHackathonDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-cyan-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />}
                       {isLoadingHackathonDemo ? 'Loading voluntary demo…' : 'Voluntary demo'}
                     </button>
                   )}
@@ -186,10 +187,10 @@ export const Header: React.FC<HeaderProps> = ({
                     <button
                       type="button"
                       onClick={() => { setDemoMenuOpen(false); onLoadKintaGenDemo(); }}
-                      disabled={isLoadingKintaGenDemo}
+                      disabled={isAnyDemoLoading}
                       className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-fuchsia-200 disabled:cursor-wait disabled:opacity-60"
                     >
-                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-fuchsia-300" />
+                      {isLoadingKintaGenDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-fuchsia-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-fuchsia-300" />}
                       {isLoadingKintaGenDemo ? 'Loading scientific assistant…' : 'Scientific AI assistant'}
                     </button>
                   )}

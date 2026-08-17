@@ -7,10 +7,15 @@ import {
   validateStructuredOutput,
 } from '@/lib/agents/schemas';
 import { rankGaps } from '@/lib/tools/graphTools';
+import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+
+const attentionModelConfig = getAgentModelConfig('attention');
 
 export const attentionAgentDefinition = {
   name: agentNames.attention,
-  model: 'gemini-2.5-flash-lite',
+  model: attentionModelConfig.model,
+  thinkingLevel: attentionModelConfig.thinkingLevel,
+  maxOutputTokens: attentionModelConfig.maxOutputTokens,
   description: 'Generates explainable recommendations about what deserves attention now.',
   adkReady: true,
 };
