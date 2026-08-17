@@ -138,7 +138,7 @@ function projectSnapshot(project: Project): string {
 
 function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
   return [
-    'Analyze one newly supplied Gapswise context item against the current project state.',
+    'Analyze one newly supplied Gapwise context item against the current project state.',
     `Project goal: ${project.goal}`,
     `New source filename: ${input.filename}`,
     `New context text or user-provided description: ${input.content.trim() || '(The source is provided as a file; inspect it.)'}`,

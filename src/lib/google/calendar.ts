@@ -14,7 +14,7 @@ export function getDemoCalendarEvents(now = new Date('2026-08-10T10:00:00Z')): C
   return [
     {
       id: 'demo_meeting_1',
-      title: 'Gapswise demo planning meeting',
+      title: 'Gapwise demo planning meeting',
       start: tomorrow.toISOString(),
       end: new Date(tomorrow.getTime() + 45 * 60 * 1000).toISOString(),
       description: 'Prepare target persona, pricing assumption, and 4-minute demo story.',
@@ -129,7 +129,7 @@ function logContextPackCalendarFiltering(
 ): void {
   if (process.env.NODE_ENV !== 'development') return;
 
-  console.info('[Gapswise Calendar Context Pack]', {
+  console.info('[Gapwise Calendar Context Pack]', {
     rawEventCount: rawEvents.length,
     filteredEventCount: filteredEvents.length,
     events: rawEvents.map((event) => ({

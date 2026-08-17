@@ -197,7 +197,7 @@ describe('Google Workspace awareness', () => {
     expect(events.some((event) => event.id === 'working_location_1')).toBe(false);
     expect(events.some((event) => event.id === 'future_6mo')).toBe(false);
     expect(info).toHaveBeenCalledWith(
-      '[Gapswise Calendar Context Pack]',
+      '[Gapwise Calendar Context Pack]',
       expect.objectContaining({
         rawEventCount: 7,
         filteredEventCount: 3,

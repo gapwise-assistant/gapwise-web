@@ -198,7 +198,7 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
   return {
     whyThisMatters,
     whatThisBlocks: blocked.length
-      ? uniqueText(blocked.map((target) => `Gapswise cannot confidently move to ${target.type.toLowerCase().replace('_', ' ')} “${nodeDescription(target)}” until this is answered.`), MAX_CHANGES)
+      ? uniqueText(blocked.map((target) => `Gapwise cannot confidently move to ${target.type.toLowerCase().replace('_', ' ')} “${nodeDescription(target)}” until this is answered.`), MAX_CHANGES)
       : [],
     whatGapswiseKnows,
     whatCouldChange,

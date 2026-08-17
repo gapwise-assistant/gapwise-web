@@ -217,9 +217,9 @@ export function DecisionWorkspace({
                 <button type="button" onClick={() => setDecisionFormOpen(false)} className="text-xs font-semibold text-slate-400 hover:text-slate-200">Collapse</button>
               </div>
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="custom-decision">Your decision</label>
-              <input id="custom-decision" value={customDecision} onChange={(event) => setCustomDecision(event.target.value)} placeholder="Enter the decision Gapswise should remember" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
+              <input id="custom-decision" value={customDecision} onChange={(event) => setCustomDecision(event.target.value)} placeholder="Enter the decision Gapwise should remember" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="decision-reason">Reason <span className="font-normal text-slate-500">(optional)</span></label>
-              <textarea id="decision-reason" value={reason} onChange={(event) => setReason(event.target.value)} rows={3} placeholder="Add a short reason Gapswise should remember" className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
+              <textarea id="decision-reason" value={reason} onChange={(event) => setReason(event.target.value)} rows={3} placeholder="Add a short reason Gapwise should remember" className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               {error && <p className="mt-3 text-xs text-rose-300" role="alert">{error}</p>}
               <div className="mt-4 flex justify-end gap-2">
                 <button type="button" onClick={() => void handleConfirm()} disabled={!finalDecision || isSaving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">

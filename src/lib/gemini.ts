@@ -20,7 +20,7 @@ export async function processUserAnswer(
       profile,
       applyGraphUpdates: false,
     });
-    console.info('[Gapswise agent trace]', turn.trace);
+  console.info('[Gapwise agent trace]', turn.trace);
   }
 
   return updated;

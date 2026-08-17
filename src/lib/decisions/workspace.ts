@@ -229,7 +229,7 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
   const sources = activeContextSources(project).filter((source) => relevantSourceIds.includes(source.id));
   const recommendation = buildRecommendation(options, remainingQuestions.length > 0);
   const currentPicture = recommendation
-    ? [`Gapswise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]
+    ? [`Gapwise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]
     : remainingQuestions.length
       ? decision.why_it_matters?.[0]
         ? [decision.why_it_matters[0]]

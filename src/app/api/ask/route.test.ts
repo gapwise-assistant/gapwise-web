@@ -21,7 +21,7 @@ function jsonRequest(body: unknown): Request {
 
 describe('POST /api/ask', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
     else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
   });
@@ -86,6 +86,33 @@ describe('POST /api/ask', () => {
     expect(askGapswise).toHaveBeenCalledWith({
       userId: 'demo-user',
       message: 'What am I neglecting?',
+    });
+  });
+
+  it('uses a local context response when the ADK agent is unavailable', async () => {
+    vi.mocked(askGapswise).mockRejectedValue(new AskAgentError('ADK run failed with status 503.'));
+    vi.mocked(askGapswiseLocally).mockResolvedValue({
+      answer: '## Local context\n\nFocus on the unresolved decision.',
+      sessionId: 'local_fallback_session',
+      sources: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'What should I focus on?',
+      projectId: 'project_hackathon',
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      answer: expect.stringContaining('Focus on the unresolved decision.'),
+      generatedBy: 'local-fallback',
+      sessionId: 'local_fallback_session',
+    });
+    expect(askGapswiseLocally).toHaveBeenCalledWith({
+      userId: 'demo-user',
+      message: 'What should I focus on?',
+      projectId: 'project_hackathon',
     });
   });
 

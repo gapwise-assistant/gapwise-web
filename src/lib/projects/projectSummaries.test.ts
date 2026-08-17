@@ -9,7 +9,7 @@ describe('project summaries', () => {
     const summary = summarizeProject(project, new Date('2026-08-11T12:00:00.000Z'));
 
     expect(summary).toMatchObject({
-      name: 'Gapswise Hackathon Submission',
+      name: 'Gapwise Hackathon Submission',
       primaryGoal: 'Ship a winning Collaborative Partner project in 2-3 weeks',
       status: 'active',
       sourceCount: 4,

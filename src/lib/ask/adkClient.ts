@@ -17,6 +17,11 @@ export interface AskResult {
   answer: string;
   sessionId: string;
   sources: AskSource[];
+  promptUsed?: string;
+  contextUsed?: {
+    projectTitle: string;
+    items: string[];
+  };
 }
 
 export type AskFailureStage = 'agent-auth' | 'agent-unavailable' | 'context-pack' | 'gemini';
@@ -72,6 +77,7 @@ const contextPackResponseSchema = z.object({
     ).default([]),
   }),
 });
+type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
 
 function agentBaseUrl(): string {
   return (process.env.GAPSWISE_AGENT_URL ?? process.env.AGENT_SERVICE_URL ?? 'http://127.0.0.1:8080').replace(/\/$/, '');
@@ -119,7 +125,7 @@ async function createSession(userId: string, projectId?: string): Promise<string
       headers: { 'Content-Type': 'application/json', ...identityHeaders },
       body: JSON.stringify({
         state: {
-          product: 'Gapswise',
+          product: 'Gapwise',
           gapswise_user_id: userId,
           ...(projectId ? { gapswise_project_id: projectId } : {}),
         },
@@ -298,7 +304,34 @@ function removeRepeatedTrailingLine(text: string): string {
   return text;
 }
 
-async function loadSafeSources(userId: string, query: string, projectId?: string): Promise<AskSource[]> {
+function compactContextText(value: string, maxLength = 500): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
+}
+
+function contextPromptForAgent(message: string, contextPack: AskContextPack | null, projectId?: string): string {
+  if (!contextPack) return message;
+  const sections: string[] = [];
+  const addSection = (label: string, values: string[]) => {
+    const items = values.filter(Boolean).slice(0, 8);
+    if (items.length) sections.push(`${label}:\n${items.map((item) => `- ${item}`).join('\n')}`);
+  };
+  addSection('Active goals', contextPack.activeGoals.map((node) => compactContextText(node.text)));
+  addSection('User preferences', contextPack.userPreferences.map((memory) => compactContextText(memory.text)));
+  addSection('Unresolved questions', contextPack.unresolvedGaps.map((node) => compactContextText(node.text)));
+  addSection('Recent decisions', contextPack.recentDecisions.map((node) => compactContextText(node.text)));
+  addSection('Relevant project documents and evidence', [...contextPack.provenanceSources, ...contextPack.relevantEvidence].map((source) => `${source.filename}: ${compactContextText(source.excerpt)}`));
+  addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
+  if (!sections.length) return message;
+  return [
+    'Use the selected project context below as the source of truth. Do not invent facts outside it.',
+    projectId ? `Project scope: ${projectId}` : 'Scope: all available context',
+    sections.join('\n\n'),
+    `User question:\n${message}`,
+  ].join('\n\n');
+}
+
+async function loadSafeSources(userId: string, query: string, projectId?: string): Promise<{ sources: AskSource[]; contextPack: AskContextPack | null }> {
   try {
     const response = await fetch(`${gapswiseAppUrl()}/api/internal/context-pack`, {
       method: 'POST',
@@ -306,23 +339,23 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
       body: JSON.stringify({ userId, query, ...(projectId ? { projectId } : {}) }),
     });
     if (!response.ok) {
-      console.error('[Gapswise Ask]', {
+      console.error('[Gapwise Ask]', {
         stage: 'context-pack',
         status: response.status,
         hasProjectScope: Boolean(projectId),
         queryLength: query.length,
       });
-      return [];
+      return { sources: [], contextPack: null };
     }
     const parsed = contextPackResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      console.error('[Gapswise Ask]', {
+      console.error('[Gapwise Ask]', {
         stage: 'context-pack',
         reason: 'invalid-response-shape',
         hasProjectScope: Boolean(projectId),
         queryLength: query.length,
       });
-      return [];
+      return { sources: [], contextPack: null };
     }
 
     const evidence = [
@@ -359,7 +392,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
       .filter((node) => !node.source_refs.length)
       .map((node) => ({
         id: node.id,
-        title: `${node.type.replaceAll('_', ' ')} in Gapswise`,
+        title: `${node.type.replaceAll('_', ' ')} in Gapwise`,
         excerpt: node.text,
         kind: 'graph',
         supports: [node.text],
@@ -384,20 +417,23 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
         reason: commitment.why_it_matters?.filter((item) => item !== 'Source: Google Calendar').join(' · '),
       }));
 
-    return Array.from(
+    return {
+      sources: Array.from(
       new Map(
         [...evidenceSources, ...graphSources, ...memorySources, ...calendarSources]
           .map((source) => [source.id, source])
       ).values()
-    ).slice(0, 8);
+      ).slice(0, 8),
+      contextPack: parsed.data.contextPack,
+    };
   } catch (error) {
-    console.error('[Gapswise Ask]', {
+    console.error('[Gapwise Ask]', {
       stage: 'context-pack',
       reason: error instanceof Error ? error.name : 'unknown-error',
       hasProjectScope: Boolean(projectId),
       queryLength: query.length,
     });
-    return [];
+    return { sources: [], contextPack: null };
   }
 }
 
@@ -441,14 +477,20 @@ export async function askGapswise(params: {
   projectId?: string;
 }): Promise<AskResult> {
   assertExternalServicesAllowed('Google ADK / Gemini');
-  const sessionId = params.sessionId?.trim() || await createSession(params.userId, params.projectId);
-  const [answer, sources] = await Promise.all([
-    runAdkTurn(params.userId, sessionId, params.message),
+  const [sessionId, { sources, contextPack }] = await Promise.all([
+    params.sessionId?.trim() || createSession(params.userId, params.projectId),
     loadSafeSources(params.userId, params.message, params.projectId),
   ]);
+  const promptUsed = contextPromptForAgent(params.message, contextPack, params.projectId);
+  const contextualAnswer = await runAdkTurn(
+    params.userId,
+    sessionId,
+    promptUsed,
+  );
   return {
-    answer: directEvidenceAnswer(params.message, answer, sources) ?? answer,
+    answer: directEvidenceAnswer(params.message, contextualAnswer, sources) ?? contextualAnswer,
     sessionId,
     sources,
+    promptUsed,
   };
 }

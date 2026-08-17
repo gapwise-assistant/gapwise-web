@@ -192,6 +192,23 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'events', { ...event, userId });
   }
 
+  async resetUserData(userId: string): Promise<void> {
+    const db = await this.readDb();
+    db.users[userId] = {
+      contexts: [],
+      nodes: [],
+      edges: [],
+      sources: [],
+      conversations: [],
+      activeProjectId: undefined,
+      appScope: undefined,
+      feedback: [],
+      events: [],
+      memories: [],
+    };
+    await this.writeDb(db);
+  }
+
   async resetDemoData(userId: string): Promise<void> {
     const demo = createGoldenDemoProject();
     await this.saveProject(userId, demo);

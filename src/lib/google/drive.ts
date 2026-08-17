@@ -8,7 +8,7 @@ export function getDemoDriveFiles(): DriveFileSignal[] {
       id: 'drive_cv_1',
       name: 'Martel AI CV.pdf',
       mimeType: 'application/pdf',
-      text: 'CV last updated before the latest agentic AI project. Missing Gapswise and hackathon work.',
+      text: 'CV last updated before the latest agentic AI project. Missing Gapwise and hackathon work.',
       folderId: 'career-folder',
       modifiedAt: '2026-06-01T10:00:00Z',
       sourceUrl: 'https://drive.google.com/file/d/drive_cv_1/view',

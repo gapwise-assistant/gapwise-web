@@ -46,7 +46,7 @@ describe('POST /api/ask/suggestions', () => {
     expect(askGapswise).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'demo-user',
       projectId: 'japan_trip',
-      message: expect.stringContaining('The current Gapswise scope is: Japan trip.'),
+      message: expect.stringContaining('The current Gapwise scope is: Japan trip.'),
     }));
     await expect(response.json()).resolves.toEqual({
       topQuestions: [
@@ -95,9 +95,31 @@ describe('POST /api/ask/suggestions', () => {
       topQuestions: ['What should I clarify about the trip budget?'],
       otherQuestions: ['What should I verify next?'],
       generatedBy: 'local-fallback',
-      warning: 'AI suggestions are unavailable right now. Showing questions from the current context instead.',
+      warning: 'Using saved context for these suggestions while AI is unavailable.',
       stage: 'agent-unavailable',
     });
+  });
+
+  it('keeps the Career Demo deterministic even when AI mode is enabled', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.mocked(generateLocalAskSuggestions).mockResolvedValue({
+      top: ["Given Northstar's Product Engineer role is 70–80% frontend and I want backend or applied AI ownership, what would have to be true for this role to still be worth pursuing?"],
+      other: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      projectId: 'career_conflict_demo',
+      scopeLabel: 'Career Transition — Northstar Product Engineer',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(generateLocalAskSuggestions).toHaveBeenCalledWith({
+      userId: 'demo-user',
+      projectId: 'career_conflict_demo',
+    });
+    expect(askGapswise).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({ generatedBy: 'local-context' });
   });
 
   it('rejects an invalid request', async () => {

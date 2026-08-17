@@ -128,6 +128,9 @@ export interface StorageProvider {
 
   logEvent(userId: string, event: FirestoreEvent): Promise<void>;
 
+  /** Remove all persisted user data before loading a deterministic demo seed. */
+  resetUserData(userId: string): Promise<void>;
+
   resetDemoData(userId: string): Promise<void>;
 }
 

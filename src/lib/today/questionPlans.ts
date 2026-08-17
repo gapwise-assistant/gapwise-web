@@ -42,19 +42,23 @@ function sentence(value: string, maxLength = 220): string {
 function titleValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = compact(value).replace(/[.!?]+$/g, '');
-  if (normalized.length < 8 || normalized.length > 120) return null;
-  if (normalized.split(/\s+/).length > 14) return null;
+  if (normalized.length < 8 || normalized.length > 90) return null;
+  if (normalized.split(/\s+/).length > 10) return null;
   if (!/^(decide|confirm|clarify|find out|verify|check)\b/i.test(normalized)) return null;
   return normalized;
 }
 
 function summaryValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const normalized = compact(value);
-  if (normalized.length < 8 || normalized.length > 240) return null;
+  const normalized = compact(value)
+    .replace(/\b(?:supported|informed) by:\s*["“][^"”]+["”]\s*\.?/gi, '')
+    .replace(/"([^"]+)"/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (normalized.length < 8 || normalized.length > 180) return null;
   if (/^(?:blocks?|affects?)\b|^this (?:question|answer)\b.*\b(?:decision|interview)\b/i.test(normalized)) return null;
   const firstSentence = normalized.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? normalized;
-  return sentence(firstSentence);
+  return sentence(firstSentence, 150);
 }
 
 function questionWithoutPunctuation(question: string): string {
@@ -80,16 +84,16 @@ function roleFitFallback(question: TodayQuestionLike): TodayQuestionPresentation
   if (!match) return null;
   const facts = question.presentationContext ?? [];
   const company = namedCompany(facts);
-  const subject = company ? `the ${company} role` : match[1].replace(/^this\s+/i, 'this ');
+  const subject = company ? `the ${company} role` : 'the role';
   const roleFact = facts.find((fact) => /\bfrontend\b/i.test(fact));
   const preferenceFact = facts.find((fact) => /avoid|preference|preferred direction|dominated by frontend/i.test(fact));
   let summary = 'The role may conflict with your preferred direction.';
   if (roleFact && preferenceFact) {
     const roleMatch = roleFact.match(/(\d+\s*[–-]\s*\d+%\s+frontend(?:\s+(?:during|in)\s+[^,.]+)?)/i);
     const role = roleMatch?.[1] ?? 'primarily frontend';
-    summary = `The role is ${role}, which conflicts with your preference to avoid frontend-heavy work.`;
+    summary = `The role may be ${role}, which conflicts with your preferred direction.`;
   } else if (roleFact) {
-    summary = `${sentence(roleFact, 150).replace(/\.$/, '')}, so role fit still needs a decision.`;
+    summary = 'The available role details still need a steady-state work split.';
   }
   return {
     questionId: question.id,
@@ -126,7 +130,7 @@ function deterministicPresentation(question: TodayQuestionLike): TodayQuestionPr
 
   return {
     questionId: question.id,
-    title: sentence(title, 120).replace(/\.$/, ''),
+    title: sentence(title, 90).replace(/\.$/, ''),
     summary: sentence(summary),
   };
 }
@@ -285,7 +289,7 @@ export function questionSuggestionRequestMessage(
     .map((question) => `${question.id}: ${question.question} (${question.reason}; ${question.provenance}${question.presentationContext?.length ? `; context: ${question.presentationContext.join(' | ')}` : ''})`)
     .join(' | ');
   return [
-    'This is an internal Gapswise Today presentation request, not a normal chat reply.',
+    'This is an internal Gapwise Today presentation request, not a normal chat reply.',
     `The current scope is: ${scopeLabel}.`,
     'Call get_context_pack first using the current user and the current scope before answering.',
     `Create an evidence-aware presentation and suggested answer for each of these questions: ${questionList}`,

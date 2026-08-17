@@ -19,7 +19,7 @@ export const ProfileMemoryView: React.FC<ProfileMemoryViewProps> = ({
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateProfile(formData);
-    setSavedMessage('Memory Profile updated! Gapswise will adapt question frequency & style instantly.');
+    setSavedMessage('Memory Profile updated! Gapwise will adapt question frequency & style instantly.');
     setTimeout(() => setSavedMessage(''), 4000);
   };
 
@@ -34,7 +34,7 @@ export const ProfileMemoryView: React.FC<ProfileMemoryViewProps> = ({
           <div>
             <h1 className="text-2xl font-extrabold text-slate-100">How I Work With You</h1>
             <p className="text-xs text-slate-400">
-              Inspectable persistent memory. Edit durable working preferences to change how aggressively Gapswise challenges assumptions and ranks questions.
+              Inspectable persistent memory. Edit durable working preferences to change how aggressively Gapwise challenges assumptions and ranks questions.
             </p>
           </div>
         </div>
@@ -126,7 +126,7 @@ export const ProfileMemoryView: React.FC<ProfileMemoryViewProps> = ({
           </h2>
 
           <p className="text-xs text-slate-400">
-            Gapswise persists your work style and feedback across sessions automatically.
+            Gapwise persists your work style and feedback across sessions automatically.
           </p>
 
           <div className="space-y-2">

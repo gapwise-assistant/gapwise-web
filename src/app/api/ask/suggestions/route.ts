@@ -5,6 +5,7 @@ import { generateLocalAskSuggestions } from '@/lib/ask/localDemoAdapter';
 import { buildSuggestionRequestMessage, parseSuggestedQuestions } from '@/lib/ask/suggestions';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 
 export const runtime = 'nodejs';
 
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (isDemoMode()) {
+    if (isDemoMode() || parsed.data.projectId === CAREER_CONFLICT_DEMO_ID) {
       const groups = await generateLocalAskSuggestions({
         userId,
         projectId: parsed.data.projectId,
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
         projectId: parsed.data.projectId,
       });
       console.error(
-        '[Gapswise Ask suggestions]',
+        '[Gapwise Ask suggestions]',
         `stage=${stage}`,
         'fallback=local-context',
         `hasProjectScope=${Boolean(parsed.data.projectId)}`,
@@ -94,13 +95,13 @@ export async function POST(request: Request) {
         topQuestions: fallback.top,
         otherQuestions: fallback.other,
         generatedBy: 'local-fallback',
-        warning: 'AI suggestions are unavailable right now. Showing questions from the current context instead.',
+        warning: 'Using saved context for these suggestions while AI is unavailable.',
         stage,
       });
     } catch (fallbackError) {
       const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'unknown-fallback-error';
       console.error(
-        '[Gapswise Ask suggestions]',
+        '[Gapwise Ask suggestions]',
         `stage=${stage}`,
         'fallback=failed',
         `hasProjectScope=${Boolean(parsed.data.projectId)}`,

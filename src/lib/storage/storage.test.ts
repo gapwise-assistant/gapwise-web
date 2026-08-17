@@ -107,7 +107,7 @@ describe('MockStorageProvider', () => {
     await storage.saveProject('user-two', userTwoProject);
 
     await expect(storage.getProject('user-one')).resolves.toMatchObject({
-      title: 'Gapswise Hackathon Submission',
+      title: 'Gapwise Hackathon Submission',
     });
     await expect(storage.getProject('user-two')).resolves.toMatchObject({
       title: 'Other User Project',
@@ -159,7 +159,7 @@ describe('MockStorageProvider', () => {
 
     const projects = await storage.listProjects('demo-user');
     expect(projects.map((item) => item.title)).toEqual(
-      expect.arrayContaining(['Gapswise Hackathon Submission', 'Find a new job'])
+      expect.arrayContaining(['Gapwise Hackathon Submission', 'Find a new job'])
     );
 
     const loadedSecond = await storage.getProject('demo-user', second.id);
@@ -389,8 +389,34 @@ describe('MockStorageProvider', () => {
     await storage.resetDemoData('demo-user');
     const secondReset = await storage.getProject('demo-user');
 
-    expect(firstReset?.title).toBe('Gapswise Hackathon Submission');
+    expect(firstReset?.title).toBe('Gapwise Hackathon Submission');
     expect(secondReset).toEqual(firstReset);
+  });
+
+  it('clears all persisted user data when preparing a fresh demo seed', async () => {
+    const storage = await makeProvider();
+    const project = createProjectFromInput(
+      { name: 'Old project', goal: 'This should be removed before the career demo.' },
+      '2026-08-11T12:00:00.000Z'
+    );
+    await storage.saveProject('demo-user', project);
+    await storage.saveFeedback('demo-user', {
+      id: 'old_feedback',
+      userId: 'demo-user',
+      question_id: 'old_question',
+      node_id: 'old_question',
+      rating: 'helpful',
+      createdAt: '2026-08-11T12:00:00.000Z',
+      updatedAt: '2026-08-11T12:00:00.000Z',
+      status: 'active',
+    });
+
+    await storage.resetUserData('demo-user');
+
+    await expect(storage.listProjects('demo-user')).resolves.toEqual([]);
+    await expect(storage.getMemories('demo-user')).resolves.toEqual([]);
+    await expect(storage.getFeedback('demo-user')).resolves.toEqual([]);
+    await expect(storage.getAppScope('demo-user')).resolves.toEqual({ type: 'everything' });
   });
 
   it('retrieves persisted raw Context Source evidence in a Context Pack', async () => {

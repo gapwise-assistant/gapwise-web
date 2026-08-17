@@ -65,6 +65,7 @@ describe('RecommendationCard reminders', () => {
           onOpenWhy={vi.fn()}
           onFeedback={vi.fn()}
           onSnooze={vi.fn()}
+          onHide={vi.fn()}
         />
       );
 
@@ -79,17 +80,17 @@ describe('RecommendationCard reminders', () => {
       expect(html).toContain('In 1h 30m');
       expect(html).toContain('Today ·');
       expect(html).toContain('Google Calendar');
-      expect(html).toContain('Done');
-      expect(html).toContain('Snooze');
       expect(html).toContain('aria-haspopup="menu"');
       expect(html).not.toContain('Not now');
       expect(html).not.toContain('Source: Google Calendar');
       expect(html).not.toContain('2026-08-16T21:30:00.000Z');
-      expect(html).toContain('w-full max-w-[420px]');
+      expect(html).toContain('w-full rounded-xl border');
+      expect(html).toContain('md:justify-between');
+      expect(html).toContain('h-8 w-8');
+      expect(html).not.toContain('>Done<');
+      expect(html).not.toContain('>Snooze<');
       expect(html.indexOf('REMINDER')).toBeLessThan(html.indexOf('In 1h 30m'));
       expect(html.indexOf('In 1h 30m')).toBeLessThan(html.indexOf('Career decision prep with Alex'));
-      expect(html.indexOf('Done')).toBeLessThan(html.indexOf('Snooze'));
-      expect(html).not.toContain('justify-between');
     } finally {
       vi.useRealTimers();
     }

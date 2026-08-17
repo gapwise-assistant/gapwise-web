@@ -4,12 +4,16 @@ import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadProjectForScope } from '@/lib/storage';
 import { ContextPack } from '@/types/contextPack';
-import { createLocalDemoProjects, demoCalendarEvents } from '@/lib/demo/localFixtures';
+import { createLocalDemoProjects, demoCalendarEvents, demoCareerConflictCalendarEvents, demoKintaGenCalendarEvents } from '@/lib/demo/localFixtures';
+import { createCareerConflictDemoMemories, createCareerConflictDemoProject, CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
+import { createKintaGenDemoMemories, createKintaGenDemoProject, KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
 import { memoriesFromProfile } from '@/lib/memory/store';
 import { EVERYTHING_SCOPE } from '@/types/scope';
 import type { Project } from '@/types/clarity';
 import { contextualSuggestionsFromPack } from '@/lib/ask/suggestions';
+
+const localContextInstruction = 'Use only the selected project context and clearly distinguish known facts from unresolved questions.';
 
 interface LocalAskContextParams {
   userId: string;
@@ -35,11 +39,21 @@ async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ pro
       }),
     };
   } catch (error) {
-    const fixtures = createLocalDemoProjects();
+    const fixtures = [...createLocalDemoProjects(), createCareerConflictDemoProject(), createKintaGenDemoProject()];
     const project = fixtures.find((item) => item.id === params.projectId) ?? fixtures[0];
+    const fallbackMemories = project.id === CAREER_CONFLICT_DEMO_ID
+      ? createCareerConflictDemoMemories()
+      : project.id === KINTAGEN_DEMO_ID
+        ? createKintaGenDemoMemories()
+        : memoriesFromProfile(DEFAULT_USER_PROFILE);
     const now = new Date();
+    const fallbackCalendarEvents = project.id === CAREER_CONFLICT_DEMO_ID
+      ? demoCareerConflictCalendarEvents(now)
+      : project.id === KINTAGEN_DEMO_ID
+        ? demoKintaGenCalendarEvents(now)
+        : demoCalendarEvents(now);
     if (process.env.NODE_ENV === 'development') {
-      console.warn('[Gapswise demo Ask] Local context unavailable; using deterministic fixtures.', {
+      console.warn('[Gapwise demo Ask] Local context unavailable; using deterministic fixtures.', {
         error: error instanceof Error ? error.message : 'Unknown local context error',
       });
     }
@@ -50,9 +64,9 @@ async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ pro
         query: params.query,
         project,
         profile: DEFAULT_USER_PROFILE,
-        durableMemories: memoriesFromProfile(DEFAULT_USER_PROFILE),
+        durableMemories: fallbackMemories,
         includeBroadContext: params.includeBroadContext,
-        calendarCommitments: calendarEventsToCommitmentNodes(demoCalendarEvents(now), now, 10),
+        calendarCommitments: calendarEventsToCommitmentNodes(fallbackCalendarEvents, now, 10),
         scope: params.projectId ? { type: 'project', projectId: project.id } : EVERYTHING_SCOPE,
       }),
     };
@@ -76,7 +90,7 @@ function sourcesFromPack(pack: ContextPack): AskSource[] {
     ...pack.contradictions,
   ].filter((node) => !node.source_refs.length).map((node) => ({
     id: node.id,
-    title: `${node.type.replaceAll('_', ' ')} in Gapswise`,
+    title: `${node.type.replaceAll('_', ' ')} in Gapwise`,
     excerpt: node.text,
     kind: 'graph',
     supports: [node.text],
@@ -103,6 +117,31 @@ function sourcesFromPack(pack: ContextPack): AskSource[] {
   return Array.from(new Map([...evidence, ...graph, ...memories, ...calendar].map((source) => [source.id, source])).values()).slice(0, 8);
 }
 
+function contextUsedFromPack(pack: ContextPack, projectTitle: string): { projectTitle: string; items: string[] } {
+  const compact = (value: string) => {
+    const text = value.replace(/\s+/g, ' ').trim();
+    return text.length > 420 ? `${text.slice(0, 419)}…` : text;
+  };
+  const items = [
+    ...pack.activeGoals.map((node) => `Goal: ${compact(node.text)}`),
+    ...pack.userPreferences.map((memory) => `Preference: ${compact(memory.text)}`),
+    ...pack.unresolvedGaps.map((node) => `Open question: ${compact(node.text)}`),
+    ...pack.recentDecisions.map((node) => `Decision: ${compact(node.text)}`),
+    ...[...pack.provenanceSources, ...pack.relevantEvidence].slice(0, 8).map((source) => `Source ${source.filename}: ${compact(source.excerpt)}`),
+    ...pack.upcomingCommitments.slice(0, 3).map((commitment) => `Upcoming: ${compact(commitment.text)}`),
+  ].filter(Boolean).slice(0, 16);
+  return { projectTitle, items };
+}
+
+function promptUsedFromContext(message: string, contextUsed: { projectTitle: string; items: string[] }): string {
+  return [
+    localContextInstruction,
+    `Project: ${contextUsed.projectTitle}`,
+    contextUsed.items.length ? `Context:\n${contextUsed.items.map((item) => `- ${item}`).join('\n')}` : 'Context: No matching project facts were found.',
+    `User question:\n${message}`,
+  ].join('\n\n');
+}
+
 function eventSummary(pack: ContextPack): string {
   if (!pack.upcomingCommitments.length) return 'There are no upcoming demo commitments in this scope.';
   return pack.upcomingCommitments.slice(0, 3).map((event) => {
@@ -121,7 +160,7 @@ function deterministicAnswer(message: string, pack: ContextPack, projectTitle: s
     return `## Coming up\n\n${eventSummary(pack)}\n\nThese are local demo Calendar fixtures.`;
   }
   if (/what do you know|about this project|summari[sz]e/.test(query)) {
-    return `## ${projectTitle}\n\n**Goal:** ${goal?.text ?? projectGoal}\n\n${gap ? `**Still unclear:** ${gap.text}` : 'There are no open questions in the selected scope.'}\n\nGapswise is answering from the currently selected local scope.`;
+    return `## ${projectTitle}\n\n**Goal:** ${goal?.text ?? projectGoal}\n\n${gap ? `**Still unclear:** ${gap.text}` : 'There are no open questions in the selected scope.'}\n\nGapwise is answering from the currently selected local scope.`;
   }
   if (/assumption/.test(query)) {
     return assumption
@@ -147,10 +186,13 @@ export async function askGapswiseLocally(params: {
     projectId: params.projectId,
     query: params.message,
   });
+  const contextUsed = contextUsedFromPack(pack, project.title);
   return {
     answer: deterministicAnswer(params.message, pack, project.title, project.goal),
     sessionId: params.sessionId?.trim() || `demo_${params.projectId ?? 'everything'}_${Date.now()}`,
     sources: sourcesFromPack(pack),
+    promptUsed: promptUsedFromContext(params.message, contextUsed),
+    contextUsed,
   };
 }
 
@@ -164,5 +206,5 @@ export async function generateLocalAskSuggestions(params: {
     query: 'What important questions, risks, commitments, and missing information should I consider next?',
     includeBroadContext: true,
   });
-  return contextualSuggestionsFromPack(pack);
+  return contextualSuggestionsFromPack(pack, { projectId: params.projectId });
 }

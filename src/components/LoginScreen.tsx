@@ -29,7 +29,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError })
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-500/15 text-cyan-300">
           <Target className="h-6 w-6" />
         </div>
-        <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPSWISE</p>
+        <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPWISE</p>
         <h1 className="mt-2 text-2xl font-extrabold">Your context, connected.</h1>
         <p className="mt-3 text-sm leading-6 text-slate-400">
           Sign in to load your projects, memories, documents, and priorities.

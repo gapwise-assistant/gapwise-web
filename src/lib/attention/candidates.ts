@@ -223,7 +223,7 @@ export function generateAttentionCandidates(params: {
           kind: 'opportunity',
           title: 'Update your CV with recent AI work',
           reason: 'A selected Drive file suggests your CV is missing the latest agentic AI project evidence.',
-          next_action: 'Add Gapswise and recent agentic AI work to the CV before sharing it.',
+          next_action: 'Add Gapwise and recent agentic AI work to the CV before sharing it.',
           source_node_ids: source.derived_node_ids,
           source_ids: [source.id],
           context_pack: contextPack,

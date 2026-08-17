@@ -4,11 +4,11 @@ import { AuthProvider } from '@/components/AuthProvider';
 
 export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
-  title: 'Gapswise | Find the Question That Unlocks the Next Decision',
+  title: 'Gapwise | Find the Question That Unlocks the Next Decision',
   description:
-    'Gapswise is a persistent collaborative thinking agent that turns your messy context into a live map of knowns, decisions, assumptions, and unknowns — then finds the highest-value question you should answer next.',
+    'Gapwise is a persistent collaborative thinking agent that turns your messy context into a live map of knowns, decisions, assumptions, and unknowns — then finds the highest-value question you should answer next.',
   keywords: [
-    'Gapswise',
+    'Gapwise',
     'Collaborative Partner Agent',
     'Clarity Graph',
     'Uncertainty Prioritization Engine',

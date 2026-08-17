@@ -193,7 +193,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
       if (!content) {
         setErrorMessage(
           selectedFile
-            ? 'Add a short description, transcript, or excerpt so Gapswise can understand this source.'
+            ? 'Add a short description, transcript, or excerpt so Gapwise can understand this source.'
             : 'Paste some context before adding.'
         );
         return;
@@ -348,7 +348,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
 
       <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
         <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          {src.extraction_summary ? 'What Gapswise learned' : 'Summary'}
+          {src.extraction_summary ? 'What Gapwise learned' : 'Summary'}
         </p>
         <p className={`mt-2 text-xs text-slate-300 ${compact ? 'line-clamp-2' : ''}`}>
           {summaryFor(src)}
@@ -452,7 +452,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             <div>
               <h3 className="flex items-center gap-2 text-sm font-extrabold text-slate-100">
                 <Info className="h-4 w-4 text-cyan-300" />
-                What Gapswise learned
+                What Gapwise learned
               </h3>
               <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950 p-4">
                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">{summaryFor(selectedSource)}</p>
@@ -654,7 +654,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">CONTEXT</p>
           <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Context</h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Information and sources Gapswise can use.
+          Information and sources Gapwise can use.
           </p>
           <p className="mt-2 text-xs font-semibold text-cyan-300">
             {scope.type === 'project' ? `Focused on: ${project.title}` : 'Focused on: Everything'}
@@ -705,7 +705,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             <div className="space-y-3 border-t border-slate-800 pt-6">
               <div>
                 <h3 className="text-base font-extrabold text-slate-100">Discarded context</h3>
-                <p className="mt-1 text-xs text-slate-500">Stored safely, but excluded from Gapswise reasoning until restored.</p>
+                <p className="mt-1 text-xs text-slate-500">Stored safely, but excluded from Gapwise reasoning until restored.</p>
               </div>
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 {discardedSources.map((source) => renderSourceCard(source, true, true))}

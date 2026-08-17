@@ -12,7 +12,7 @@ export const DEFAULT_USER_PROFILE: UserMemoryProfile = {
   uncertainty_style: 'explicit',
   durable_notes: [
     'I prefer concise explanations.',
-    'Ship Gapswise before expanding the job search.',
+    'Ship Gapwise before expanding the job search.',
   ],
 };
 
@@ -21,7 +21,7 @@ const PROJECT_CREATED_AT = '2026-08-10T10:00:00.000Z';
 export function createGoldenDemoProject(): Project {
   const project: Project = {
     id: 'hackathon_demo',
-    title: 'Gapswise Hackathon Submission',
+    title: 'Gapwise Hackathon Submission',
     goal: 'Ship a winning Collaborative Partner project in 2-3 weeks',
     deadline: '2026-08-31',
     one_sentence_context:
@@ -48,13 +48,13 @@ export function createGoldenDemoProject(): Project {
         filename: 'idea-brainstorm.txt',
         type: 'text',
         content:
-          'Idea 1: Universal life OS. Idea 2: Email cleanup agent. Idea 3: Gapswise clarity graph & gap-driven thinking agent. Idea 4: Calendar manager.',
+          'Idea 1: Universal life OS. Idea 2: Email cleanup agent. Idea 3: Gapwise clarity graph & gap-driven thinking agent. Idea 4: Calendar manager.',
         extracted_at: '2026-08-10T10:15:00Z',
         derived_node_ids: ['node_decision_track'],
         processing_status: 'completed',
         mime_type: 'text/plain',
         origin: 'user',
-        extraction_summary: 'Early idea exploration that selected Gapswise as the project direction.',
+        extraction_summary: 'Early idea exploration that selected Gapwise as the project direction.',
       },
       {
         id: 'src_3',
@@ -128,7 +128,7 @@ export function createGoldenDemoProject(): Project {
       {
         id: 'node_decision_track',
         type: 'DECISION',
-        text: 'Build Gapswise: Find the question that unlocks the next decision',
+        text: 'Build Gapwise: Find the question that unlocks the next decision',
         status: 'RESOLVED',
         confidence: 0.95,
         impact: 0.95,
@@ -156,7 +156,7 @@ export function createGoldenDemoProject(): Project {
       {
         id: 'unknown_target_user',
         type: 'UNKNOWN',
-        text: 'Who exactly is the primary target persona and 4-minute demo scenario for Gapswise?',
+        text: 'Who exactly is the primary target persona and 4-minute demo scenario for Gapwise?',
         status: 'OPEN',
         confidence: 0.18,
         impact: 0.94,

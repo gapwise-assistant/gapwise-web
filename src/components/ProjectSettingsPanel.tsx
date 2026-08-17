@@ -152,7 +152,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
       <div>
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">PROJECT SETTINGS</p>
         <h2 className="mt-2 text-xl font-extrabold text-slate-100">{project.title}</h2>
-        <p className="mt-1 text-sm text-slate-400">Update the project details Gapswise uses in this workspace.</p>
+        <p className="mt-1 text-sm text-slate-400">Update the project details Gapwise uses in this workspace.</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">

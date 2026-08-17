@@ -3,9 +3,8 @@
 import React from 'react';
 import { Check, MoreHorizontal } from 'lucide-react';
 import type { AttentionCandidate } from '@/types/attention';
-import { SNOOZE_OPTIONS } from '@/components/RecommendationCard';
-import type { SnoozeOption } from '@/components/RecommendationCard';
 import type { TodayQuestion } from '@/lib/today/sections';
+import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
 
 export interface OpenQuestionRowItem {
   id: string;
@@ -30,38 +29,38 @@ export function openQuestionProgress(items: Pick<OpenQuestionRowItem, 'answered'
 
 export function questionOverflowLabels(params: {
   answered?: boolean;
-  hasWhy?: boolean;
-  hasDecision?: boolean;
-  canSnooze?: boolean;
+  canHide?: boolean;
 }): string[] {
-  // Resolve is the single path for understanding a blocker. Snooze remains
-  // available for timing control, but decision review is not duplicated here.
-  return [
-    ...(!params.answered && params.canSnooze ? SNOOZE_OPTIONS.map((option) => `Snooze · ${option.label}`) : []),
-  ];
+  return params.canHide && !params.answered ? ['Hide from Today'] : [];
 }
 
 interface OpenQuestionsProps {
   items: OpenQuestionRowItem[];
   summary: string;
   onAnswer: (question: TodayQuestion) => void;
-  onWhy?: (question: TodayQuestion) => void;
-  onReviewDecision?: (nodeId: string) => void;
-  onSnooze?: (recommendation: AttentionCandidate, option: SnoozeOption) => void;
+  onHide?: (recommendation: AttentionCandidate) => void;
 }
 
-function QuestionRow({ item, onAnswer, onSnooze }: Pick<OpenQuestionsProps, 'onAnswer' | 'onSnooze'> & { item: OpenQuestionRowItem }) {
+function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAnswer' | 'onHide'> & { item: OpenQuestionRowItem }) {
   const [menuOpen, setMenuOpen] = React.useState(false);
-  const canSnooze = Boolean(item.recommendation && onSnooze && !item.answered);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  useDismissibleMenu(menuOpen, setMenuOpen, menuRef);
+  const canHide = Boolean(item.recommendation && onHide);
   const overflowLabels = questionOverflowLabels({
     answered: item.answered,
-    canSnooze,
+    canHide,
   });
   const handleOverflowAction = (label: string) => {
     setMenuOpen(false);
-    const snoozeLabel = label.replace(/^Snooze · /, '');
-    const option = SNOOZE_OPTIONS.find((candidate) => candidate.label === snoozeLabel);
-    if (option && item.recommendation) onSnooze?.(item.recommendation, option.value);
+    if (label === 'Hide from Today' && item.recommendation) onHide?.(item.recommendation);
+  };
+  const toggleMenu = () => {
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    closeOpenMenus();
+    setMenuOpen(true);
   };
   const displayTitle = item.question.presentationTitle || item.question.question;
   const displaySummary = item.question.presentationSummary || item.context;
@@ -88,19 +87,19 @@ function QuestionRow({ item, onAnswer, onSnooze }: Pick<OpenQuestionsProps, 'onA
           <button
             type="button"
             onClick={() => onAnswer(item.question)}
-            className={`min-h-8 rounded-md px-2.5 py-1 text-[11px] font-bold sm:min-h-0 ${item.answered ? 'border border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-100' : 'border border-slate-700 bg-slate-800 text-slate-200 hover:border-cyan-700 hover:text-cyan-200'}`}
+            className={`inline-flex h-7 min-h-7 items-center rounded-md border px-2 text-[10px] font-semibold transition-colors sm:min-h-0 ${item.answered ? 'border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-100' : 'border-teal-700/80 bg-teal-950/30 text-teal-200 hover:border-teal-500 hover:bg-teal-900/40 hover:text-teal-100'}`}
           >
             {item.answered ? 'Edit' : 'Resolve'}
           </button>
           {overflowLabels.length > 0 && (
-            <div className="relative">
+            <div ref={menuRef} className="relative">
               <button
                 type="button"
-                onClick={() => setMenuOpen((current) => !current)}
+                onClick={toggleMenu}
                 aria-label={`Actions for ${displayTitle}`}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                className="inline-flex min-h-8 min-w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-800 p-1 text-slate-400 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
+                className="inline-flex h-7 min-h-7 min-w-7 items-center justify-center rounded-md border border-slate-800 bg-transparent p-1 text-slate-500 hover:border-slate-700 hover:bg-slate-800/60 hover:text-slate-300 sm:min-h-0 sm:min-w-0"
               >
                 <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
               </button>
@@ -121,7 +120,7 @@ function QuestionRow({ item, onAnswer, onSnooze }: Pick<OpenQuestionsProps, 'onA
   );
 }
 
-export function OpenQuestions({ items, summary, onAnswer, onSnooze }: OpenQuestionsProps) {
+export function OpenQuestions({ items, summary, onAnswer, onHide }: OpenQuestionsProps) {
   const { openCount, answeredCount } = openQuestionProgress(items);
 
   return (
@@ -132,14 +131,16 @@ export function OpenQuestions({ items, summary, onAnswer, onSnooze }: OpenQuesti
       </div>
       <p className="text-sm text-slate-400">{summary}</p>
       <div className="overflow-visible rounded-xl border border-slate-800 bg-slate-900 divide-y divide-slate-800">
-        {items.map((item) => (
+        {items.length > 0 ? items.map((item) => (
           <QuestionRow
             key={item.id}
             item={item}
             onAnswer={onAnswer}
-            onSnooze={onSnooze}
+            onHide={onHide}
           />
-        ))}
+        )) : (
+          <p className="px-3 py-3 text-xs text-slate-500 sm:px-4">No visible questions right now.</p>
+        )}
       </div>
     </section>
   );

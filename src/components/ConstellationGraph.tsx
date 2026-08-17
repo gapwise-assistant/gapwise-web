@@ -571,7 +571,7 @@ function Constellation2D({
         className="h-full w-full touch-pan-y select-none"
         style={{ touchAction: 'pan-y' }}
         role="img"
-        aria-label="Interactive two-dimensional Gapswise decision map"
+        aria-label="Interactive two-dimensional Gapwise decision map"
         onWheel={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -960,7 +960,7 @@ export default function ConstellationGraph({
           dpr={[1, 1.5]}
           gl={{ antialias: true, alpha: true }}
           onCreated={({ gl }) => gl.setClearColor('#040b17', 1)}
-          aria-label="Interactive three-dimensional Gapswise constellation graph"
+          aria-label="Interactive three-dimensional Gapwise constellation graph"
         >
           <GraphScene
             project={project}

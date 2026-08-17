@@ -30,7 +30,7 @@ describe('GET /api/integrations/google/calendar/events', () => {
     const response = await GET(new NextRequest('http://localhost/api/integrations/google/calendar/events?userId=demo-user'));
     expect(response.status).toBe(200);
     expect(listUpcomingCalendarEvents).not.toHaveBeenCalled();
-    expect((await response.json()).events.map((event: { summary: string }) => event.summary)).toContain('Gapswise Demo Review');
+    expect((await response.json()).events.map((event: { summary: string }) => event.summary)).toContain('Gapwise Demo Review');
   });
 
   it('returns safe upcoming Calendar event fields for the requested user', async () => {

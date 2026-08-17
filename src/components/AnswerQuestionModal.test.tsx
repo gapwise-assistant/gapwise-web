@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AnswerQuestionModal } from '@/components/AnswerQuestionModal';
 
 describe('AnswerQuestionModal', () => {
-  it('uses concise presentation copy and one discussion action', () => {
+  it('uses concise presentation copy and keeps help behind I don\'t know yet', () => {
     const html = renderToStaticMarkup(
       <AnswerQuestionModal
         target={{
@@ -17,7 +17,6 @@ describe('AnswerQuestionModal', () => {
           },
         }}
         onSubmit={vi.fn(async () => undefined)}
-        onOpenChat={vi.fn()}
         onClose={vi.fn()}
       />
     );
@@ -26,7 +25,7 @@ describe('AnswerQuestionModal', () => {
     expect(html).toContain('Decide if the Northstar role is worth pursuing');
     expect(html).toContain('The role may be 70–80% frontend, which conflicts with your direction.');
     expect(html).toContain('Your answer');
-    expect(html).toContain('Discuss with Gapswise');
+    expect(html).not.toContain('Discuss with Gapswise');
     expect(html).not.toContain('Suggested from your context');
     expect(html).not.toContain('Use suggestion');
     expect(html).not.toContain('Chat about suggestion');
@@ -63,8 +62,8 @@ describe('AnswerQuestionModal', () => {
     expect(html).not.toContain('role="tab"');
     expect(html).not.toContain('Blocks');
     expect(html).not.toContain('Decision this unlocks');
-    expect(html).toContain('More actions');
-    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('View in Decision Map');
+    expect(html).not.toContain('More actions');
   });
 
   it('shows decision options as a collapsed expandable section', () => {
@@ -84,7 +83,6 @@ describe('AnswerQuestionModal', () => {
           },
         }}
         onSubmit={vi.fn(async () => undefined)}
-        onOpenChat={vi.fn()}
         onClose={vi.fn()}
       />,
     );

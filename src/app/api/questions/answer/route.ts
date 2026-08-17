@@ -73,7 +73,7 @@ export async function PATCH(request: Request) {
     const result = await editAnsweredQuestion({ ...body, userId });
     return NextResponse.json({
       ...result,
-      message: 'Answer updated. Gapswise understanding was refreshed.',
+      message: 'Answer updated. Gapwise understanding was refreshed.',
     });
   } catch (error) {
     return errorResponse(error);

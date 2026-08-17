@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     const errorMessage = error instanceof Error ? error.message : 'unknown-error';
     // Keep this flat so Cloud Run/Next logs retain the failure stage and message.
     console.error(
-      '[Gapswise Today question suggestions]',
+      '[Gapwise Today question suggestions]',
       `stage=${stage}`,
       `questionCount=${questions.length}`,
       `hasProjectScope=${Boolean(parsed.data.projectId)}`,

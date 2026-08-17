@@ -227,6 +227,28 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'events', event);
   }
 
+  async resetUserData(userId: string): Promise<void> {
+    const collections: CollectionName[] = [
+      'contexts',
+      'nodes',
+      'edges',
+      'sources',
+      'conversations',
+      'feedback',
+      'events',
+      'memories',
+    ];
+    for (const collectionName of collections) {
+      const snapshot = await this.collection(userId, collectionName).get();
+      for (let start = 0; start < snapshot.docs.length; start += 450) {
+        const batch = this.db.batch();
+        snapshot.docs.slice(start, start + 450).forEach((doc) => batch.delete(doc.ref));
+        await batch.commit();
+      }
+    }
+    await this.db.collection('users').doc(userId).collection('preferences').doc('app').delete();
+  }
+
   async resetDemoData(userId: string): Promise<void> {
     const demo = createGoldenDemoProject();
     await this.saveProject(userId, demo);

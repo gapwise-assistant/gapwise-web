@@ -1,4 +1,5 @@
 import { ContextPack } from '@/types/contextPack';
+import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 
 const MAX_SUGGESTIONS = 3;
 const MAX_TOTAL_SUGGESTIONS = MAX_SUGGESTIONS * 2;
@@ -8,10 +9,30 @@ export interface SuggestedQuestionGroups {
   other: string[];
 }
 
+const CAREER_DEMO_SUGGESTIONS: SuggestedQuestionGroups = {
+  top: [
+    "Given Northstar's Product Engineer role is 70–80% frontend and I want backend or applied AI ownership, what would have to be true for this role to still be worth pursuing?",
+    'What should I ask the Northstar recruiter to verify that the backend or applied AI path is real and manager-supported?',
+    "For Northstar's $155k–$175k Product Engineer base range, what compensation details are still missing before I compare this opportunity?",
+  ],
+  other: [
+    'What should I ask Northstar about the steady-state frontend workload after the customer-dashboard launch?',
+    "How does Northstar's Product Engineer opportunity compare with my priorities: stable income, technical depth, commute, and career direction?",
+    'What are the most important questions to ask during the Northstar Product Engineer recruiter call?',
+  ],
+};
+
+function careerDemoSuggestions(): SuggestedQuestionGroups {
+  return {
+    top: [...CAREER_DEMO_SUGGESTIONS.top],
+    other: [...CAREER_DEMO_SUGGESTIONS.other],
+  };
+}
+
 export function buildSuggestionRequestMessage(scopeLabel: string): string {
   return [
     'This is an internal request for the Ask screen, not a normal conversation reply.',
-    `The current Gapswise scope is: ${scopeLabel}.`,
+    `The current Gapwise scope is: ${scopeLabel}.`,
     'Call get_context_pack first using the current user and the exact query __gapswise_ask_suggestions__. This special query includes the current scope sources and learned statements even when they do not match generic words.',
     'Generate exactly 6 concise suggested questions the user would genuinely benefit from asking next.',
     'Put the 3 highest-value questions in top_questions and 3 useful but less urgent or exploratory ideas in other_questions.',
@@ -172,11 +193,20 @@ function buildLocalGroups(topCandidates: string[], otherCandidates: string[]): S
   return { top, other };
 }
 
-export function contextualSuggestionsFromPack(pack: ContextPack): SuggestedQuestionGroups {
-  const topCandidates: string[] = [];
-  const otherCandidates: string[] = [];
+export function contextualSuggestionsFromPack(
+  pack: ContextPack,
+  options: { projectId?: string } = {},
+): SuggestedQuestionGroups {
   const allText = contextText(pack);
   const lowerText = allText.toLowerCase();
+  const isCareerDemo = options.projectId === CAREER_CONFLICT_DEMO_ID
+    || (/70[–-]80% frontend/.test(lowerText)
+      && /backend or applied ai/.test(lowerText)
+      && /\$155(?:,000|k)[–-]\$175(?:,000|k)/.test(lowerText));
+  if (isCareerDemo) return careerDemoSuggestions();
+
+  const topCandidates: string[] = [];
+  const otherCandidates: string[] = [];
   const gap = pack.unresolvedGaps[0];
   const goal = pack.activeGoals[0];
   const commitment = pack.upcomingCommitments[0];
@@ -198,7 +228,7 @@ export function contextualSuggestionsFromPack(pack: ContextPack): SuggestedQuest
     topCandidates.push('What important detail in my supplied context should I clarify first?');
   }
   for (const fallback of [
-    'What should I clarify first based on what Gapswise knows?',
+    'What should I clarify first based on what Gapwise knows?',
     'What would most reduce uncertainty around my current direction?',
   ]) {
     if (topCandidates.length >= MAX_SUGGESTIONS) break;

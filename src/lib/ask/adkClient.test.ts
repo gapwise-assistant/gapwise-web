@@ -71,6 +71,8 @@ describe('ADK Ask client', () => {
     expect(result.sessionId).toBe('session_123');
     expect(result.answer).toContain('Focus on the demo narrative.');
     expect(result.answer).toContain('Use the target-persona gap');
+    expect(result.promptUsed).toContain('Who exactly is the demo for?');
+    expect(result.promptUsed).toContain('What should I decide next?');
     expect(result.sources).toEqual([
       {
         id: 'src_2',
@@ -89,6 +91,10 @@ describe('ADK Ask client', () => {
         body: expect.stringContaining('"session_id":"session_123"'),
       })
     );
+    const runRequest = (fetchMock.mock.calls as Array<[unknown, RequestInit?]>).find(([url]) => String(url).endsWith('/run_sse'))?.[1];
+    const runBody = JSON.parse(String(runRequest?.body ?? '{}')) as { new_message?: { parts?: Array<{ text?: string }> } };
+    expect(runBody.new_message?.parts?.[0]?.text).toContain('Who exactly is the demo for?');
+    expect(runBody.new_message?.parts?.[0]?.text).toContain('What should I decide next?');
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:8080/apps/app/users/demo-user/sessions',
       expect.objectContaining({

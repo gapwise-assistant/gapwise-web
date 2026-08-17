@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BookOpen, ChevronRight, Loader2, Send, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { AskSource } from '@/lib/ask/adkClient';
 import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
@@ -17,6 +17,8 @@ interface AskGapswiseProps {
   initialPrompt?: string;
   autoSendInitialPrompt?: boolean;
   onInitialPromptSent?: () => void;
+  newChatPrompt?: { id: string; text: string } | null;
+  onNewChatPromptOpened?: () => void;
   onViewSource?: (source: AskSource) => void;
 }
 
@@ -25,6 +27,23 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   sources?: AskSource[];
+  responseDetails?: {
+    promptUsed: string;
+    systemPrompt?: string;
+    contextUsed?: {
+      projectTitle: string;
+      items: string[];
+    };
+  };
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  firstQuestion: string;
+  sessionId: string | null;
+  messages: ChatMessage[];
 }
 
 function sessionStorageKey(userId: string, scope: AppScope): string {
@@ -35,10 +54,77 @@ function messagesStorageKey(userId: string, scope: AppScope): string {
   return `gapwise_ask_messages_${userId}_${scopeStorageKey(scope)}`;
 }
 
-export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLabel, initialPrompt, autoSendInitialPrompt, onInitialPromptSent, onViewSource }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+function chatsStorageKey(userId: string, scope: AppScope): string {
+  return `gapwise_ask_chats_${userId}_${scopeStorageKey(scope)}`;
+}
+
+function hiddenWorkspaceKey(userId: string, scope: AppScope): string {
+  return `gapwise_ask_workspace_hidden_${userId}_${scopeStorageKey(scope)}`;
+}
+
+function newChat(): ChatSession {
+  return {
+    id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: 'New chat',
+    createdAt: new Date().toISOString(),
+    firstQuestion: '',
+    sessionId: null,
+    messages: [],
+  };
+}
+
+function titleForMessage(message: string): string {
+  const compact = message.replace(/\s+/g, ' ').trim();
+  return compact.length > 42 ? `${compact.slice(0, 41).replace(/\s+\S*$/, '')}…` : compact || 'New chat';
+}
+
+function chatTimestamp(createdAt: string): string {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function chatQuestion(chat: ChatSession): string {
+  return chat.firstQuestion || chat.title || 'New chat';
+}
+
+function chatLabel(chat: ChatSession): string {
+  return `${chatTimestamp(chat.createdAt)} · ${titleForMessage(chatQuestion(chat))}`;
+}
+
+function chatHoverLabel(chat: ChatSession): string {
+  return `${chatTimestamp(chat.createdAt)} · ${chatQuestion(chat)}`;
+}
+
+function normalizeChat(chat: ChatSession): ChatSession {
+  const messages = Array.isArray(chat.messages) ? chat.messages : [];
+  const firstQuestion = typeof chat.firstQuestion === 'string' && chat.firstQuestion
+    ? chat.firstQuestion
+    : messages.find((message) => message?.role === 'user')?.text ?? '';
+  return {
+    ...chat,
+    title: firstQuestion ? titleForMessage(firstQuestion) : chat.title || 'New chat',
+    createdAt: typeof chat.createdAt === 'string' && !Number.isNaN(new Date(chat.createdAt).getTime())
+      ? chat.createdAt
+      : new Date().toISOString(),
+    firstQuestion,
+    messages,
+  };
+}
+
+export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLabel, initialPrompt, autoSendInitialPrompt, onInitialPromptSent, newChatPrompt, onNewChatPromptOpened, onViewSource }) => {
+  const [chats, setChats] = useState<ChatSession[]>([]);
+  const [draftChat, setDraftChat] = useState<ChatSession | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [showWorkspaceQuestions, setShowWorkspaceQuestions] = useState(true);
   const [input, setInput] = useState('');
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedQuestionGroups>({ top: [], other: [] });
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
@@ -47,10 +133,17 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
   const [error, setError] = useState('');
   const [selectedSources, setSelectedSources] = useState<AskSource[] | null>(null);
   const initialPromptSentRef = useRef('');
+  const newChatPromptHandledRef = useRef('');
   const sourcesPanelRef = useRef<HTMLElement | null>(null);
   useDismissibleModal(() => setSelectedSources(null), sourcesPanelRef, Boolean(selectedSources));
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const hasConversation = messages.length > 0;
+  const [hydratedScope, setHydratedScope] = useState('');
+  const activeChat = chats.find((chat) => chat.id === activeChatId)
+    ?? (draftChat?.id === activeChatId ? draftChat : null)
+    ?? chats[0]
+    ?? null;
+  const messages = activeChat?.messages ?? [];
+  const sessionId = activeChat?.sessionId ?? null;
   const openSource = (message: ChatMessage, sourceId: string) => {
     const source = message.sources?.find((item) => item.id === sourceId);
     if (source) setSelectedSources([source]);
@@ -60,22 +153,61 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setSessionId(localStorage.getItem(sessionStorageKey(userId, scope)));
-    const stored = localStorage.getItem(messagesStorageKey(userId, scope));
-    if (!stored) {
-      setMessages([]);
-      return;
-    }
+    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
+    const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
+    const legacySessionId = localStorage.getItem(sessionStorageKey(userId, scope));
+    const legacyMessages = localStorage.getItem(messagesStorageKey(userId, scope));
+    let loadedChats: ChatSession[] = [];
     try {
-      setMessages(JSON.parse(stored) as ChatMessage[]);
+      if (storedChats) loadedChats = JSON.parse(storedChats) as ChatSession[];
     } catch {
-      setMessages([]);
+      loadedChats = [];
     }
+    if (!Array.isArray(loadedChats) || loadedChats.length === 0) {
+      let messages: ChatMessage[] = [];
+      try { messages = legacyMessages ? JSON.parse(legacyMessages) as ChatMessage[] : []; } catch { messages = []; }
+      const firstQuestion = messages.find((message) => message?.role === 'user')?.text ?? '';
+      loadedChats = firstQuestion || legacySessionId
+        ? [{ id: `chat_legacy_${Date.now()}`, title: firstQuestion ? titleForMessage(firstQuestion) : 'New chat', createdAt: new Date().toISOString(), firstQuestion, sessionId: legacySessionId, messages: Array.isArray(messages) ? messages : [] }]
+        : [];
+    }
+    loadedChats = loadedChats.map(normalizeChat).filter((chat) => Boolean(chat.firstQuestion.trim() || chat.messages.some((message) => message.role === 'user')));
+    setChats(loadedChats);
+    setDraftChat(null);
+    setActiveChatId(loadedChats[0]?.id ?? null);
+    setShowWorkspaceQuestions(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) !== 'true');
+    setHydratedScope(storageScope);
+    setInput('');
+    setError('');
   }, [userId, scope]);
+
+  useEffect(() => {
+    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
+    if (typeof window === 'undefined' || hydratedScope !== storageScope || chats.length === 0) return;
+    localStorage.setItem(chatsStorageKey(userId, scope), JSON.stringify(chats.map((chat) => ({ ...chat, messages: chat.messages.slice(-20) }))));
+  }, [chats, hydratedScope, userId, scope]);
+
+  useEffect(() => {
+    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
+    if (typeof window === 'undefined' || hydratedScope !== storageScope) return;
+    localStorage.setItem(hiddenWorkspaceKey(userId, scope), showWorkspaceQuestions ? 'false' : 'true');
+  }, [hydratedScope, showWorkspaceQuestions, userId, scope]);
 
   useEffect(() => {
     if (typeof initialPrompt === 'string' && initialPrompt.trim()) setInput(initialPrompt);
   }, [initialPrompt]);
+
+  useEffect(() => {
+    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
+    if (!newChatPrompt || hydratedScope !== storageScope || newChatPromptHandledRef.current === newChatPrompt.id) return;
+    newChatPromptHandledRef.current = newChatPrompt.id;
+    const chat = newChat();
+    setDraftChat(chat);
+    setActiveChatId(chat.id);
+    setInput(newChatPrompt.text);
+    setError('');
+    onNewChatPromptOpened?.();
+  }, [hydratedScope, newChatPrompt, onNewChatPromptOpened, scope, userId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -125,14 +257,53 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(messagesStorageKey(userId, scope), JSON.stringify(messages.slice(-20)));
+  }, [messages, activeChatId]);
+
+  const updateChat = (chatId: string, update: (chat: ChatSession) => ChatSession) => {
+    setChats((current) => current.map((chat) => chat.id === chatId ? update(chat) : chat));
+  };
+
+  const handleNewChat = () => {
+    const chat = newChat();
+    setDraftChat(chat);
+    setActiveChatId(chat.id);
+    setInput('');
+    setError('');
+  };
+
+  const handleDeleteChat = () => {
+    if (!activeChatId || typeof window === 'undefined' || !window.confirm('Delete this chat?')) return;
+    if (draftChat?.id === activeChatId) {
+      setDraftChat(null);
+      setActiveChatId(chats[0]?.id ?? null);
+      setInput('');
+      setError('');
+      return;
     }
-  }, [messages, userId, scope]);
+    const activeIndex = chats.findIndex((chat) => chat.id === activeChatId);
+    if (activeIndex < 0) return;
+    const remaining = chats.filter((chat) => chat.id !== activeChatId);
+    const nextActive = remaining.length > 0 ? remaining[Math.min(activeIndex, remaining.length - 1)] : null;
+    setChats(remaining);
+    setDraftChat(null);
+    setActiveChatId(nextActive?.id ?? null);
+    setInput('');
+    setError('');
+  };
 
   const sendMessage = async (text: string) => {
     const message = text.trim();
     if (!message || isLoading) return;
+    let chatId = activeChatId;
+    let baseChat = activeChat;
+    if (!chatId) {
+      const chat = newChat();
+      chatId = chat.id;
+      baseChat = chat;
+      setDraftChat(chat);
+      setActiveChatId(chat.id);
+    }
+    if (!baseChat) return;
     setError('');
     setInput('');
     const userMessage: ChatMessage = {
@@ -140,7 +311,21 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
       role: 'user',
       text: message,
     };
-    setMessages((current) => [...current, userMessage]);
+    const updatedChat: ChatSession = {
+      ...baseChat,
+      title: baseChat.messages.length === 0 ? titleForMessage(message) : baseChat.title,
+      firstQuestion: baseChat.messages.length === 0 ? message : baseChat.firstQuestion,
+      messages: [...baseChat.messages, userMessage],
+    };
+    const isDraft = draftChat?.id === chatId || !chats.some((chat) => chat.id === chatId);
+    if (isDraft) {
+      setChats((current) => current.some((chat) => chat.id === chatId)
+        ? current.map((chat) => chat.id === chatId ? updatedChat : chat)
+        : [...current, updatedChat]);
+      setDraftChat((current) => current?.id === chatId ? null : current);
+    } else {
+      updateChat(chatId, () => updatedChat);
+    }
     setIsLoading(true);
 
     try {
@@ -150,27 +335,46 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
         body: JSON.stringify({
           userId,
           message,
-          ...(sessionId ? { sessionId } : {}),
+          ...(baseChat.sessionId ? { sessionId: baseChat.sessionId } : {}),
           ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
         }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? 'Gapswise agent is unavailable right now.');
+      if (!response.ok) throw new Error(body.error ?? 'Gapwise agent is unavailable right now.');
       if (body.sessionId && typeof body.sessionId === 'string') {
-        setSessionId(body.sessionId);
-        localStorage.setItem(sessionStorageKey(userId, scope), body.sessionId);
+        updateChat(chatId, (chat) => ({ ...chat, sessionId: body.sessionId }));
       }
-      setMessages((current) => [
-        ...current,
-        {
+      const promptUsed = typeof body.promptUsed === 'string'
+        ? body.promptUsed
+        : typeof body.fallbackPrompt === 'string'
+          ? body.fallbackPrompt
+          : undefined;
+      const responseDetails = promptUsed
+        ? {
+            promptUsed,
+            systemPrompt: typeof body.fallbackSystemPrompt === 'string' ? body.fallbackSystemPrompt : undefined,
+            contextUsed: body.contextUsed && typeof body.contextUsed === 'object'
+              && typeof body.contextUsed.projectTitle === 'string'
+              && Array.isArray(body.contextUsed.items)
+              ? {
+                  projectTitle: body.contextUsed.projectTitle,
+                  items: body.contextUsed.items.filter((item: unknown): item is string => typeof item === 'string'),
+                }
+              : undefined,
+          }
+        : undefined;
+      updateChat(chatId, (chat) => ({
+        ...chat,
+        messages: [...chat.messages, {
           id: `assistant_${Date.now()}`,
           role: 'assistant',
           text: body.answer,
           sources: Array.isArray(body.sources) ? body.sources : [],
-        },
-      ]);
+          ...(responseDetails ? { responseDetails } : {}),
+        }],
+      }));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Gapswise agent is unavailable right now.');
+      setError(caught instanceof Error ? caught.message : 'Gapwise agent is unavailable right now.');
     } finally {
       setIsLoading(false);
     }
@@ -178,11 +382,12 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
 
   useEffect(() => {
     const prompt = initialPrompt?.trim() ?? '';
-    if (!autoSendInitialPrompt || !prompt || initialPromptSentRef.current === prompt) return;
+    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
+    if (!autoSendInitialPrompt || !prompt || hydratedScope !== storageScope || initialPromptSentRef.current === prompt) return;
     initialPromptSentRef.current = prompt;
     void sendMessage(prompt);
     onInitialPromptSent?.();
-  }, [autoSendInitialPrompt, initialPrompt]);
+  }, [autoSendInitialPrompt, hydratedScope, initialPrompt, onInitialPromptSent, scope, userId]);
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -192,20 +397,46 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-5xl flex-col px-3 py-4 sm:min-h-[calc(100vh-5rem)] sm:px-6 sm:py-6 lg:px-8">
       <div className="border-b border-slate-800 pb-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">ASK GAPSWISE</p>
-        <h1 className="mt-2 text-xl font-extrabold text-slate-100 sm:text-2xl">What should I focus on?</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">ASK GAPWISE</p>
+            <h1 className="mt-2 text-xl font-extrabold text-slate-100 sm:text-2xl">What should I focus on?</h1>
+          </div>
+          <button type="button" onClick={handleNewChat} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200">
+            <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
+          </button>
+        </div>
         <p className="mt-2 max-w-2xl text-sm text-slate-400">
-          Gapswise uses your goals, memories, documents, calendar and other context to answer.
+          Gapwise uses your goals, memories, documents, calendar and other context to answer.
         </p>
-        <p className="mt-3 text-xs font-semibold text-cyan-300">Focused on: {scopeLabel}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <p className="text-xs font-semibold text-cyan-300">Focused on: {scopeLabel}</p>
+          {chats.length > 1 && !draftChat && <select aria-label="Choose chat" title={activeChat ? chatHoverLabel(activeChat) : undefined} value={activeChat?.id ?? ''} onChange={(event) => { setActiveChatId(event.target.value); setInput(''); setError(''); }} className="max-w-full rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs font-semibold text-slate-300 outline-none focus:border-cyan-700">
+            {chats.map((chat) => <option key={chat.id} value={chat.id} title={chatHoverLabel(chat)}>{chatLabel(chat)}</option>)}
+          </select>}
+          <button type="button" onClick={handleDeleteChat} aria-label="Delete chat" title="Delete chat" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 text-slate-500 hover:border-rose-900 hover:bg-rose-950/30 hover:text-rose-300">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 space-y-5 py-5">
-        {!hasConversation && (
+        {showWorkspaceQuestions && (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 sm:p-5">
-            <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
-              <Sparkles className="h-4 w-4 text-cyan-400" />
-              Questions for this context
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
+                <Sparkles className="h-4 w-4 text-cyan-400" />
+                Suggestions
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWorkspaceQuestions(false)}
+                aria-label="Hide suggestions"
+                title="Hide suggestions"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-cyan-300"
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+              </button>
             </div>
             {isLoadingSuggestions && (
               <div className="mt-4 inline-flex items-center gap-2 text-sm text-slate-400">
@@ -252,42 +483,17 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
               </div>
             )}
             {!isLoadingSuggestions && suggestionsError && (
-              <p className="mt-4 text-xs text-slate-500">{suggestionsError} You can still ask Gapswise anything below.</p>
+              <p className="mt-4 text-xs text-slate-500">{suggestionsError} You can still ask Gapwise anything below.</p>
             )}
             {!isLoadingSuggestions && suggestionsWarning && (
-              <p className="mt-4 text-xs text-amber-300" role="status">{suggestionsWarning}</p>
+              <p className="mt-4 text-[11px] text-slate-500" role="status">{suggestionsWarning}</p>
             )}
           </div>
         )}
 
-        {hasConversation && (topPrompts.length > 0 || otherPrompts.length > 0) && (
-          <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              {topPrompts.map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => sendMessage(prompt)}
-                  className="min-h-10 rounded-full border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-300 sm:min-h-0"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-            {otherPrompts.length > 0 && (
-              <div className="flex flex-wrap gap-2 pl-1">
-                {otherPrompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => sendMessage(prompt)}
-                    className="min-h-10 rounded-full border border-slate-900 bg-slate-950 px-3 py-1.5 text-[11px] font-medium text-slate-500 hover:border-slate-700 hover:text-slate-300 sm:min-h-0"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-            )}
+        {!showWorkspaceQuestions && (
+          <div className="rounded-xl border border-slate-800/80 bg-slate-950/50 px-4 py-3 text-xs text-slate-500">
+            Suggestions are hidden for this project. <button type="button" onClick={() => setShowWorkspaceQuestions(true)} aria-label="See suggestions" title="See suggestions" className="ml-1 inline-flex h-7 w-7 translate-y-1 items-center justify-center rounded-md text-cyan-300 hover:bg-slate-800 hover:text-cyan-200"><Eye className="h-3.5 w-3.5" /></button>
           </div>
         )}
 
@@ -325,6 +531,34 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                         ))}
                       </div>
                     )}
+                    {message.responseDetails && (
+                      <details className="mt-3 border-t border-slate-800 pt-3">
+                        <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 hover:text-cyan-300">
+                          Response details
+                        </summary>
+                        <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs">
+                          <div>
+                            <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Exact prompt sent to the AI</p>
+                            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-300">{message.responseDetails.promptUsed}</pre>
+                          </div>
+                          {message.responseDetails.systemPrompt && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Fallback system instruction</p>
+                              <p className="mt-1 whitespace-pre-wrap leading-relaxed text-slate-400">{message.responseDetails.systemPrompt}</p>
+                            </div>
+                          )}
+                          {message.responseDetails.contextUsed && (
+                            <div>
+                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Project context used</p>
+                              <p className="mt-1 text-cyan-300">{message.responseDetails.contextUsed.projectTitle}</p>
+                              <ul className="mt-2 space-y-1 text-slate-400">
+                                {message.responseDetails.contextUsed.items.map((item) => <li key={item}>• {item}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 ) : (
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
@@ -346,7 +580,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
             <div className="flex justify-start">
               <div className="inline-flex max-w-full items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
                 <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
-                Gapswise is checking your context...
+                        Gapwise is checking your context...
               </div>
             </div>
           )}
@@ -375,7 +609,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                 void sendMessage(input);
               }
             }}
-            placeholder="Ask Gapswise..."
+            placeholder="Ask Gapwise..."
             className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
           />
           <button
@@ -432,7 +666,7 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                         ? 'View in Context'
                         : source.kind === 'calendar'
                           ? 'View connection'
-                          : 'View in Workspace'}
+                          : 'View in context'}
                       <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
                     </button>
                   )}

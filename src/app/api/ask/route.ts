@@ -7,6 +7,13 @@ import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 
+const offlineFallbackNotices = [
+  'AI is not active right now. This response uses the data already in this project.',
+  'The AI service is offline, so this is a local response based on your saved context.',
+  'Here is an AI-style response using the context already available in this project.',
+];
+const localFallbackSystemPrompt = 'Use only the selected project context and clearly distinguish known facts from unresolved questions.';
+
 const askRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   message: z.string().trim().min(1),
@@ -40,7 +47,14 @@ export async function POST(request: Request) {
     const result = isDemoMode()
       ? await askGapswiseLocally(askInput)
       : await askGapswise(askInput);
-    return NextResponse.json(result);
+    return NextResponse.json(isDemoMode()
+      ? {
+          ...result,
+          generatedBy: 'local-context',
+          fallbackPrompt: parsed.data.message,
+          fallbackSystemPrompt: localFallbackSystemPrompt,
+        }
+      : result);
   } catch (error) {
     if (isDemoMode()) {
       return NextResponse.json(
@@ -48,9 +62,23 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+    try {
+      const fallback = await askGapswiseLocally(askInput);
+      const notice = offlineFallbackNotices[Math.floor(Math.random() * offlineFallbackNotices.length)];
+      return NextResponse.json({
+        ...fallback,
+        answer: `${notice}\n\n${fallback.answer}`,
+        generatedBy: 'local-fallback',
+        fallbackPrompt: parsed.data.message,
+        fallbackSystemPrompt: localFallbackSystemPrompt,
+        warning: 'The deployed AI agent is unavailable; this answer was generated from the current project context.',
+      });
+    } catch {
+      // Preserve the existing error response if the local context fallback is also unavailable.
+    }
     const message = error instanceof AskAgentError
       ? error.message
-      : 'Gapswise agent is unavailable right now.';
+      : 'Gapwise agent is unavailable right now.';
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

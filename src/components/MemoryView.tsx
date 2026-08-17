@@ -129,7 +129,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
         {showMemory && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
           <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
             <Plus className="w-4 h-4 text-cyan-400" />
-            What Gapswise remembers
+            What Gapwise remembers
           </h2>
           <textarea
             rows={4}
@@ -227,7 +227,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
       </div>}
 
       {showPreferences && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-        <h2 className="text-sm font-bold text-slate-200">Why Gapswise Thinks This About You</h2>
+        <h2 className="text-sm font-bold text-slate-200">Why Gapwise Thinks This About You</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
             <span className="block text-slate-500">Question threshold</span>

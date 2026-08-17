@@ -7,11 +7,11 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 export const DEMO_PDF_EXTRACTION: PdfExtraction = {
-  summary: 'Demo document about preparing a Gapswise hackathon presentation.',
+  summary: 'Demo document about preparing a Gapwise hackathon presentation.',
   nodes: [
     {
       type: 'GOAL',
-      text: 'Prepare the Gapswise hackathon presentation',
+      text: 'Prepare the Gapwise hackathon presentation',
       confidence: 0.95,
     },
     {
@@ -31,7 +31,7 @@ export function demoCalendarEvents(now = new Date()): SafeCalendarEvent[] {
   return [
     {
       id: 'demo_gapswise_review',
-      summary: 'Gapswise Demo Review',
+      summary: 'Gapwise Demo Review',
       description: 'Review the target persona and strongest 4-minute demo scenario.',
       start: tomorrow.toISOString(),
       end: new Date(tomorrow.getTime() + HOUR).toISOString(),
@@ -50,7 +50,7 @@ export function demoCalendarEvents(now = new Date()): SafeCalendarEvent[] {
 export function demoCareerConflictCalendarEvents(now = new Date()): SafeCalendarEvent[] {
   const prepStart = new Date(now.getTime() + 90 * 60 * 1000);
   prepStart.setSeconds(0, 0);
-  const callStart = new Date(now.getTime() + 22 * HOUR);
+  const callStart = new Date(now.getTime() + 2 * HOUR);
   callStart.setMinutes(0, 0, 0);
   return [
     {
@@ -70,6 +70,22 @@ export function demoCareerConflictCalendarEvents(now = new Date()): SafeCalendar
       location: 'Google Meet',
     },
   ].sort((a, b) => (a.start ?? '').localeCompare(b.start ?? ''));
+}
+
+/** Calendar fixture used only by the KintaGen scientific-assistant demo. */
+export function demoKintaGenCalendarEvents(now = new Date()): SafeCalendarEvent[] {
+  const event = (id: string, summary: string, description: string, offsetMs: number, durationMs: number) => {
+    const start = new Date(now.getTime() + offsetMs);
+    start.setSeconds(0, 0);
+    return { id, summary, description, start: start.toISOString(), end: new Date(start.getTime() + durationMs).toISOString(), location: 'Google Meet' };
+  };
+  return [
+    event('demo_kintagen_architecture_review', 'KintaGen lab architecture review', 'Choose the first end-to-end scientific workflow, owners, security gates, and success metrics.', 2 * HOUR, 60 * 60 * 1000),
+    event('demo_kintagen_northshore_pilot', 'Pilot call — Northshore Metabolomics Lab', 'Confirm de-identified GC-MS data, reviewer export fields, and the scientist who will validate MoNA matches.', DAY + 3 * HOUR, 45 * 60 * 1000),
+    event('demo_kintagen_provenance_review', 'Flow provenance design review', 'Decide which encrypted metadata and result CIDs may be written to the KintaGen project logbook.', 2 * DAY + 2 * HOUR, 45 * 60 * 1000),
+    event('demo_kintagen_gcms_validation', 'GC-MS xCMS validation session', 'Review peak thresholds, library version, candidate matches, and uncertainty with a domain scientist.', 3 * DAY + 4 * HOUR, 90 * 60 * 1000),
+    event('demo_kintagen_grant_checklist', 'Grant reproducibility checklist', 'Measure automation time, scientist review time, and the fields needed for the next progress report.', 5 * DAY + HOUR, 45 * 60 * 1000),
+  ].sort((a, b) => a.start.localeCompare(b.start));
 }
 
 export function createLocalDemoProjects(): Project[] {

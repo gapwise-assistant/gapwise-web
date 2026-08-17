@@ -88,7 +88,7 @@ export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}
 function toAuthUser(user: User): AuthUser {
   return {
     uid: user.uid,
-    displayName: user.displayName ?? user.email ?? 'Gapswise user',
+    displayName: user.displayName ?? user.email ?? 'Gapwise user',
     email: user.email ?? '',
     photoUrl: user.photoURL ?? undefined,
   };

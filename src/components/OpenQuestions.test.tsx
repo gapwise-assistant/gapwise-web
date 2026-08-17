@@ -35,9 +35,7 @@ describe('OpenQuestions', () => {
         items={items}
         summary="Resolve these before deciding the demo direction."
         onAnswer={vi.fn()}
-        onWhy={vi.fn()}
-        onReviewDecision={vi.fn()}
-        onSnooze={vi.fn()}
+        onHide={vi.fn()}
       />
     );
 
@@ -58,13 +56,8 @@ describe('OpenQuestions', () => {
   });
 
   it('keeps overflow actions aligned with unresolved and answered row states', () => {
-    expect(questionOverflowLabels({ hasWhy: true, hasDecision: true, canSnooze: true })).toEqual([
-      'Snooze · 15 min',
-      'Snooze · 30 min',
-      'Snooze · 1 hour',
-      'Snooze · Until 10 min before',
-    ]);
-    expect(questionOverflowLabels({ answered: true, hasWhy: true, hasDecision: true, canSnooze: true })).toEqual([]);
+    expect(questionOverflowLabels({ canHide: true })).toEqual(['Hide from Today']);
+    expect(questionOverflowLabels({ answered: true, canHide: true })).toEqual([]);
     expect(openQuestionProgress([{ answered: false }, { answered: true }, { answered: false }])).toEqual({
       openCount: 2,
       answeredCount: 1,

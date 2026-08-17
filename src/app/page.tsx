@@ -8,7 +8,7 @@ import { AskGapswise } from '@/components/AskGapswise';
 import type { ContextEntry } from '@/components/ContextInbox';
 import { ScopeDestination } from '@/components/YouDestination';
 import { SettingsDestination } from '@/components/SettingsDestination';
-import { IdontKnowModal, type IdontKnowStrategy, type IdontKnowStrategyResult } from '@/components/IdontKnowModal';
+import { IdontKnowModal, type IdontKnowStrategyResult } from '@/components/IdontKnowModal';
 import { AnswerQuestionModal, AnswerQuestionTarget } from '@/components/AnswerQuestionModal';
 import { TracePanel } from '@/components/dev/TracePanel';
 import { Project, UserMemoryProfile, CandidateGap } from '@/types/clarity';
@@ -16,15 +16,18 @@ import { DurableMemory } from '@/types/contextPack';
 import { AskSource } from '@/lib/ask/adkClient';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
-import { previewIdontKnowContext, processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
+import { processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
 import { loadMemoriesFromBrowser, memoriesFromProfile, saveMemoriesToBrowser } from '@/lib/memory/store';
 import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/lib/personalization/feedbackStore';
 import { createFeedbackEvent } from '@/lib/personalization/applyFeedback';
 import {
   CAREER_CONFLICT_QUESTION_ID,
+  CAREER_CONFLICT_DEMO_ID,
   careerRoleDisposition,
   updateCareerConflictMemories,
 } from '@/lib/demo/careerConflict';
+import { HACKATHON_DEMO_ID } from '@/lib/demo/hackathon';
+import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import type { TodayQuestion } from '@/lib/today/sections';
@@ -162,6 +165,56 @@ async function loadCareerConflictDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadHackathonDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/hackathon-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The voluntary demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
+async function loadKintaGenDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/kintagen-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The scientific assistant demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -219,6 +272,26 @@ function persistProfileToLocalStorage(userId: string, profile: UserMemoryProfile
   localStorage.setItem(`gapwise_profile_${userId}`, JSON.stringify(profile));
 }
 
+function clearDemoBrowserState(userId: string, projectId: string): void {
+  if (typeof window === 'undefined') return;
+  const keysToRemove = new Set([
+    `gapwise_state_${userId}`,
+    `gapwise_active_project_${userId}`,
+    `gapwise_scope_${userId}`,
+    `gapwise_profile_${userId}`,
+    `gapwise_memories_${userId}`,
+    `gapwise_feedback_${userId}`,
+  ]);
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if ((key?.startsWith(`gapwise_ask_`) && key.includes(`_${userId}_`)) || keysToRemove.has(key ?? '')) {
+      localStorage.removeItem(key!);
+    }
+  }
+  localStorage.setItem(`gapwise_active_project_${userId}`, projectId);
+  localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify({ type: 'project', projectId }));
+}
+
 export default function Home() {
   const auth = useAuth();
   const userId = auth.userId ?? DEMO_USER_ID;
@@ -231,9 +304,12 @@ export default function Home() {
   const [feedbackEvents, setFeedbackEvents] = useState<FeedbackEvent[]>([]);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [askInitialPrompt, setAskInitialPrompt] = useState('');
+  const [askNewChatPrompt, setAskNewChatPrompt] = useState<{ id: string; text: string } | null>(null);
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isLoadingDemo, setIsLoadingDemo] = useState(false);
   const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
+  const [isLoadingHackathonDemo, setIsLoadingHackathonDemo] = useState(false);
+  const [isLoadingKintaGenDemo, setIsLoadingKintaGenDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -362,14 +438,96 @@ export default function Home() {
       setProject(result.project);
       setScope(result.scope);
       setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, CAREER_CONFLICT_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
       setDemoLoadError(caught instanceof Error ? caught.message : 'The career conflict demo could not be loaded.');
     } finally {
       setIsLoadingCareerDemo(false);
+    }
+  }, [userId]);
+
+  const handleLoadHackathonDemo = useCallback(async () => {
+    setIsLoadingHackathonDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadHackathonDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, HACKATHON_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The voluntary demo could not be loaded.');
+    } finally {
+      setIsLoadingHackathonDemo(false);
+    }
+  }, [userId]);
+
+  const handleLoadKintaGenDemo = useCallback(async () => {
+    setIsLoadingKintaGenDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadKintaGenDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, KINTAGEN_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The scientific assistant demo could not be loaded.');
+    } finally {
+      setIsLoadingKintaGenDemo(false);
     }
   }, [userId]);
 
@@ -402,7 +560,7 @@ export default function Home() {
     setActiveTab('today');
   };
 
-  const handleSelectStrategy = async (strategy: IdontKnowStrategy): Promise<IdontKnowStrategyResult> => {
+  const handleDecideLater = async (): Promise<IdontKnowStrategyResult> => {
     if (!idontKnowGap) throw new Error('This question is no longer active.');
     const owner = idontKnowProjectId === GENERAL_CONTEXT_ID
       ? generalContext
@@ -411,20 +569,7 @@ export default function Home() {
       ...owner,
       active_question: idontKnowGap,
     };
-    if (strategy === 'rag') {
-      const preview = previewIdontKnowContext(projectWithSelectedGap);
-      if (!preview.findings.length) {
-        return { heading: 'No relevant context found', message: 'The uploaded PDFs and notes did not contain a strong match for this question. Nothing was changed.', canTryAnother: true };
-      }
-      return {
-        heading: 'Relevant context found',
-        message: `Found ${preview.findings.length} relevant source${preview.findings.length === 1 ? '' : 's'}. Review the evidence and proposed map update before saving anything.`,
-        findings: preview.findings,
-        proposedChange: preview.proposedChange,
-        requiresConfirmation: true,
-      };
-    }
-    const { updatedProject, strategyMessage, didChange } = await processIdontKnowStrategy(projectWithSelectedGap, strategy, profile);
+    const { updatedProject, didChange } = await processIdontKnowStrategy(projectWithSelectedGap, 'defer', profile);
     if (didChange && owner.id === GENERAL_CONTEXT_ID) {
       setGeneralContext(updatedProject);
       persistGeneralContextToAPI(userId, updatedProject).then((savedToApi) => {
@@ -433,26 +578,7 @@ export default function Home() {
     } else if (didChange) {
       updateProject(updatedProject);
     }
-    return { message: strategyMessage };
-  };
-
-  const acceptIdontKnowContextChange = async (): Promise<IdontKnowStrategyResult> => {
-    if (!idontKnowGap) throw new Error('This question is no longer active.');
-    const owner = idontKnowProjectId === GENERAL_CONTEXT_ID
-      ? generalContext
-      : projects.find((candidate) => candidate.id === idontKnowProjectId) ?? project;
-    const projectWithSelectedGap: Project = { ...owner, active_question: idontKnowGap };
-    const { updatedProject, strategyMessage, didChange, changedNodeId } = await processIdontKnowStrategy(projectWithSelectedGap, 'rag', profile);
-    if (!didChange || !changedNodeId) throw new Error('The relevant context is no longer available. Run the search again.');
-    if (owner.id === GENERAL_CONTEXT_ID) {
-      setGeneralContext(updatedProject);
-      persistGeneralContextToAPI(userId, updatedProject).then((savedToApi) => {
-        setStorageMessage(savedToApi ? '' : 'Saved locally. General context API was unavailable.');
-      });
-    } else {
-      updateProject(updatedProject);
-    }
-    return { heading: 'Decision Map updated', message: strategyMessage, ...(owner.id !== GENERAL_CONTEXT_ID ? { decisionMapNodeId: changedNodeId } : {}) };
+    return { message: 'Snoozed for now. We’ll bring this question back when it becomes important again.' };
   };
 
   const openGraphQuestion = useCallback((
@@ -573,9 +699,18 @@ export default function Home() {
 
   const openChatWithPrompt = useCallback((prompt: string) => {
     setAnswerTarget(null);
-    setAskInitialPrompt(prompt);
+    setAskInitialPrompt('');
+    setAskNewChatPrompt({ id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, text: prompt });
     setActiveTab('ask');
   }, []);
+
+  const openDontKnowHelp = useCallback(() => {
+    if (!idontKnowGap) return;
+    const prompt = `Help me figure out this unresolved question: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoff clearly, and suggest one practical next step without answering on my behalf.`;
+    setIdontKnowGap(null);
+    setIdontKnowProjectId(null);
+    openChatWithPrompt(prompt);
+  }, [idontKnowGap, openChatWithPrompt]);
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
@@ -679,7 +814,7 @@ export default function Home() {
   if (!auth.isReady) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-400">
-        Loading Gapswise...
+        Loading Gapwise...
       </div>
     );
   }
@@ -708,6 +843,8 @@ export default function Home() {
           accountLabel={auth.user?.displayName}
           isLoadingDemo={isLoadingDemo}
           isLoadingCareerDemo={isLoadingCareerDemo}
+          isLoadingHackathonDemo={isLoadingHackathonDemo}
+          isLoadingKintaGenDemo={isLoadingKintaGenDemo}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
@@ -715,6 +852,8 @@ export default function Home() {
           }}
           onLoadDemo={() => void handleLoadDemo()}
           onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
+          onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
+          onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -739,6 +878,10 @@ export default function Home() {
         onResetDemo={handleResetDemo}
         onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
         isLoadingCareerDemo={isLoadingCareerDemo}
+        onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
+        isLoadingHackathonDemo={isLoadingHackathonDemo}
+        onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
+        isLoadingKintaGenDemo={isLoadingKintaGenDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
@@ -806,12 +949,15 @@ export default function Home() {
         )}
         {activeTab === 'ask' && (
           <AskGapswise
+            key={`${scope.type === 'project' ? scope.projectId : 'everything'}-${projectFocusKey}`}
             userId={userId}
             scope={scope}
             scopeLabel={scope.type === 'project' ? project.title : 'Everything'}
             initialPrompt={askInitialPrompt}
             autoSendInitialPrompt
             onInitialPromptSent={() => setAskInitialPrompt('')}
+            newChatPrompt={askNewChatPrompt}
+            onNewChatPromptOpened={() => setAskNewChatPrompt(null)}
             onViewSource={(source: AskSource) => {
               if (source.kind === 'source') {
                 openContext({ sourceId: source.id, tab: 'recent' });
@@ -881,9 +1027,8 @@ export default function Home() {
       {idontKnowGap && (
         <IdontKnowModal
           gap={idontKnowGap}
-          onSelectStrategy={handleSelectStrategy}
-          onAcceptProposedChange={acceptIdontKnowContextChange}
-          onViewDecisionMap={viewDecisionGraph}
+          onHelp={openDontKnowHelp}
+          onDecideLater={handleDecideLater}
           onClose={() => {
             setIdontKnowGap(null);
             setIdontKnowProjectId(null);
@@ -903,7 +1048,6 @@ export default function Home() {
             setAnswerTarget(null);
             viewDecisionGraph(nodeId);
           }}
-          onOpenChat={openChatWithPrompt}
           onClose={() => setAnswerTarget(null)}
         />
       )}

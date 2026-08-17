@@ -5,8 +5,9 @@ import { hasGoogleOAuthTokens } from '@/lib/google/oauth';
 import { listContextPackCalendarEvents } from '@/lib/google/calendar';
 import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { isTextRelevantToProject } from '@/lib/scope/projectScope';
-import { demoCareerConflictCalendarEvents, demoCalendarEvents } from '@/lib/demo/localFixtures';
+import { demoCareerConflictCalendarEvents, demoCalendarEvents, demoKintaGenCalendarEvents } from '@/lib/demo/localFixtures';
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
+import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 
 export async function buildContextPackForUser(
@@ -29,9 +30,10 @@ export async function buildContextPackForUser(
     durableMemories = await listMemories(input.userId, input.profile);
   }
 
-  if (input.project.id === CAREER_CONFLICT_DEMO_ID) {
+  if (input.project.id === CAREER_CONFLICT_DEMO_ID || input.project.id === KINTAGEN_DEMO_ID) {
+    const events = input.project.id === KINTAGEN_DEMO_ID ? demoKintaGenCalendarEvents(now) : demoCareerConflictCalendarEvents(now);
     calendarCommitments = calendarEventsToCommitmentNodes(
-      demoCareerConflictCalendarEvents(now),
+      events,
       now,
       10
     );

@@ -73,7 +73,7 @@ describe('POST /api/questions/answer', () => {
       answer: 'Technical founders.',
     }));
     await expect(response.json()).resolves.toMatchObject({
-      message: 'Answer updated. Gapswise understanding was refreshed.',
+      message: 'Answer updated. Gapwise understanding was refreshed.',
     });
   });
 

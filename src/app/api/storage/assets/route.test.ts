@@ -34,7 +34,7 @@ describe('POST /api/storage/assets in demo mode', () => {
 
     expect(response.status).toBe(200);
     expect(body.storageUrl).toMatch(/^local-demo:/);
-    expect(body.extraction.summary).toContain('Gapswise hackathon presentation');
+    expect(body.extraction.summary).toContain('Gapwise hackathon presentation');
     expect(body.extraction.nodes).toHaveLength(2);
     expect(body.modelUsed).toBe('demo-fixture-v1');
     expect(uploadContextSourcePdf).not.toHaveBeenCalled();

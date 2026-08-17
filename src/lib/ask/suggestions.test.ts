@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildSuggestionRequestMessage, contextualSuggestionsFromPack, parseSuggestedQuestions } from '@/lib/ask/suggestions';
 import type { ContextPack } from '@/types/contextPack';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import {
+  CAREER_CONFLICT_DEMO_ID,
+  createCareerConflictDemoMemories,
+  createCareerConflictDemoProject,
+} from '@/lib/demo/careerConflict';
+import { buildContextPack } from '@/lib/retrieval/contextPack';
 
 function contextPack(overrides: Partial<ContextPack> = {}): ContextPack {
   return {
@@ -103,9 +110,35 @@ describe('Ask contextual suggestions', () => {
     expect(suggestions.other).toHaveLength(3);
   });
 
+  it('uses the seeded Career Demo facts for specific, non-duplicated questions', () => {
+    const project = createCareerConflictDemoProject();
+    const pack = buildContextPack({
+      userId: 'demo-user',
+      query: 'What important questions should I consider next?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      durableMemories: createCareerConflictDemoMemories(),
+      includeBroadContext: true,
+    });
+
+    const suggestions = contextualSuggestionsFromPack(pack, { projectId: CAREER_CONFLICT_DEMO_ID });
+
+    expect(suggestions.top).toEqual([
+      "Given Northstar's Product Engineer role is 70–80% frontend and I want backend or applied AI ownership, what would have to be true for this role to still be worth pursuing?",
+      'What should I ask the Northstar recruiter to verify that the backend or applied AI path is real and manager-supported?',
+      "For Northstar's $155k–$175k Product Engineer base range, what compensation details are still missing before I compare this opportunity?",
+    ]);
+    expect(suggestions.other).toEqual([
+      'What should I ask Northstar about the steady-state frontend workload after the customer-dashboard launch?',
+      "How does Northstar's Product Engineer opportunity compare with my priorities: stable income, technical depth, commute, and career direction?",
+      'What are the most important questions to ask during the Northstar Product Engineer recruiter call?',
+    ]);
+    expect(new Set([...suggestions.top, ...suggestions.other]).size).toBe(6);
+  });
+
   it('makes the AI request contract explicit about the selected scope', () => {
     const message = buildSuggestionRequestMessage('Japan trip');
-    expect(message).toContain('The current Gapswise scope is: Japan trip.');
+    expect(message).toContain('The current Gapwise scope is: Japan trip.');
     expect(message).toContain('get_context_pack first');
     expect(message).toContain('{"top_questions"');
     expect(message).toContain('"other_questions"');

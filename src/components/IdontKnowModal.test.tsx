@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { IdontKnowModal } from '@/components/IdontKnowModal';
+import { conciseQuestionToAsk, IdontKnowModal } from '@/components/IdontKnowModal';
 import type { CandidateGap } from '@/types/clarity';
 
 const gap: CandidateGap = {
@@ -20,21 +20,30 @@ const gap: CandidateGap = {
 };
 
 describe('IdontKnowModal', () => {
-  it('renders each strategy as an explicit button with async status semantics', () => {
+  it('turns a graph question into a concise question for another person', () => {
+    expect(conciseQuestionToAsk('Does this primarily frontend role remain acceptable given your preference to avoid frontend-heavy roles?')).toBe(
+      'Is this role still a good fit despite the frontend-heavy work?'
+    );
+  });
+
+  it('renders the three plain-language next steps', () => {
     const html = renderToStaticMarkup(
       <IdontKnowModal
         gap={gap}
-        onSelectStrategy={vi.fn(async () => ({ message: 'Updated.' }))}
+        onHelp={vi.fn()}
+        onDecideLater={vi.fn(async () => ({ message: 'Snoozed.' }))}
         onClose={vi.fn()}
       />,
     );
 
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-busy="false"');
-    expect(html).toContain('Search uploaded context inbox');
-    expect(html).toContain('Propose a tiny resolution experiment');
-    expect(html).toContain('Create a temporary assumption');
-    expect(html).toContain('Defer this gap for now');
-    expect(html.match(/type="button"/g)).toHaveLength(5);
+    expect(html).toContain('I don&#x27;t know yet');
+    expect(html).toContain('What would help?');
+    expect(html).toContain('Help me figure this out');
+    expect(html).toContain('I need to ask someone');
+    expect(html).toContain('Decide later');
+    expect(html).not.toContain('Search uploaded context');
+    expect(html).not.toContain('Temporary assumption');
   });
 });

@@ -104,7 +104,7 @@ export async function analyzePdfFromGcs(input: AnalyzePdfInput): Promise<{
           },
           {
             text:
-              'Extract Gapswise graph context from this PDF. Return only JSON with this shape: ' +
+              'Extract Gapwise graph context from this PDF. Return only JSON with this shape: ' +
               '{"summary":"short summary","nodes":[{"type":"KNOWN | GOAL | CONSTRAINT | ASSUMPTION | DECISION | UNKNOWN | EVIDENCE | RISK | NEXT_ACTION","text":"node text","confidence":0.0}]}. ' +
               'Keep nodes concise, source-grounded, and useful for goals, gaps, decisions, risks, evidence, constraints, and next actions.',
           },

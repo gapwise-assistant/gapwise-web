@@ -87,11 +87,13 @@ describe('career conflict demo workflow', () => {
       location: 'Google Meet',
     });
     expect(new Date(events[0].start!).getTime() - now.getTime()).toBe(90 * 60 * 1000);
+    expect(new Date(events[1].start!).getTime() - now.getTime()).toBe(2 * 60 * 60 * 1000);
     expect(hasCalendarTokens).not.toHaveBeenCalled();
     expect(listCalendarEvents).not.toHaveBeenCalled();
     expect(brief.recommendations.some((recommendation) =>
       recommendation.id === 'rec_calendar_gcal_commitment_demo_career_coach_prep'
     )).toBe(true);
+    expect(brief.recommendations.filter((recommendation) => recommendation.id.startsWith('rec_calendar_gcal_commitment_demo_career_'))).toHaveLength(2);
   });
 
   it('asks the role-fit question before recommending a recruiter action', () => {

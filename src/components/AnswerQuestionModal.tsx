@@ -1,7 +1,7 @@
 'use client';
 
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, ChevronRight, FileText, HelpCircle, Loader2, Map, MessageCircle, MoreHorizontal, X } from 'lucide-react';
+import { CheckCircle2, ChevronRight, FileText, HelpCircle, Loader2, Map, X } from 'lucide-react';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import type { QuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 
@@ -51,7 +51,6 @@ interface AnswerQuestionModalProps {
   onDontKnow?: () => void;
   onNavigateToSource?: (sourceId: string) => void;
   onViewDecisionMap?: (nodeId: string) => void;
-  onOpenChat?: (prompt: string) => void;
   onClose: () => void;
 }
 
@@ -82,7 +81,7 @@ function AccordionSection({ id, label, open, onToggle, children }: AccordionSect
 }
 
 function presentationImpact(value: string): string {
-  const blocked = value.match(/^Gapswise cannot confidently move to (.+) until this is answered\.?$/i);
+  const blocked = value.match(/^Gapwise cannot confidently move to (.+) until this is answered\.?$/i);
   if (blocked) return `This answer is needed before ${blocked[1].replace(/[.!?]+$/, '')}.`;
   const decision = value.match(/^decision:\s*(.+)$/i);
   if (decision) return `The decision “${decision[1].replace(/[.!?]+$/, '')}” may change.`;
@@ -97,7 +96,6 @@ export function AnswerQuestionModal({
   onDontKnow,
   onNavigateToSource,
   onViewDecisionMap,
-  onOpenChat,
   onClose,
 }: AnswerQuestionModalProps) {
   const [answer, setAnswer] = useState(target.initialAnswer ?? '');
@@ -107,7 +105,6 @@ export function AnswerQuestionModal({
   const [openSections, setOpenSections] = useState<ResolveSection[]>([]);
   const [selectedOptionId, setSelectedOptionId] = useState(target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '');
   const [simulationOptionId, setSimulationOptionId] = useState('');
-  const [actionsOpen, setActionsOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   useDismissibleModal(onClose, dialogRef);
@@ -120,7 +117,6 @@ export function AnswerQuestionModal({
     const recommendedOptionId = target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '';
     setSelectedOptionId(recommendedOptionId);
     setSimulationOptionId('');
-    setActionsOpen(false);
   }, [target]);
 
   const knownFacts = Array.from(new Set([
@@ -140,12 +136,6 @@ export function AnswerQuestionModal({
       ? current.filter((item) => item !== section)
       : [...current, section]);
   };
-
-  const discussPrompt = target.answerSuggestion?.suggestedAnswer
-    ? `Help me think through this suggestion for “${target.question}”: ${target.answerSuggestion.suggestedAnswer}. Use the project context and help me explore the trade-offs before I answer.`
-    : selectedOption
-      ? `Help me evaluate the option “${selectedOption.text}”${target.decisionTitle ? ` for the decision “${target.decisionTitle}”` : ''}. Use the project context and help me explore the trade-offs before I answer.`
-      : `Help me think through “${target.question}” using the project context, evidence, and unresolved questions.`;
 
   const openSource = (sourceId: string) => {
     if (!onNavigateToSource || sourceId.startsWith('gcal_')) return;
@@ -182,20 +172,6 @@ export function AnswerQuestionModal({
             )}
           </div>
           <div className="relative flex shrink-0 items-center gap-1">
-            {target.nodeId && onViewDecisionMap && target.explanation?.reasoningPath && (
-              <>
-                <button type="button" onClick={() => setActionsOpen((current) => !current)} aria-label="More actions" aria-haspopup="menu" aria-expanded={actionsOpen} className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
-                  <MoreHorizontal className="h-4 w-4" />
-                </button>
-                {actionsOpen && (
-                  <div role="menu" className="absolute right-9 top-0 z-20 w-48 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl">
-                    <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); onClose(); onViewDecisionMap(target.nodeId as string); }} className="flex min-h-10 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-slate-100">
-                      <Map className="h-3.5 w-3.5" /> View in Decision Map
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
             <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
               <X className="h-4 w-4" />
             </button>
@@ -208,7 +184,7 @@ export function AnswerQuestionModal({
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
               <div>
                 <p className="text-sm font-bold text-emerald-200">Updated</p>
-                <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">Gapswise now understands this question as resolved. The related decision and Today recommendations have been refreshed.</p>
+                <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">Gapwise now understands this question as resolved. The related decision and Today recommendations have been refreshed.</p>
               </div>
             </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -259,6 +235,14 @@ export function AnswerQuestionModal({
               )}
             </div>
 
+            {target.nodeId && onViewDecisionMap && (
+              <div className="flex justify-end">
+                <button type="button" onClick={() => { onClose(); onViewDecisionMap(target.nodeId as string); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-200">
+                  <Map className="h-3.5 w-3.5" /> View in Decision Map
+                </button>
+              </div>
+            )}
+
             <section>
               <label htmlFor="question-answer" className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Your answer</label>
               <textarea
@@ -273,7 +257,6 @@ export function AnswerQuestionModal({
             </section>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {onOpenChat && <button type="button" onClick={() => onOpenChat(discussPrompt)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"><MessageCircle className="h-3.5 w-3.5" /> Discuss with Gapswise</button>}
               {onDontKnow && <button type="button" onClick={onDontKnow} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200"><HelpCircle className="h-3.5 w-3.5" /> I don't know yet</button>}
             </div>
 

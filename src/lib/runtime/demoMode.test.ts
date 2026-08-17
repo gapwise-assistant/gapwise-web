@@ -61,9 +61,9 @@ describe('zero-cost demo mode', () => {
 
     expect(hasTokens).not.toHaveBeenCalled();
     expect(listEvents).not.toHaveBeenCalled();
-    expect(pack.upcomingCommitments.map((node) => node.text).join(' ')).toContain('Gapswise Demo Review');
+    expect(pack.upcomingCommitments.map((node) => node.text).join(' ')).toContain('Gapwise Demo Review');
     const brief = generateDailyBrief({ userId: 'demo-user', project, memories: [], contextPack: pack, now, force: true });
-    expect(buildComingUp(brief, now).some((item) => item.title === 'Gapswise Demo Review')).toBe(true);
+    expect(buildComingUp(brief, now).some((item) => item.title === 'Gapwise Demo Review')).toBe(true);
   });
 
   it('keeps the full local project, scope, context, memory, and answer workflow persistent', async () => {

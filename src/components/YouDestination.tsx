@@ -353,7 +353,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       ) : (
         <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950 p-8 text-center">
           <h3 className="text-sm font-extrabold text-slate-100">Nothing unresolved here</h3>
-          <p className="mt-2 text-sm text-slate-500">Gapswise has no persistent user-level questions to work through right now.</p>
+          <p className="mt-2 text-sm text-slate-500">Gapwise has no persistent user-level questions to work through right now.</p>
         </div>
       )}
     </section>
@@ -397,7 +397,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             ))}
           </ul>
         ) : (
-          <p className="mt-4 text-sm text-slate-500">Gapswise has not built a picture of this project yet. Add context to get started.</p>
+          <p className="mt-4 text-sm text-slate-500">Gapwise has not built a picture of this project yet. Add context to get started.</p>
         )}
       </section>
 
@@ -475,7 +475,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
         <div>
           <h3 className="text-lg font-extrabold text-slate-100">Previously answered</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Questions you answered and the understanding Gapswise recorded afterward.
+            Questions you answered and the understanding Gapwise recorded afterward.
           </p>
         </div>
         {answeredQuestions.length ? (
@@ -551,7 +551,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           <div className="mt-3 rounded-xl border border-dashed border-slate-700 bg-slate-950 p-8 text-center">
             <h3 className="text-sm font-extrabold text-slate-100">No projects yet</h3>
             <p className="mx-auto mt-2 max-w-sm text-sm text-slate-400">
-              Create a project and give Gapswise some context.
+              Create a project and give Gapwise some context.
             </p>
             <button
               type="button"
@@ -696,7 +696,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">WORKSPACE</p>
             <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Workspace</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-400">
-              What Gapswise understands about you and the things you are working on.
+            What Gapwise understands about you and the things you are working on.
             </p>
           </div>
         </div>

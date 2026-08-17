@@ -44,10 +44,24 @@ describe('Today question suggestions', () => {
 
     expect(presentation).toEqual({
       questionId: 'question_role',
-      title: 'Decide if this primarily frontend role is worth pursuing',
-      summary: 'The role is 70–80% frontend during the first year, which conflicts with your preference to avoid frontend-heavy work.',
+      title: 'Decide if the role is worth pursuing',
+      summary: 'The role may be 70–80% frontend during the first year, which conflicts with your preferred direction.',
     });
     expect(roleQuestion.question).toContain('remain acceptable');
+  });
+
+  it('keeps AI presentation copy short and removes quoted evidence prefixes', () => {
+    expect(parseQuestionPresentations(JSON.stringify({
+      presentations: [{
+        questionId: 'question_budget',
+        title: 'Clarify the normal frontend workload after launch',
+        summary: 'Supported by: "The first-year estimate". The steady-state role may be less frontend-heavy.',
+      }],
+    }), questions)[0]).toEqual({
+      questionId: 'question_budget',
+      title: 'Clarify the normal frontend workload after launch',
+      summary: 'The steady-state role may be less frontend-heavy.',
+    });
   });
 
   it('parses only valid action-oriented AI copy and fills missing questions deterministically', () => {

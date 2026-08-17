@@ -9,6 +9,7 @@ import type { TodayItemType } from '@/lib/today/feed';
 import type { TodayQuestion } from '@/lib/today/sections';
 import { TodayQuestionSuggestion } from '@/lib/today/questionPlans';
 import { formatCalendarSchedule, formatCalendarTimeUntil } from '@/lib/google/calendarFormatting';
+import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
 
 export type SnoozeOption = 15 | 30 | 60 | 'before_event';
 
@@ -37,6 +38,7 @@ interface RecommendationCardProps {
   onReviewDecision?: (nodeId: string) => void;
   onFeedback: (recommendationId: string, rating: FeedbackRating, status: RecommendationStatus | null, explanation?: string) => void;
   onSnooze?: (recommendation: AttentionCandidate, option: SnoozeOption) => void;
+  onHide?: (recommendation: AttentionCandidate) => void;
 }
 
 export const RecommendationCard: React.FC<RecommendationCardProps> = ({
@@ -57,10 +59,13 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   onReviewDecision,
   onFeedback,
   onSnooze,
+  onHide,
 }) => {
   const [snoozeOpen, setSnoozeOpen] = React.useState(false);
+  const snoozeRef = React.useRef<HTMLDivElement>(null);
   const [now, setNow] = React.useState(() => new Date());
   const isReminder = itemType === 'REMINDER' && Boolean(calendarStart);
+  useDismissibleMenu(snoozeOpen, setSnoozeOpen, snoozeRef);
 
   React.useEffect(() => {
     if (!isReminder) return undefined;
@@ -80,10 +85,10 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   const schedule = isReminder ? formatCalendarSchedule(calendarStart, calendarEnd, now) : undefined;
   const showSchedule = Boolean(schedule && relativeTiming && schedule !== relativeTiming);
   const cardClass = isReminder
-    ? 'w-full max-w-[420px] rounded-xl border border-slate-800 bg-slate-900 p-3 shadow-lg space-y-1.5'
+    ? 'w-full rounded-xl border border-slate-800 bg-slate-900/70 p-3 shadow-none flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-6'
     : 'rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-xl space-y-4';
   const actionButtonClass = isReminder
-    ? 'min-h-9 rounded-md px-3 py-1.5 text-xs font-bold sm:min-h-0'
+    ? 'inline-flex h-8 min-h-8 items-center rounded-md border border-slate-700/90 bg-transparent px-2.5 text-xs font-semibold text-slate-300 transition-colors hover:border-cyan-700 hover:bg-cyan-950/30 hover:text-cyan-100'
     : 'min-h-11 rounded-lg px-3 py-2 font-bold sm:min-h-0 sm:py-1.5';
   const chooseSnooze = (option: SnoozeOption) => {
     setSnoozeOpen(false);
@@ -91,9 +96,8 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
     else onFeedback(recommendation.id, 'not_now', 'not_now');
   };
 
-  return (
-    <article className={cardClass}>
-      <div>
+  const header = (
+    <div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] uppercase tracking-[0.16em] font-extrabold text-cyan-400">
             {itemType}
@@ -107,8 +111,9 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
         </div>
         <h3 className={`${isReminder ? 'mt-0.5 text-base' : 'mt-1 text-lg'} font-bold leading-snug text-slate-100`}>{title}</h3>
       </div>
+  );
 
-      {isReminder ? (
+  const reminderTiming = isReminder ? (
         <div aria-label="Reminder timing">
           {!relativeTiming && <p className="text-sm font-bold text-cyan-300">{description}</p>}
           {showSchedule && (
@@ -126,12 +131,11 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
             </p>
           )}
         </div>
-      ) : (
-        <p className="text-sm leading-relaxed text-slate-300">{description}</p>
-      )}
+      ) : null;
 
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <div className="flex flex-wrap items-center gap-2">
+  const actions = (
+      <div className={`flex flex-wrap items-center gap-2 text-xs ${isReminder ? 'shrink-0 md:justify-end' : ''}`}>
+        {!isReminder && <div className="flex flex-wrap items-center gap-2">
           {itemType === 'QUESTION' && question ? (
             <button
               type="button"
@@ -144,7 +148,7 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
             <button
               type="button"
               onClick={() => onFeedback(recommendation.id, 'already_done', 'done')}
-              className={`${actionButtonClass} bg-cyan-500 text-slate-950`}
+              className={isReminder ? actionButtonClass : `${actionButtonClass} bg-cyan-500 text-slate-950`}
             >
               Done
             </button>
@@ -158,13 +162,20 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
               Open decision
             </button>
           )}
-          <div className="relative">
+          <div ref={snoozeRef} className="relative">
             <button
               type="button"
-              onClick={() => setSnoozeOpen((current) => !current)}
+              onClick={() => {
+                if (snoozeOpen) {
+                  setSnoozeOpen(false);
+                  return;
+                }
+                closeOpenMenus();
+                setSnoozeOpen(true);
+              }}
               aria-haspopup="menu"
               aria-expanded={snoozeOpen}
-              className={`flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 font-semibold text-slate-300 hover:text-slate-100 ${isReminder ? 'min-h-9 text-xs' : 'min-h-11 sm:min-h-0 sm:py-1.5'}`}
+              className={`${isReminder ? actionButtonClass : 'flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 font-semibold text-slate-300 hover:text-slate-100 min-h-11 sm:min-h-0 sm:py-1.5'} gap-1.5`}
             >
               Snooze
               <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
@@ -179,13 +190,31 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
               </div>
             )}
           </div>
-        </div>
+        </div>}
         <FeedbackControls
           compact
-          onWhy={openWhy}
+          hideOnly={isReminder}
+          onWhy={isReminder ? undefined : openWhy}
+          onHide={onHide ? () => onHide(recommendation) : undefined}
           onFeedback={(rating, explanation) => onFeedback(recommendation.id, rating, null, explanation)}
         />
       </div>
+  );
+
+  return (
+    <article className={cardClass}>
+      {isReminder ? (
+        <div className="min-w-0 flex-1 space-y-1.5">
+          {header}
+          {reminderTiming}
+        </div>
+      ) : (
+        <>
+          {header}
+          <p className="text-sm leading-relaxed text-slate-300">{description}</p>
+        </>
+      )}
+      {actions}
     </article>
   );
 };

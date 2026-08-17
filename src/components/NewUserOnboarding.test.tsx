@@ -9,6 +9,7 @@ describe('NewUserOnboarding', () => {
       <NewUserOnboarding
         isLoadingDemo={false}
         onLoadCareerDemo={vi.fn()}
+        onLoadHackathonDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}
@@ -19,6 +20,7 @@ describe('NewUserOnboarding', () => {
     expect(html).toContain('Create project');
     expect(html).toContain('Load demo');
     expect(html).toContain('Career demo');
+    expect(html).toContain('Voluntary demo');
   });
 
   it('shows a loading state while demo data is being copied', () => {
@@ -26,6 +28,7 @@ describe('NewUserOnboarding', () => {
       <NewUserOnboarding
         isLoadingDemo
         onLoadCareerDemo={vi.fn()}
+        onLoadHackathonDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}

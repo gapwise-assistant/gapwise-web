@@ -1,10 +1,11 @@
 'use client';
 
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { PlayCircle, RefreshCw, Settings2, Target } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
+import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
 
 type AppTab = AppDestination;
 
@@ -16,6 +17,10 @@ interface HeaderProps {
   onResetDemo: () => void;
   onLoadCareerDemo?: () => void;
   isLoadingCareerDemo?: boolean;
+  onLoadHackathonDemo?: () => void;
+  isLoadingHackathonDemo?: boolean;
+  onLoadKintaGenDemo?: () => void;
+  isLoadingKintaGenDemo?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -34,6 +39,10 @@ export const Header: React.FC<HeaderProps> = ({
   onResetDemo,
   onLoadCareerDemo,
   isLoadingCareerDemo = false,
+  onLoadHackathonDemo,
+  isLoadingHackathonDemo = false,
+  onLoadKintaGenDemo,
+  isLoadingKintaGenDemo = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -41,10 +50,16 @@ export const Header: React.FC<HeaderProps> = ({
   accountLabel,
   demoMode = false,
 }) => {
+  const [demoMenuOpen, setDemoMenuOpen] = useState(false);
+  const demoMenuRef = useRef<HTMLDivElement>(null);
+  useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
+  const selectedProjectTitle = selectedScopeValue === '__everything__'
+    ? 'Everything'
+    : selectableProjects.find((item) => item.id === selectedScopeValue)?.title ?? 'Select project';
 
   const handleProjectSelect = (value: string) => {
     if (value === '__new_project__') {
@@ -71,7 +86,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="min-w-0">
             <div className="flex items-center space-x-2">
               <span className="font-extrabold text-sm tracking-tight text-slate-100 sm:text-lg">
-                GAPSWISE
+                GAPWISE
               </span>
               <span className="hidden lg:inline px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 rounded-full">
                 Persistent v1.0
@@ -91,11 +106,12 @@ export const Header: React.FC<HeaderProps> = ({
             onChange={(event) => handleProjectSelect(event.target.value)}
             className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
             aria-label="Workspace selector"
+            title={selectedProjectTitle}
           >
             <option value="__everything__" className="bg-slate-900">Everything</option>
             <optgroup label="Projects">
               {selectableProjects.map((item) => (
-                <option key={item.id} value={item.id} className="bg-slate-900">
+                <option key={item.id} value={item.id} title={item.title} className="bg-slate-900">
                   {item.title}
                 </option>
               ))}
@@ -127,17 +143,59 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {onLoadCareerDemo && (
-            <button
-              type="button"
-              onClick={onLoadCareerDemo}
-              disabled={isLoadingCareerDemo}
-              title="Run or reset the career conflict demo"
-              className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-amber-800/80 bg-amber-950/30 px-2.5 text-[10px] font-bold uppercase tracking-wide text-amber-300 transition-colors hover:border-amber-500 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60 sm:h-auto sm:px-3 sm:py-2"
-            >
-              <PlayCircle className="h-4 w-4" />
-              <span className="hidden lg:inline">{isLoadingCareerDemo ? 'Loading…' : 'Career demo'}</span>
-            </button>
+          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo) && (
+            <div ref={demoMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!demoMenuOpen) closeOpenMenus();
+                  setDemoMenuOpen((open) => !open);
+                }}
+                aria-label="Open demos"
+                aria-expanded={demoMenuOpen}
+                title="Open demos"
+                className={`inline-flex h-11 w-11 items-center justify-center rounded-xl border bg-slate-900 text-slate-400 transition-colors hover:border-cyan-700 hover:text-cyan-300 sm:h-auto sm:w-auto sm:px-2.5 sm:py-2 ${demoMenuOpen ? 'border-cyan-700 text-cyan-300' : 'border-slate-800'}`}
+              >
+                <PlayCircle className="h-4 w-4" />
+              </button>
+              {demoMenuOpen && (
+                <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl shadow-slate-950/60">
+                  {onLoadCareerDemo && (
+                    <button
+                      type="button"
+                      onClick={() => { setDemoMenuOpen(false); onLoadCareerDemo(); }}
+                      disabled={isLoadingCareerDemo}
+                      className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-amber-300" />
+                      {isLoadingCareerDemo ? 'Loading career demo…' : 'Career demo'}
+                    </button>
+                  )}
+                  {onLoadHackathonDemo && (
+                    <button
+                      type="button"
+                      onClick={() => { setDemoMenuOpen(false); onLoadHackathonDemo(); }}
+                      disabled={isLoadingHackathonDemo}
+                      className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />
+                      {isLoadingHackathonDemo ? 'Loading voluntary demo…' : 'Voluntary demo'}
+                    </button>
+                  )}
+                  {onLoadKintaGenDemo && (
+                    <button
+                      type="button"
+                      onClick={() => { setDemoMenuOpen(false); onLoadKintaGenDemo(); }}
+                      disabled={isLoadingKintaGenDemo}
+                      className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-fuchsia-200 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <span className="mr-2 h-1.5 w-1.5 rounded-full bg-fuchsia-300" />
+                      {isLoadingKintaGenDemo ? 'Loading scientific assistant…' : 'Scientific AI assistant'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {demoMode && (
             <button

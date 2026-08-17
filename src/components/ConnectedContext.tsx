@@ -88,7 +88,7 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
           <p className="mt-1 text-xs text-slate-400">
             {demoMode
               ? 'Local fixtures are active. No Google account or API is being contacted.'
-              : 'Connect trusted accounts Gapswise can read from. Calendar uses the real OAuth connection.'}
+              : 'Connect trusted accounts Gapwise can read from. Calendar uses the real OAuth connection.'}
           </p>
         </div>
         <button
