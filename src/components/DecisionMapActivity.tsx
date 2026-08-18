@@ -23,7 +23,8 @@ function formatTimestamp(value: string): string {
 function isDecisionMapTrace(trace: TraceEvent): boolean {
   return trace.simulation === true
     || trace.route === '/api/agents/turn'
-    || trace.route === '/api/context/ingest';
+    || trace.route === '/api/context/ingest'
+    || trace.route === '/api/projects/decision-anchor';
 }
 
 export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId }) => {
@@ -211,6 +212,19 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                     {trace.handoffs.map((handoff) => (
                       <p key={handoff.id}><span className="text-slate-300">{handoff.from} → {handoff.to}</span> · {handoff.inputCount} in / {handoff.outputCount} out · {handoff.selectedIds.length} selected IDs · {handoff.summary}</p>
                     ))}
+                  </div>
+                </details>
+              )}
+
+              {trace.decisionAnchoring && (
+                <details className="mt-2 border-t border-slate-800 pt-2" open>
+                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Decision anchoring</summary>
+                  <div className="mt-2 space-y-1 text-slate-500">
+                    <p>Decision: <span className="text-slate-300">{trace.decisionAnchoring.decisionTitle}</span></p>
+                    <p>Linked {trace.decisionAnchoring.linkCount} question IDs · source: {trace.decisionAnchoring.source.replaceAll('_', ' ')}</p>
+                    <p className="truncate" title={trace.decisionAnchoring.questionNodeIds.join(', ')}>
+                      Question IDs: {trace.decisionAnchoring.questionNodeIds.join(', ')}
+                    </p>
                   </div>
                 </details>
               )}

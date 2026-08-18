@@ -235,6 +235,16 @@ export async function POST(request: Request) {
 
   if (!isDemoMode() && !result.skipped && result.modelUsed) {
     const contextConfig = getAgentModelConfig('context');
+    const anchoredDecision = result.project.nodes.find((node) =>
+      node.type === 'DECISION' && node.status === 'OPEN' && node.source_refs.includes(source.sourceId)
+    );
+    const sourceDerivedNodeIds = new Set(result.project.sources.find((item) => item.id === source.sourceId)?.derived_node_ids ?? []);
+    const anchoredQuestionNodeIds = anchoredDecision
+      ? result.project.edges
+        .filter((edge) => edge.target === anchoredDecision.id && ['blocks', 'informs'].includes(edge.type))
+        .map((edge) => edge.source)
+        .filter((nodeId) => sourceDerivedNodeIds.has(nodeId))
+      : [];
     recordTrace({
       userId: source.userId,
       route: '/api/context/ingest',
@@ -282,6 +292,13 @@ export async function POST(request: Request) {
         decisionCount: result.analysis?.nodes.filter((node) => node.type === 'DECISION').length ?? 0,
         commitmentCount: result.analysis?.nodes.filter((node) => node.type === 'NEXT_ACTION').length ?? 0,
       },
+      decisionAnchoring: anchoredDecision && anchoredQuestionNodeIds.length > 0 ? {
+        decisionId: anchoredDecision.id,
+        decisionTitle: anchoredDecision.text,
+        questionNodeIds: anchoredQuestionNodeIds,
+        linkCount: anchoredQuestionNodeIds.length,
+        source: 'context_agent',
+      } : undefined,
       pipelineSteps: [{
         name: 'Context Agent / graph extraction',
         agentName: 'Context Agent',

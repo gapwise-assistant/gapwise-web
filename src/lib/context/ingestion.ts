@@ -1,6 +1,7 @@
 import { ClarityNode, ContextSource, EdgeType, Project, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { linkOpenDecisionQuestions, matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
 
 export interface PrecomputedSourceNode {
   id?: string;
@@ -11,6 +12,7 @@ export interface PrecomputedSourceNode {
   whyItMatters?: string[];
   relatedNodeIds?: string[];
   relationship?: EdgeType;
+  status?: ClarityNode['status'];
 }
 
 export interface PrecomputedRelationship {
@@ -79,7 +81,16 @@ export function summarizeExtraction(source: Pick<ContextSource, 'type' | 'conten
   return 'Text context captured for graph extraction and retrieval.';
 }
 
-function statusForNodeType(type: ClarityNode['type']): ClarityNode['status'] {
+function statusForNodeType(
+  type: ClarityNode['type'],
+  requestedStatus?: ClarityNode['status'],
+  sourceContent = '',
+  nodeText = '',
+): ClarityNode['status'] {
+  if (type === 'DECISION') {
+    if (requestedStatus === 'OPEN' || requestedStatus === 'RESOLVED') return requestedStatus;
+    if (matchesExplicitDecisionTitle(nodeText, sourceContent)) return 'OPEN';
+  }
   return type === 'UNKNOWN' || type === 'ASSUMPTION' || type === 'RISK' || type === 'NEXT_ACTION' || type === 'GOAL' || type === 'EXPERIMENT'
     ? 'OPEN'
     : 'RESOLVED';
@@ -210,7 +221,11 @@ export async function ingestContextSource(
         existingNode.impact = Math.max(existingNode.impact, node.impact ?? node.confidence);
         existingNode.why_it_matters = mergeUnique(existingNode.why_it_matters, node.whyItMatters);
         existingNode.updated_at = now;
-        if (previousDerivedNodeIds.has(existingNode.id)) existingNode.status = statusForNodeType(existingNode.type);
+        if (previousDerivedNodeIds.has(existingNode.id)) {
+          existingNode.status = statusForNodeType(existingNode.type, node.status, content, node.text);
+        } else if (existingNode.type === 'DECISION' && node.status === 'OPEN') {
+          existingNode.status = 'OPEN';
+        }
         nodeIds.push(existingNode.id);
         return;
       }
@@ -219,7 +234,7 @@ export async function ingestContextSource(
         id: node.id ?? makeId('node_ext'),
         type: node.type,
         text: node.text,
-        status: statusForNodeType(node.type),
+        status: statusForNodeType(node.type, node.status, content, node.text),
         confidence: node.confidence,
         impact: node.impact ?? node.confidence,
         source_refs: [sourceId],
@@ -280,6 +295,8 @@ export async function ingestContextSource(
       }
       if (targetNode) applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
     });
+
+    linkOpenDecisionQuestions(updated, sourceId, content, nodeIds, now);
   }
 
   const reasoningProject = projectForReasoning(updated);

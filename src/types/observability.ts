@@ -90,6 +90,14 @@ export interface TracePipelineStep {
   contextCount?: number;
 }
 
+export interface TraceDecisionAnchoring {
+  decisionId: string | null;
+  decisionTitle: string;
+  questionNodeIds: string[];
+  linkCount: number;
+  source: 'context_agent' | 'deterministic_fallback' | 'user_confirmation';
+}
+
 export interface TraceEvent {
   id: string;
   userId: string;
@@ -110,6 +118,7 @@ export interface TraceEvent {
   handoffs?: TraceHandoff[];
   contextSummary?: TraceContextSummary;
   pipelineSteps?: TracePipelineStep[];
+  decisionAnchoring?: TraceDecisionAnchoring;
   /** True when the event describes a deterministic demo simulation, not an AI call. */
   simulation?: boolean;
   error?: string;

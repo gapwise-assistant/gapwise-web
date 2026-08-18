@@ -15,6 +15,7 @@ import type { AnsweredQuestion } from '@/lib/questions/history';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
+import { DecisionAnchorCard } from '@/components/DecisionAnchorCard';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 
@@ -32,6 +33,7 @@ interface ScopeDestinationProps {
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
   onUpdateProject: (updated: Project) => void;
+  onAnchorDecision?: (projectId: string, title: string, questionNodeIds: string[]) => Promise<Project>;
   onUpdateGeneralContext: (updated: Project) => void;
   onAnswerQuestion: (node: ClarityNode, intent?: 'confirm' | 'correct') => void;
   onReviewDecision: (nodeId: string) => void;
@@ -76,6 +78,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onSelectEverything,
   onOpenNewProject,
   onUpdateProject,
+  onAnchorDecision,
   onUpdateGeneralContext,
   onAnswerQuestion,
   onReviewDecision,
@@ -400,6 +403,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           <p className="mt-4 text-sm text-slate-500">Gapwise has not built a picture of this project yet. Add context to get started.</p>
         )}
       </section>
+
+      <DecisionAnchorCard project={project} onUpdateProject={onUpdateProject} onAnchorDecision={onAnchorDecision} />
 
       {needsAttention && (
         <section className="rounded-xl border border-amber-800/80 bg-amber-950/20 p-5">

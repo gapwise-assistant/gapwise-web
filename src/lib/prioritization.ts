@@ -100,7 +100,7 @@ export function calculateClarityScore(project: Project): number {
   if (project.nodes.length === 0) return 0;
   const totalNodes = project.nodes.length;
   const resolvedNodes = project.nodes.filter(
-    (n) => n.status === 'RESOLVED' || n.type === 'DECISION' || n.type === 'KNOWN'
+    (n) => n.status === 'RESOLVED' || (n.type === 'DECISION' && n.status !== 'OPEN' && n.status !== 'DEFERRED') || n.type === 'KNOWN'
   ).length;
   const highConfAssumptions = project.nodes.filter(
     (n) => n.type === 'ASSUMPTION' && n.confidence >= 0.7

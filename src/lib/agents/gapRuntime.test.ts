@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assessGapsV1Deterministically } from '@/lib/agents/gapAssessmentV1';
-import { evaluateGapRuntime, getGapAgentRuntimeMode } from '@/lib/agents/gapRuntime';
+import { evaluateGapRuntime, getGapAgentRuntimeMode, refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { requestGapAssessment } from '@/lib/agents/gapRemote';
 import { CAREER_GAP_GOLDEN_SET } from '@/lib/evals/careerGapGoldenSet';
 import { materializeCareerGapCase } from '@/lib/evals/careerGapFixture';
@@ -83,6 +83,26 @@ describe('Gap Agent runtime modes', () => {
     expect(result.effectiveGapNodeId).toBe(alternative.sourceUnknownNodeIds[0]);
     expect(result.comparison.agreement).toBe(false);
     expect(result.fallbackUsed).toBe(false);
+  });
+
+  it('recalculates the effective question when a live runtime is refreshed after anchoring', async () => {
+    const input = materializeCareerGapCase(CAREER_GAP_GOLDEN_SET[0]);
+    const assessment = assessGapsV1Deterministically(input);
+    mockedRequest.mockResolvedValue({ assessment, metadata: metadata() });
+    process.env.GAP_AGENT_MODE = 'live';
+
+    const result = await refreshProjectGapRuntime({
+      userId: 'test-user',
+      project: input.project,
+      profile: undefined,
+      memories: input.memories,
+      route: '/api/projects/decision-anchor',
+      label: 'Gap Agent after decision anchoring',
+    });
+
+    expect(result.runtime?.mode).toBe('live');
+    expect(result.project.active_question?.node_id).toBe(result.runtime?.effectiveGapNodeId);
+    expect(mockedRequest).toHaveBeenCalledTimes(1);
   });
 
   it('falls back deterministically when live graph references are invalid', async () => {

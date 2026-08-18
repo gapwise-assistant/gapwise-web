@@ -387,6 +387,23 @@ export default function Home() {
     });
   }, [userId]);
 
+  const anchorDecision = useCallback(async (
+    projectId: string,
+    title: string,
+    questionNodeIds: string[],
+  ): Promise<Project> => {
+    const response = await authFetch('/api/projects/decision-anchor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, projectId, title, questionNodeIds, profile }),
+    });
+    const payload = await response.json().catch(() => ({})) as { project?: Project; error?: string };
+    if (!response.ok || !payload.project) {
+      throw new Error(payload.error ?? 'The decision could not be anchored.');
+    }
+    return payload.project;
+  }, [profile, userId]);
+
   const handleSelectProject = useCallback((projectId: string) => {
     const selected = projects.find((item) => item.id === projectId);
     if (selected) {
@@ -1034,6 +1051,7 @@ export default function Home() {
             onSelectEverything={handleSelectEverything}
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
+            onAnchorDecision={anchorDecision}
             onUpdateGeneralContext={(updated) => {
               setGeneralContext(updated);
               persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
