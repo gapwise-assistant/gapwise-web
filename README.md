@@ -54,6 +54,21 @@ npm test
 npm run build
 ```
 
+### Gap Agent rollout and evaluation
+
+The real Python ADK Gap Agent is behind `GAP_AGENT_MODE`:
+
+- `deterministic` (default) makes no Gap Agent call.
+- `shadow` calls Gemini, records a sanitized comparison, and keeps the existing deterministic result.
+- `live` applies only a graph-valid Gap Assessment and falls back to the deterministic result on timeout, transport, schema, or reference failure.
+
+`GAPSWISE_DEMO_MODE=true` always overrides this setting and makes no external
+call. To run the bounded live model comparison locally, start the Next.js app
+and Python service, then follow [`docs/career-gap-evaluation.md`](docs/career-gap-evaluation.md).
+The Decision Map activity panel shows run ID, model, thinking level, tokens,
+latency, validation, escalation, selection, and shadow/live agreement without
+showing prompts, source text, Context Packs, credentials, or chain-of-thought.
+
 ## Golden Demo Flow
 
 1. Press the reset button in the header.
@@ -77,6 +92,10 @@ CLOUD_STORAGE_BUCKET=gapwise-505217-context
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_GENAI_USE_VERTEXAI=true
 GEMINI_MODEL=gemini-3.5-flash-lite
+GAP_AGENT_MODE=deterministic
+AGENT_GAP_MODEL=gemini-3.5-flash-lite
+AGENT_GAP_THINKING=low
+AGENT_GAP_MAX_OUTPUT_TOKENS=2048
 GOOGLE_OAUTH_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
 GOOGLE_OAUTH_CLIENT_SECRET=your-google-oauth-client-secret
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3000/api/integrations/google/calendar/callback

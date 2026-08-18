@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getAgentModelConfig, getAgentModelPolicy, getGapEscalationModelConfig, getGapEscalationPolicy } from './modelPolicy';
+import { getAgentModelConfig, getAgentModelPolicy, getGapEscalationModelConfig, getGapEscalationPolicy, getGapEvaluationProfiles } from './modelPolicy';
 
 describe('four-agent model policy', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -54,5 +54,17 @@ describe('four-agent model policy', () => {
       thinkingLevel: 'high',
       maxOutputTokens: 4096,
     });
+  });
+
+  it('provides independently tunable bounded Gap evaluation profiles', () => {
+    vi.stubEnv('AGENT_GAP_MODEL', 'cheap-model');
+    vi.stubEnv('AGENT_GAP_ESCALATION_MODEL', 'strong-model');
+    vi.stubEnv('AGENT_GAP_EVAL_BALANCED_MAX_OUTPUT_TOKENS', '2500');
+
+    expect(getGapEvaluationProfiles()).toEqual([
+      expect.objectContaining({ id: 'cheap', model: 'cheap-model', role: 'gap' }),
+      expect.objectContaining({ id: 'balanced', model: 'strong-model', thinkingLevel: 'medium', maxOutputTokens: 2500 }),
+      expect.objectContaining({ id: 'strong', model: 'strong-model', thinkingLevel: 'high' }),
+    ]);
   });
 });

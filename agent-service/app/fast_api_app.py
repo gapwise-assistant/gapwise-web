@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import hmac
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -20,7 +21,7 @@ from collections.abc import AsyncIterator
 import google.auth
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
 from google.cloud import logging as google_cloud_logging
@@ -28,9 +29,14 @@ from google.cloud import logging as google_cloud_logging
 from app.app_utils import services
 from app.app_utils.a2a import attach_a2a_routes
 from app.app_utils.typing import Feedback
+from app.gap_contract import GapAssessmentRequest, GapAssessmentResponse
+from app.gap_runtime import GapRuntimeError, run_gap_assessment
 from app.model_policy import is_demo_mode
 
 load_dotenv()
+# Never export prompt/response bodies to ADK spans. Sanitized application
+# metadata is recorded explicitly below instead.
+os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] = "false"
 _, project_id = google.auth.default()
 logging_client = google_cloud_logging.Client()
 logger = logging_client.logger(__name__)
@@ -105,6 +111,41 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     """
     logger.log_struct(feedback.model_dump(), severity="INFO")
     return {"status": "success"}
+
+
+@app.post("/internal/gap-assess", response_model=GapAssessmentResponse)
+async def assess_gap(
+    request: GapAssessmentRequest,
+    x_gapswise_internal_secret: str | None = Header(default=None),
+) -> GapAssessmentResponse:
+    """Run the scoped structured Gap Agent without exposing prompt content."""
+    configured_secret = os.environ.get("GAPSWISE_INTERNAL_API_SECRET", "").strip()
+    if configured_secret and not hmac.compare_digest(
+        configured_secret, x_gapswise_internal_secret or ""
+    ):
+        raise HTTPException(status_code=401, detail="Invalid internal service secret.")
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=503,
+            detail="Gap Agent is disabled in deterministic demo mode.",
+        )
+    try:
+        response = await run_gap_assessment(request)
+    except GapRuntimeError as error:
+        startup_logger.warning("Gap Agent request failed safely: %s", error)
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    # Safe metadata only. Prompts, graph text, Context Packs, credentials, and
+    # model output are deliberately excluded from logs.
+    logger.log_struct(
+        {
+            "event": "gap_agent_completed",
+            **response.metadata.model_dump(),
+            "projectId": request.project.id,
+        },
+        severity="INFO",
+    )
+    return response
 
 
 # Main execution

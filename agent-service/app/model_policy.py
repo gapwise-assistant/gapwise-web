@@ -157,7 +157,7 @@ def get_gap_escalation_policy() -> GapEscalationPolicy:
         close_candidate_margin=_float(_env("AGENT_GAP_ESCALATION_MARGIN"), 0.05),
         low_confidence_threshold=_float(_env("AGENT_GAP_ESCALATION_LOW_CONFIDENCE"), 0.45),
         high_impact_threshold=_float(_env("AGENT_GAP_ESCALATION_HIGH_IMPACT"), 0.9),
-        complex_path_threshold=max(1, int(math.floor(_float(_env("AGENT_GAP_ESCALATION_COMPLEXITY"), 2, 1)))),
+        complex_path_threshold=max(1, math.floor(_float(_env("AGENT_GAP_ESCALATION_COMPLEXITY"), 2, 1))),
     )
 
 

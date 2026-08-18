@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
-import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
+import { answerQuestion, editAnsweredQuestion, reopenAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { PATCH, POST } from './route';
 import { saveFeedback } from '@/lib/tools/feedbackTools';
 
-vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn(), editAnsweredQuestion: vi.fn() }));
+vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn(), editAnsweredQuestion: vi.fn(), reopenAnsweredQuestion: vi.fn() }));
 vi.mock('@/lib/tools/feedbackTools', () => ({ saveFeedback: vi.fn() }));
 
 function request(body: unknown): Request {
@@ -74,6 +74,38 @@ describe('POST /api/questions/answer', () => {
     }));
     await expect(response.json()).resolves.toMatchObject({
       message: 'Answer updated. Gapwise understanding was refreshed.',
+    });
+  });
+
+  it('reopens a resolved question through PATCH', async () => {
+    const context = createGoldenDemoProject();
+    vi.mocked(reopenAnsweredQuestion).mockResolvedValue({
+      ownerType: 'project',
+      projectId: context.id,
+      context,
+      historyTimestamp: '2026-08-11T10:00:00.000Z',
+    });
+
+    const response = await PATCH(new Request('http://localhost/api/questions/answer', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'reopen',
+        userId: 'demo-user',
+        projectId: context.id,
+        historyTimestamp: '2026-08-11T10:00:00.000Z',
+        question: 'What is the primary user?',
+        previousAnswer: 'Independent builders.',
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(reopenAnsweredQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'demo-user',
+      previousAnswer: 'Independent builders.',
+    }));
+    await expect(response.json()).resolves.toMatchObject({
+      message: 'Response cancelled. The question is open again.',
     });
   });
 

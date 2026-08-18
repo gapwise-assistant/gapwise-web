@@ -1,4 +1,8 @@
-from app.model_policy import get_agent_model_config, get_agent_model_policy, validate_live_model
+from app.model_policy import (
+    get_agent_model_config,
+    get_agent_model_policy,
+    validate_live_model,
+)
 
 
 def test_cheap_profile_is_the_default(monkeypatch) -> None:

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, RefreshCw } from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { authFetch } from '@/lib/auth/client';
 import type { TraceAgentConfig, TraceEvent } from '@/types/observability';
 
@@ -30,6 +30,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
   const [traces, setTraces] = useState<TraceEvent[]>([]);
   const [agentPolicy, setAgentPolicy] = useState<TraceAgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -71,29 +72,43 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
           </h3>
           <span className="text-[10px] text-slate-600">sanitized routing log</span>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200 disabled:opacity-50"
-          title="Refresh Decision Map activity"
-        >
-          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-1.5">
+          {open && (
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200 disabled:opacity-50"
+              title="Refresh Decision Map activity"
+            >
+              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200"
+          >
+            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {open ? 'Hide' : 'Show'}
+          </button>
+        </div>
       </div>
-      <p className="mt-1 text-[11px] text-slate-500">
-        Shows which agent configuration was used (or would be used) and how much project context was selected. Prompts and private content are never shown.
-      </p>
-      {traces.some((trace) => trace.simulation) && (
-        <p className="mt-2 rounded-md border border-amber-900/60 bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-200/80">
-          This is a deterministic simulation of initial context processing. No Gemini or ADK call ran; the steps show the agent route that would process an uploaded or changed context source.
+      {open && <>
+        <p className="mt-1 text-[11px] text-slate-500">
+          Shows which agent configuration was used (or would be used) and how much project context was selected. Prompts and private content are never shown.
         </p>
-      )}
+        {traces.some((trace) => trace.simulation) && (
+          <p className="mt-2 rounded-md border border-amber-900/60 bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-200/80">
+            This is a deterministic simulation of initial context processing. No Gemini or ADK call ran; the steps show the agent route that would process an uploaded or changed context source.
+          </p>
+        )}
 
-      {loading ? (
+        {loading ? (
         <div className="mt-3 h-12 animate-pulse rounded-lg bg-slate-900/80" aria-label="Loading Decision Map activity" />
-      ) : traces.length === 0 ? (
+        ) : traces.length === 0 ? (
         <div className="mt-3 rounded-lg border border-dashed border-slate-800 bg-slate-900/50 px-3 py-2 text-[11px] text-slate-500">
           <p>No map activity in this running session yet. Run a graph turn or ingest project context, then refresh this section.</p>
           {agentPolicy.length > 0 && (
@@ -111,7 +126,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
             </div>
           )}
         </div>
-      ) : (
+        ) : (
         <div className="mt-3 grid gap-2 lg:grid-cols-2">
           {traces.map((trace) => (
             <article key={trace.id} className="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2.5 text-[11px]">
@@ -150,7 +165,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                           <span className="font-semibold text-slate-300">{run.agent}</span>
                           <span className={run.execution === 'would_use' ? 'text-amber-300' : run.execution === 'used' ? 'text-emerald-300' : 'text-slate-400'}>{run.execution}</span>
                         </div>
-                        <p className="mt-1">{run.model} · {run.thinkingLevel} thinking · {run.latencyMs}ms · {run.inputTokens} in / {run.outputTokens} out · ${run.estimatedCost.toFixed(4)} est. cost{run.costSource ? ` (${run.costSource.replaceAll('_', ' ')})` : ''}</p>
+                        <p className="mt-1">{run.model} · {run.thinkingLevel} thinking · {run.latencyMs}ms · {run.inputTokens} in / {run.outputTokens} out · {run.estimatedCost === null ? 'cost unavailable' : `$${run.estimatedCost.toFixed(4)} est. cost`}{run.costSource ? ` (${run.costSource.replaceAll('_', ' ')})` : ''}</p>
                         <p className="mt-1">Validation: {run.validationStatus} · Confidence: {run.confidence === null ? 'n/a' : run.confidence.toFixed(3)} · Escalated: {run.escalated ? 'yes' : 'no'}</p>
                         {run.escalationReason && <p className="mt-1 text-slate-600">Escalation: {run.escalationReason}</p>}
                         <p className="mt-1 text-slate-600">Input: {run.inputSummary} · Output: {run.outputSummary}</p>
@@ -173,6 +188,18 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                     <p>Confidence: {trace.gapAnalysis.confidence === null ? 'n/a' : trace.gapAnalysis.confidence.toFixed(3)} · Evidence IDs: {trace.gapAnalysis.evidenceIds.join(', ') || 'none'}</p>
                     <p>Escalated: {trace.gapAnalysis.escalated ? 'yes' : 'no'}{trace.gapAnalysis.escalationReason ? ` · ${trace.gapAnalysis.escalationReason}` : ''}</p>
                     {trace.gapAnalysis.escalationModel && <p>Escalation candidate: {trace.gapAnalysis.escalationModel} · {trace.gapAnalysis.escalationThinkingLevel} thinking · {trace.gapAnalysis.escalationMaxOutputTokens?.toLocaleString()} tokens</p>}
+                  </div>
+                </details>
+              )}
+
+              {trace.gapComparison && (
+                <details className="mt-2 border-t border-slate-800 pt-2" open>
+                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Runtime comparison</summary>
+                  <div className="mt-2 space-y-1 text-slate-500">
+                    <p>Mode: <span className="text-slate-300">{trace.gapComparison.mode}</span> · Validation: {trace.gapComparison.validationStatus}</p>
+                    <p>Deterministic: {trace.gapComparison.deterministicGapId ?? 'none'} · Agent: {trace.gapComparison.agentGapId ?? 'none'}</p>
+                    <p>Effective: <span className="text-cyan-200">{trace.gapComparison.effectiveGapId ?? 'none'}</span> · Agreement: {trace.gapComparison.agreement === null ? 'n/a' : trace.gapComparison.agreement ? 'yes' : 'no'} · Fallback: {trace.gapComparison.fallbackUsed ? 'yes' : 'no'}</p>
+                    {trace.gapComparison.failureReason && <p>Safe failure reason: {trace.gapComparison.failureReason.replaceAll('_', ' ')}</p>}
                   </div>
                 </details>
               )}
@@ -217,7 +244,8 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
             </article>
           ))}
         </div>
-      )}
+        )}
+      </>}
     </section>
   );
 };

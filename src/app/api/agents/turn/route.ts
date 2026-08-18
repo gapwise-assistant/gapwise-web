@@ -6,18 +6,45 @@ import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelPolicy } from '@/lib/agents/modelPolicy';
+import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { evaluateGapRuntime, getGapAgentRuntimeMode, type GapRuntimeResult } from '@/lib/agents/gapRuntime';
+import { rankGaps } from '@/lib/tools/graphTools';
+import { runAttentionAgent } from '@/lib/agents/attentionAgent';
+import { runPartnerAgent } from '@/lib/agents/partnerAgent';
+import { gapAgentOutputSchema, validateStructuredOutput } from '@/lib/agents/schemas';
+import type { AgentTurnResult } from '@/lib/agents/orchestrator';
 
-function traceAgentConfigs() {
+function traceAgentConfigs(gapRuntime: GapRuntimeResult) {
   const policy = getAgentModelPolicy();
   return Object.entries(policy).map(([role, config]) => ({
     agentName: `${role[0].toUpperCase()}${role.slice(1)} Agent`,
-    model: config.model,
-    thinkingLevel: config.thinkingLevel,
-    maxOutputTokens: config.maxOutputTokens,
-    // This orchestrator is deterministic today; these are the models that
-    // would be used when the four-agent Gemini workflow is enabled.
-    execution: 'would_use' as const,
+    model: role === 'gap' ? gapRuntime.metadata?.model ?? config.model : config.model,
+    thinkingLevel: role === 'gap' ? gapRuntime.metadata?.thinkingLevel ?? config.thinkingLevel : config.thinkingLevel,
+    maxOutputTokens: role === 'gap' ? gapRuntime.metadata?.maxOutputTokens ?? config.maxOutputTokens : config.maxOutputTokens,
+    execution: role === 'gap' && gapRuntime.metadata
+      ? 'used' as const
+      : 'would_use' as const,
   }));
+}
+
+function applyLiveGapSelection(result: AgentTurnResult, runtime: GapRuntimeResult): void {
+  if (runtime.mode !== 'live' || runtime.fallbackUsed) return;
+  const ranked = rankGaps(result.project);
+  const selected = runtime.effectiveGapNodeId
+    ? ranked.find((candidate) => candidate.node_id === runtime.effectiveGapNodeId) ?? null
+    : null;
+  result.project.active_question = selected;
+  const gapOutput = validateStructuredOutput(gapAgentOutputSchema, {
+    selectedGapNodeId: selected?.node_id ?? null,
+    question: selected?.question ?? null,
+    priority: selected?.priority ?? null,
+    retrievalAnswered: false,
+    reasons: runtime.agentAssessment
+      ? [runtime.agentAssessment.selectionRationale]
+      : ['No validated live Gap Agent assessment was available.'],
+  });
+  const attention = runAttentionAgent(result.project);
+  result.partner = runPartnerAgent(result.project, DEFAULT_USER_PROFILE, gapOutput, attention);
 }
 
 export const runtime = 'nodejs';
@@ -38,14 +65,83 @@ export async function POST(request: Request) {
     if (!input) throw new StorageError('Missing input.', 'VALIDATION_ERROR');
 
     const project = await loadProject(userId);
+    let durableMemories: Awaited<ReturnType<typeof loadDurableMemories>> = [];
+    try {
+      durableMemories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);
+    } catch {
+      // A memory-provider outage must not break the existing graph turn.
+    }
     const result = runGapswiseOrchestrator({
       userId,
       input,
       project,
       profile: DEFAULT_USER_PROFILE,
+      durableMemories,
       applyGraphUpdates: body.applyGraphUpdates ?? false,
     });
+    const gapRuntime = await evaluateGapRuntime({
+      userId,
+      project: result.project,
+      contextPack: result.contextPack,
+      memories: durableMemories,
+      mode: getGapAgentRuntimeMode(),
+    });
+    applyLiveGapSelection(result, gapRuntime);
     const { observability, ...responseResult } = result;
+
+    if (gapRuntime.metadata) {
+      const remoteRun = {
+        runId: gapRuntime.metadata.runId,
+        agent: gapRuntime.mode === 'shadow' ? 'Gap Agent (shadow)' : 'Gap Agent',
+        model: gapRuntime.metadata.model,
+        thinkingLevel: gapRuntime.metadata.thinkingLevel,
+        inputTokens: gapRuntime.metadata.inputTokens,
+        outputTokens: gapRuntime.metadata.outputTokens,
+        latencyMs: gapRuntime.metadata.latencyMs,
+        estimatedCost: gapRuntime.metadata.estimatedCost,
+        costSource: gapRuntime.metadata.costSource,
+        validationStatus: gapRuntime.metadata.validationStatus,
+        confidence: gapRuntime.metadata.confidence,
+        escalated: gapRuntime.metadata.escalated,
+        escalationReason: gapRuntime.metadata.escalationReason ?? undefined,
+        execution: 'used' as const,
+        inputSummary: gapRuntime.metadata.inputSummary,
+        outputSummary: gapRuntime.metadata.outputSummary,
+      };
+      if (gapRuntime.mode === 'live') {
+        const gapRunIndex = observability.agentRuns.findIndex((run) => run.agent === 'Gap Agent');
+        if (gapRunIndex >= 0) observability.agentRuns[gapRunIndex] = remoteRun;
+        else observability.agentRuns.push(remoteRun);
+      } else {
+        observability.agentRuns.push(remoteRun);
+      }
+    }
+
+    if (gapRuntime.agentAssessment) {
+      const priorityByNode = new Map(rankGaps(result.project).map((gap) => [gap.node_id, gap.priority]));
+      const selected = gapRuntime.agentAssessment.candidates.find((candidate) => candidate.gapId === gapRuntime.agentAssessment?.selectedGapId);
+      observability.gapAnalysis = {
+        ...observability.gapAnalysis,
+        candidates: gapRuntime.agentAssessment.candidates.map((candidate) => {
+          const nodeId = candidate.sourceUnknownNodeIds[0];
+          return {
+            id: nodeId,
+            rank: 0,
+            priority: priorityByNode.get(nodeId) ?? 0,
+            confidence: ({ low: 0.35, medium: 0.65, high: 0.9 })[candidate.assessmentConfidence],
+            summary: `${candidate.affectedDecisions.length} affected decisions · ${candidate.evidenceReview.evidenceIds.length} evidence IDs · ${candidate.evidenceReview.answerability}${candidate.suppressionReason ? ` · suppressed: ${candidate.suppressionReason}` : ''}`,
+          };
+        }).sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id))
+          .slice(0, 5)
+          .map((candidate, index) => ({ ...candidate, rank: index + 1 })),
+        selectedGapId: gapRuntime.agentGapNodeId,
+        selectionReason: gapRuntime.agentAssessment.selectionRationale,
+        confidence: gapRuntime.metadata?.confidence ?? null,
+        evidenceIds: selected?.evidenceReview.evidenceIds ?? [],
+        escalated: gapRuntime.metadata?.escalated ?? false,
+        escalationReason: gapRuntime.metadata?.escalationReason ?? undefined,
+      };
+    }
 
     if (body.applyGraphUpdates) {
       await saveProject(userId, result.project);
@@ -61,9 +157,10 @@ export async function POST(request: Request) {
       contextIds: result.contextPack.includedContextIds,
       scores: [],
       toolCalls: ['buildContextPack', 'runGapswiseOrchestrator'],
-      agentConfigs: traceAgentConfigs(),
+      agentConfigs: traceAgentConfigs(gapRuntime),
       agentRuns: observability.agentRuns,
       gapAnalysis: observability.gapAnalysis,
+      gapComparison: gapRuntime.comparison,
       handoffs: observability.handoffs,
       contextSummary: {
         scope: project.id,
@@ -83,6 +180,17 @@ export async function POST(request: Request) {
           execution: 'deterministic' as const,
           contextCount: event.contextIds?.length ?? 0,
         })),
+        {
+          name: `Gap Agent ${gapRuntime.mode} comparison`,
+          agentName: 'Gap Agent',
+          summary: gapRuntime.mode === 'deterministic'
+            ? 'No ADK call was made; deterministic selection remained active.'
+            : gapRuntime.fallbackUsed
+              ? 'The ADK result was unavailable or invalid; deterministic fallback remained active.'
+              : `${gapRuntime.mode === 'shadow' ? 'Compared' : 'Applied'} the validated ADK selection; deterministic agreement=${gapRuntime.comparison.agreement}.`,
+          execution: gapRuntime.metadata ? 'used' as const : 'deterministic' as const,
+          contextCount: result.contextPack.includedContextIds.length,
+        },
         {
           name: 'Apply graph updates',
           summary: body.applyGraphUpdates

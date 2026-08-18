@@ -707,6 +707,40 @@ export default function Home() {
     });
   }, [projects]);
 
+  const reopenAnsweredQuestion = useCallback(async (question: TodayQuestion) => {
+    const owner = projects.find((candidate) => candidate.nodes.some((node) => question.sourceNodeIds.includes(node.id)))
+      ?? (generalContext.nodes.some((node) => question.sourceNodeIds.includes(node.id)) ? generalContext : undefined);
+    const graphQuestion = owner?.nodes.find((node) => question.sourceNodeIds.includes(node.id))?.text ?? question.question;
+    const requestedProjectId = owner?.id
+      ?? (question.projectId && question.projectId !== '__everything__' ? question.projectId : GENERAL_CONTEXT_ID);
+    try {
+      const response = await authFetch('/api/questions/answer', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reopen',
+          userId,
+          projectId: requestedProjectId,
+          historyTimestamp: question.historyTimestamp,
+          question: graphQuestion,
+          previousAnswer: question.initialAnswer ?? '',
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? 'The response could not be cancelled.');
+      const updated = body.context as Project;
+      if (body.ownerType === 'global' || updated.id === GENERAL_CONTEXT_ID) {
+        setGeneralContext(updated);
+        await persistGeneralContextToAPI(userId, updated);
+      } else {
+        updateProject(updated);
+      }
+      setStorageMessage('');
+    } catch (error) {
+      setStorageMessage(error instanceof Error ? error.message : 'The response could not be cancelled.');
+    }
+  }, [generalContext, projects, updateProject, userId]);
+
   const openChatWithPrompt = useCallback((prompt: string) => {
     setAnswerTarget(null);
     setAskInitialPrompt('');
@@ -947,6 +981,7 @@ export default function Home() {
               }
               else setActiveTab('ask');
             }}
+            onReopenQuestion={reopenAnsweredQuestion}
             onReviewDecision={openDecisionWorkspace}
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });

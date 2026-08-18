@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
+import { answerQuestion, editAnsweredQuestion, reopenAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { saveFeedback } from '@/lib/tools/feedbackTools';
@@ -26,6 +26,15 @@ const editRequestSchema = z.object({
   question: z.string().trim().min(1).max(5000),
   previousAnswer: z.string().trim().min(1).max(5000),
   answer: z.string().trim().min(1).max(5000),
+});
+
+const reopenRequestSchema = z.object({
+  action: z.literal('reopen'),
+  userId: z.string().trim().min(1).optional(),
+  projectId: z.string().trim().min(1).optional(),
+  historyTimestamp: z.string().datetime(),
+  question: z.string().trim().min(1).max(5000),
+  previousAnswer: z.string().trim().min(1).max(5000),
 });
 
 function errorResponse(error: unknown) {
@@ -68,7 +77,17 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const body = editRequestSchema.parse(await request.json());
+    const rawBody = await request.json();
+    if (rawBody && typeof rawBody === 'object' && rawBody.action === 'reopen') {
+      const body = reopenRequestSchema.parse(rawBody);
+      const userId = await requireAuthenticatedUserId(request, body.userId);
+      const result = await reopenAnsweredQuestion({ ...body, userId });
+      return NextResponse.json({
+        ...result,
+        message: 'Response cancelled. The question is open again.',
+      });
+    }
+    const body = editRequestSchema.parse(rawBody);
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await editAnsweredQuestion({ ...body, userId });
     return NextResponse.json({

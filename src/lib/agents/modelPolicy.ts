@@ -25,6 +25,11 @@ export interface GapEscalationPolicy {
   complexPathThreshold: number;
 }
 
+export interface GapEvaluationProfile extends AgentModelConfig {
+  id: 'cheap' | 'balanced' | 'strong';
+  label: string;
+}
+
 const cheapDefaults: Record<AgentRole, Omit<AgentModelConfig, 'role'>> = {
   context: { model: 'gemini-3.5-flash-lite', thinkingLevel: 'minimal', maxOutputTokens: 1024 },
   gap: { model: 'gemini-3.5-flash-lite', thinkingLevel: 'low', maxOutputTokens: 2048 },
@@ -121,6 +126,34 @@ export function getGapEscalationModelConfig(): AgentModelConfig {
     thinkingLevel: configuredThinkingLevel('AGENT_GAP_ESCALATION', 'high'),
     maxOutputTokens: configuredMaxOutputTokens('AGENT_GAP_ESCALATION', flagship.maxOutputTokens),
   };
+}
+
+/** Bounded comparison profiles; model identifiers remain environment-driven. */
+export function getGapEvaluationProfiles(): GapEvaluationProfile[] {
+  const cheap = getAgentModelConfig('gap');
+  const stronger = getGapEscalationModelConfig();
+  const profile = (
+    id: GapEvaluationProfile['id'],
+    label: string,
+    fallback: AgentModelConfig,
+    thinkingLevel: AgentThinkingLevel,
+    maxOutputTokens: number,
+  ): GapEvaluationProfile => {
+    const prefix = `AGENT_GAP_EVAL_${id.toUpperCase()}`;
+    return {
+      id,
+      label,
+      role: 'gap',
+      model: envValue(`${prefix}_MODEL`) ?? fallback.model,
+      thinkingLevel: configuredThinkingLevel(prefix, thinkingLevel),
+      maxOutputTokens: configuredMaxOutputTokens(prefix, maxOutputTokens),
+    };
+  };
+  return [
+    profile('cheap', 'Cheap Gap configuration', cheap, cheap.thinkingLevel, cheap.maxOutputTokens),
+    profile('balanced', 'Balanced Gap configuration', stronger, 'medium', Math.min(stronger.maxOutputTokens, 3072)),
+    profile('strong', 'Strong Gap configuration', stronger, 'high', stronger.maxOutputTokens),
+  ];
 }
 
 export const AGENT_MODEL_POLICY_DEFAULTS = Object.freeze({ cheap: cheapDefaults, flagship: flagshipDefaults });

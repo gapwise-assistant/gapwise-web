@@ -5,6 +5,7 @@ import { resolveGap } from '@/lib/tools/graphTools';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { Project } from '@/types/clarity';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
+import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -17,6 +18,13 @@ export interface AnswerQuestionResult {
 export interface EditAnsweredQuestionResult {
   ownerType: 'project';
   projectId: string;
+  context: Project;
+  historyTimestamp: string;
+}
+
+export interface ReopenAnsweredQuestionResult {
+  ownerType: 'project' | 'global';
+  projectId?: string;
   context: Project;
   historyTimestamp: string;
 }
@@ -57,27 +65,41 @@ export async function answerQuestion(params: {
   const owner = candidates.find((project) => assertAnswerable(project, params.nodeId));
 
   if (owner) {
-    const { context, createdNodeId } = resolveInContext(owner, params.nodeId, params.answer);
+    const resolved = resolveInContext(owner, params.nodeId, params.answer);
+    const refreshed = await refreshProjectGapRuntime({
+      userId: params.userId,
+      project: resolved.context,
+      route: '/api/questions/answer',
+      label: 'Gap Agent after question answer',
+    });
+    const context = refreshed.project;
     await saveProject(params.userId, context);
     return {
       ownerType: 'project',
       projectId: owner.id,
       context,
       resolvedNodeId: params.nodeId,
-      createdNodeId,
+      createdNodeId: resolved.createdNodeId,
     };
   }
 
   if (!params.projectId) {
     const generalContext = await loadGeneralContext(params.userId);
     if (assertAnswerable(generalContext, params.nodeId)) {
-      const { context, createdNodeId } = resolveInContext(generalContext, params.nodeId, params.answer);
+      const resolved = resolveInContext(generalContext, params.nodeId, params.answer);
+      const refreshed = await refreshProjectGapRuntime({
+        userId: params.userId,
+        project: resolved.context,
+        route: '/api/questions/answer',
+        label: 'Gap Agent after general-context answer',
+      });
+      const context = refreshed.project;
       await saveGeneralContext(params.userId, context);
       return {
         ownerType: 'global',
         context,
         resolvedNodeId: params.nodeId,
-        createdNodeId,
+        createdNodeId: resolved.createdNodeId,
       };
     }
   }
@@ -123,7 +145,7 @@ export async function editAnsweredQuestion(params: {
   const historyItem = updated.history.find(
     (item) =>
       item.timestamp === params.historyTimestamp &&
-      item.question === params.question &&
+      (item.question === params.question || params.question.includes(item.question) || item.question.includes(params.question)) &&
       item.answer === params.previousAnswer
   );
   if (!historyItem) {
@@ -162,11 +184,115 @@ export async function editAnsweredQuestion(params: {
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
   updated.updated_at = now;
 
-  await saveProject(params.userId, updated);
+  const refreshed = await refreshProjectGapRuntime({
+    userId: params.userId,
+    project: updated,
+    route: '/api/questions/answer',
+    label: 'Gap Agent after edited answer',
+  });
+  await saveProject(params.userId, refreshed.project);
   return {
     ownerType: 'project',
     projectId: owner.id,
-    context: updated,
+    context: refreshed.project,
     historyTimestamp: historyItem.timestamp,
   };
+}
+
+function reopenInContext(project: Project, params: {
+  historyTimestamp: string;
+  question: string;
+  previousAnswer: string;
+}): { context: Project; historyTimestamp: string } {
+  const updated = JSON.parse(JSON.stringify(project)) as Project;
+  const historyItem = updated.history.find(
+    (item) =>
+      item.timestamp === params.historyTimestamp &&
+      item.question === params.question &&
+      item.answer === params.previousAnswer
+  );
+  if (!historyItem) {
+    throw new StorageError('This answered question was not found in the requested context.', 'VALIDATION_ERROR');
+  }
+
+  const gap = updated.nodes.find(
+    (node) =>
+      node.text === historyItem.question &&
+      (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') &&
+      node.status === 'RESOLVED'
+  );
+  if (!gap) {
+    throw new StorageError('The resolved question is no longer available to reopen.', 'VALIDATION_ERROR');
+  }
+
+  const now = new Date().toISOString();
+  const answerNodeIds = new Set(
+    updated.edges
+      .filter((edge) => edge.type === 'resolves' && edge.target === gap.id)
+      .map((edge) => edge.source)
+      .filter((nodeId) => updated.nodes.find((node) => node.id === nodeId)?.created_by === 'user')
+  );
+
+  gap.status = 'OPEN';
+  // A reopened question is uncertain again; keep the prior signal bounded so
+  // reopening cannot accidentally make it look more certain than before.
+  gap.confidence = Math.min(gap.confidence, 0.25);
+  gap.updated_at = now;
+
+  // Preserve the user's answer node as a deprecated audit record, while
+  // removing its active resolution links from the decision graph.
+  updated.nodes.forEach((node) => {
+    if (answerNodeIds.has(node.id)) {
+      node.status = 'DEPRECATED';
+      node.updated_at = now;
+    }
+  });
+  updated.edges = updated.edges.filter(
+    (edge) => !answerNodeIds.has(edge.source) || (edge.type !== 'resolves' && edge.type !== 'supersedes')
+  );
+  historyItem.graph_diff_summary = `Response cancelled; reopened "${historyItem.question}".`;
+  updated.clarity_score = calculateClarityScore(updated);
+  updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
+  updated.updated_at = now;
+  return { context: updated, historyTimestamp: historyItem.timestamp };
+}
+
+export async function reopenAnsweredQuestion(params: {
+  userId: string;
+  projectId?: string;
+  historyTimestamp: string;
+  question: string;
+  previousAnswer: string;
+}): Promise<ReopenAnsweredQuestionResult> {
+  const projects = await listProjects(params.userId);
+  const owner = params.projectId && params.projectId !== '__general_context__'
+    ? projects.find((project) => project.id === params.projectId)
+    : undefined;
+
+  if (owner) {
+    const reopened = reopenInContext(owner, params);
+    const refreshed = await refreshProjectGapRuntime({
+      userId: params.userId,
+      project: reopened.context,
+      route: '/api/questions/answer',
+      label: 'Gap Agent after reopening an answer',
+    });
+    await saveProject(params.userId, refreshed.project);
+    return { ownerType: 'project', projectId: owner.id, context: refreshed.project, historyTimestamp: reopened.historyTimestamp };
+  }
+
+  if (!params.projectId || params.projectId === '__general_context__') {
+    const generalContext = await loadGeneralContext(params.userId);
+    const reopened = reopenInContext(generalContext, params);
+    const refreshed = await refreshProjectGapRuntime({
+      userId: params.userId,
+      project: reopened.context,
+      route: '/api/questions/answer',
+      label: 'Gap Agent after reopening a general-context answer',
+    });
+    await saveGeneralContext(params.userId, refreshed.project);
+    return { ownerType: 'global', context: refreshed.project, historyTimestamp: reopened.historyTimestamp };
+  }
+
+  throw new StorageError('This answered question was not found for the requested user and project.', 'VALIDATION_ERROR');
 }

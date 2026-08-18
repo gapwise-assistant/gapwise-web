@@ -116,6 +116,19 @@ with `AGENT_<ROLE>_MODEL`, `AGENT_<ROLE>_THINKING`, and
 `AGENT_<ROLE>_MAX_OUTPUT_TOKENS`. Set `AGENT_MODEL_PROFILE=flagship` only for a
 deliberate higher-cost run; it is never selected automatically.
 
+### Structured Gap Agent endpoint
+
+`POST /internal/gap-assess` runs the project-scoped Gap Agent used by the web
+runtime's shadow/live rollout. The request includes the existing scoped Context
+Pack plus a deterministic candidate scaffold. ADK selects the smallest
+decision-changing candidate; the service merges that selection into the
+prevalidated graph/evidence fields and returns strict `GapAssessmentV1`.
+
+The service rejects demo-mode calls, pre-3.5 model IDs, disabled evaluation
+overrides, invalid candidate IDs, invalid final contracts, and timeouts. It logs
+only sanitized run metadata. Set `GAP_AGENT_EVAL_OVERRIDES_ENABLED=true` only
+for the bounded local evaluation matrix; leave it false for normal traffic.
+
 Python does not recreate or duplicate Context Pack retrieval logic.
 The ADK dev UI may pass placeholder user IDs such as `default`; the tool maps
 those to `GAPSWISE_DEFAULT_USER_ID` so local testing reads the same Gapswise

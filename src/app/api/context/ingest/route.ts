@@ -14,6 +14,7 @@ import { Project, UserMemoryProfile } from '@/types/clarity';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 
 export const runtime = 'nodejs';
 
@@ -211,6 +212,16 @@ export async function POST(request: Request) {
   const result = await processContextSource(target.project, input, parseProfile(source.profile), {
     forceReprocess,
   });
+  if (!result.skipped && !result.error) {
+    const refreshed = await refreshProjectGapRuntime({
+      userId: source.userId,
+      project: result.project,
+      profile: parseProfile(source.profile),
+      route: '/api/context/ingest',
+      label: 'Gap Agent after context ingestion',
+    });
+    result.project = refreshed.project;
+  }
   if (!result.skipped) await saveTarget(source.userId, result.project, target.isGeneral);
 
   if (result.error) {

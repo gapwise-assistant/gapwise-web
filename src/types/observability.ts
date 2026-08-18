@@ -16,7 +16,7 @@ export interface TraceAgentRun {
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
-  estimatedCost: number;
+  estimatedCost: number | null;
   /** Explains whether cost came from provider usage, configured rates, or is unavailable. */
   costSource?: 'provider_usage' | 'configured_rates' | 'unavailable' | 'zero_cost_simulation' | 'zero_cost_deterministic';
   validationStatus: TraceValidationStatus;
@@ -47,6 +47,18 @@ export interface TraceGapAnalysis {
   escalationModel?: string;
   escalationThinkingLevel?: string;
   escalationMaxOutputTokens?: number;
+}
+
+export interface TraceGapComparison {
+  mode: 'deterministic' | 'shadow' | 'live';
+  deterministicGapId: string | null;
+  agentGapId: string | null;
+  effectiveGapId: string | null;
+  agreement: boolean | null;
+  fallbackUsed: boolean;
+  runId?: string;
+  validationStatus: TraceValidationStatus;
+  failureReason?: 'transport' | 'timeout' | 'contract' | 'graph_reference' | 'unavailable';
 }
 
 export interface TraceHandoff {
@@ -94,6 +106,7 @@ export interface TraceEvent {
   agentConfigs?: TraceAgentConfig[];
   agentRuns?: TraceAgentRun[];
   gapAnalysis?: TraceGapAnalysis;
+  gapComparison?: TraceGapComparison;
   handoffs?: TraceHandoff[];
   contextSummary?: TraceContextSummary;
   pipelineSteps?: TracePipelineStep[];

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
-import { answerQuestion, editAnsweredQuestion } from '@/lib/questions/answerQuestion';
+import { answerQuestion, editAnsweredQuestion, reopenAnsweredQuestion } from '@/lib/questions/answerQuestion';
 import { resolveGap } from '@/lib/tools/graphTools';
 
 vi.mock('@/lib/storage', () => ({
@@ -155,5 +155,38 @@ describe('answerQuestion', () => {
     const linked = result.context.nodes.find((node) => node.id === answered.edges.find((edge) => edge.type === 'resolves' && edge.target === budget.id)?.source);
     expect(linked).toMatchObject({ type: 'PREFERENCE', text: 'I prefer to keep housing costs comfortable and predictable.' });
     expect(result.context.nodes.filter((node) => node.text.includes('housing costs comfortable')).length).toBe(1);
+  });
+
+  it('cancels a response and reopens the original question', async () => {
+    const owner = createGoldenDemoProject();
+    const answered = resolveGap(
+      owner,
+      'unknown_target_user',
+      'The primary user is an independent hackathon builder.'
+    );
+    const historyItem = answered.history.at(-1)!;
+    vi.mocked(listProjects).mockResolvedValue([answered]);
+
+    const result = await reopenAnsweredQuestion({
+      userId: 'demo-user',
+      projectId: answered.id,
+      historyTimestamp: historyItem.timestamp,
+      question: historyItem.question,
+      previousAnswer: historyItem.answer,
+    });
+
+    expect(result.context.nodes.find((node) => node.id === 'unknown_target_user')).toMatchObject({
+      status: 'OPEN',
+      confidence: 0.25,
+    });
+    const answerNode = result.context.nodes.find((node) => node.text.includes('independent hackathon builder'));
+    expect(answerNode).toMatchObject({ created_by: 'user', status: 'DEPRECATED' });
+    expect(result.context.edges).not.toContainEqual(expect.objectContaining({
+      source: answerNode?.id,
+      target: 'unknown_target_user',
+      type: 'resolves',
+    }));
+    expect(result.context.history.at(-1)?.graph_diff_summary).toContain('Response cancelled');
+    expect(saveProject).toHaveBeenCalledWith('demo-user', result.context);
   });
 });

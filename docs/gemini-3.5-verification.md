@@ -34,8 +34,9 @@ remain blocked.
 1. Deploy with the explicit Cloud Build substitution (or use the checked-in
    default), then open the developer trace panel and run a live Ask or context
    ingestion action. The sanitized trace shows only `Model:
-   gemini-3.5-flash-lite`; it never includes prompts, tokens, or Context Pack
-   contents.
+   gemini-3.5-flash-lite` plus bounded run metrics such as token counts and
+   latency; it never includes prompts, credentials, model output, or Context
+   Pack contents.
 2. For PDF/context ingestion, open the source's **Processing and storage** panel.
    Its `Analysis` value is the provider-reported model version (or the requested
    model when Vertex omits a version), alongside the existing hash and status.
