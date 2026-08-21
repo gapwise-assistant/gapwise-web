@@ -1,4 +1,5 @@
 import { ClarityNode, ContextSource, Project } from '@/types/clarity';
+import { canonicalizeQuestionGraph } from '@/lib/questions/canonical';
 
 export function isDiscardedSource(source: Pick<ContextSource, 'discarded_at'>): boolean {
   return Boolean(source.discarded_at);
@@ -25,10 +26,10 @@ export function activeReasoningNodes(project: Project): ClarityNode[] {
 export function projectForReasoning(project: Project): Project {
   const nodes = activeReasoningNodes(project);
   const nodeIds = new Set(nodes.map((node) => node.id));
-  return {
+  return canonicalizeQuestionGraph({
     ...project,
     sources: activeContextSources(project),
     nodes,
     edges: project.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)),
-  };
+  });
 }

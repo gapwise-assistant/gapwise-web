@@ -1,7 +1,7 @@
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
-import { activeContextSources } from '@/lib/context/sourceState';
+import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
 
 export interface DecisionEvidence {
   id: string;
@@ -198,12 +198,13 @@ function buildRecommendation(options: DecisionOption[], hasBlockingQuestions: bo
 }
 
 export function buildDecisionWorkspace(project: Project, targetNodeId: string): DecisionWorkspaceModel | null {
-  const decision = findDecisionForNode(project, targetNodeId);
+  const reasoningProject = projectForReasoning(project);
+  const decision = findDecisionForNode(reasoningProject, targetNodeId);
   if (!decision) return null;
 
-  const relatedIds = relatedNodeIds(project, decision.id);
-  const relatedNodes = project.nodes.filter((node) => relatedIds.has(node.id));
-  const decisionEdges = connectedEdges(project, decision.id);
+  const relatedIds = relatedNodeIds(reasoningProject, decision.id);
+  const relatedNodes = reasoningProject.nodes.filter((node) => relatedIds.has(node.id));
+  const decisionEdges = connectedEdges(reasoningProject, decision.id);
   const remainingQuestions = relatedNodes
     .filter((node) => node.status === 'OPEN' && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'))
     .filter((node) => decisionEdges.some((edge) => edge.type === 'blocks' || edge.type === 'depends_on' ? edge.source === node.id || edge.target === node.id : false))
@@ -216,8 +217,8 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
   const constraints = relatedNodes.filter((node) => node.type === 'CONSTRAINT' || node.type === 'PREFERENCE');
   const assumptionsRisks = relatedNodes.filter((node) => node.type === 'ASSUMPTION' || node.type === 'RISK');
   const supportingNodes = relatedNodes.filter((node) => node.type === 'KNOWN' || node.type === 'EVIDENCE');
-  const supportingEvidence = supportingNodes.map((node) => nodeEvidence(project, node, relationshipForNode(project, decision.id, node.id)));
-  const options = buildOptions(project, decision, relatedNodes);
+  const supportingEvidence = supportingNodes.map((node) => nodeEvidence(reasoningProject, node, relationshipForNode(reasoningProject, decision.id, node.id)));
+  const options = buildOptions(reasoningProject, decision, relatedNodes);
   const relevantSourceIds = unique([
     ...decision.source_refs,
     ...supportingEvidence.flatMap((evidence) => evidence.sourceIds),
@@ -226,7 +227,7 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
     ...assumptionsRisks.flatMap((node) => node.source_refs),
     ...remainingQuestions.flatMap((question) => question.node.source_refs),
   ]);
-  const sources = activeContextSources(project).filter((source) => relevantSourceIds.includes(source.id));
+  const sources = activeContextSources(reasoningProject).filter((source) => relevantSourceIds.includes(source.id));
   const recommendation = buildRecommendation(options, remainingQuestions.length > 0);
   const currentPicture = recommendation
     ? [`Gapwise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]

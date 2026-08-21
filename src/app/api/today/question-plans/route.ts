@@ -23,7 +23,7 @@ const requestSchema = z.object({
     reason: z.string().trim().max(500),
     provenance: z.string().trim().max(500),
     presentationContext: z.array(z.string().trim().min(1).max(300)).max(6).optional(),
-  })).min(1).max(3),
+  })).min(1).max(4),
 });
 
 export async function POST(request: Request) {

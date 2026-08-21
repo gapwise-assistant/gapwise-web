@@ -7,7 +7,7 @@ from app.gap_contract import (
     GapSelectionDraftV1,
     validate_assessment_graph,
 )
-from app.gap_runtime import _apply_selection, create_gap_agent
+from app.gap_runtime import _apply_guidance, _apply_selection, create_gap_agent
 from app.model_policy import AgentModelConfig
 
 
@@ -93,6 +93,16 @@ def valid_request() -> GapAssessmentRequest:
     )
 
 
+def valid_recommendation() -> dict:
+    return {
+        "focus": "Decide whether this role remains acceptable.",
+        "whyNow": "This answer controls whether the interview should continue.",
+        "nextStep": "State the minimum role conditions you would accept.",
+        "whatCouldChange": "The answer could stop or continue the interview process.",
+        "supportingIds": ["unknown_fit", "decision_continue", "source_job"],
+    }
+
+
 def test_gap_contract_and_graph_references_validate() -> None:
     assessment = GapAssessmentV1.model_validate(valid_assessment())
     validate_assessment_graph(assessment, valid_request().project)
@@ -133,6 +143,7 @@ def test_selection_merges_into_prevalidated_candidate_scaffold() -> None:
             "selectionRationale": "This boundary can flip the live decision.",
             "escalationEligible": False,
             "escalationReasons": [],
+            "recommendation": valid_recommendation(),
         }
     )
 
@@ -140,6 +151,14 @@ def test_selection_merges_into_prevalidated_candidate_scaffold() -> None:
 
     assert assessment.selectedGapId == "gap:unknown_fit"
     assert assessment.candidates[0].evidenceReview.evidenceIds == ["source_job"]
+    guidance = _apply_guidance(draft, assessment)
+    assert guidance is not None
+    assert guidance.generatedBy == "gap-agent"
+    assert guidance.supportingIds == [
+        "unknown_fit",
+        "decision_continue",
+        "source_job",
+    ]
 
 
 def test_selection_rejects_suppressed_or_unknown_identifier() -> None:
@@ -150,7 +169,41 @@ def test_selection_rejects_suppressed_or_unknown_identifier() -> None:
             "selectionRationale": "Invalid identifier.",
             "escalationEligible": False,
             "escalationReasons": [],
+            "recommendation": valid_recommendation(),
         }
     )
     with pytest.raises(ValueError, match="missing or suppressed"):
         _apply_selection(draft, valid_request())
+
+
+def test_guidance_rejects_unrelated_context_identifier() -> None:
+    value = valid_recommendation()
+    value["supportingIds"] = ["unknown_fit", "unrelated_private_source"]
+    draft = GapSelectionDraftV1.model_validate(
+        {
+            "schemaVersion": "1",
+            "selectedGapId": "gap:unknown_fit",
+            "selectionRationale": "This boundary can flip the live decision.",
+            "escalationEligible": False,
+            "escalationReasons": [],
+            "recommendation": value,
+        }
+    )
+    assessment = _apply_selection(draft, valid_request())
+
+    with pytest.raises(ValueError, match="unrelated context"):
+        _apply_guidance(draft, assessment)
+
+
+def test_null_selection_requires_null_guidance() -> None:
+    with pytest.raises(ValidationError, match="completed decision"):
+        GapSelectionDraftV1.model_validate(
+            {
+                "schemaVersion": "1",
+                "selectedGapId": None,
+                "selectionRationale": "No actionable gap remains.",
+                "escalationEligible": False,
+                "escalationReasons": [],
+                "recommendation": valid_recommendation(),
+            }
+        )

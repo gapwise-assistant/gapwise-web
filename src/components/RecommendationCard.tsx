@@ -211,7 +211,7 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
       ) : (
         <>
           {header}
-          <p className="text-sm leading-relaxed text-slate-300">{description}</p>
+          {description && <p className="text-sm leading-relaxed text-slate-300">{description}</p>}
         </>
       )}
       {actions}

@@ -106,7 +106,9 @@ function excerptAroundMatch(content: string, query: string, maxLength = 220): st
 }
 
 function sourceSearchText(source: SourceLike): string {
-  return `${source.filename} ${source.content} ${source.extraction_summary ?? ''}`.trim();
+  // Put the compact extraction first so the selected excerpt starts with the
+  // source's conclusion instead of the beginning of a long document.
+  return `${source.filename} ${source.extraction_summary ?? ''} ${source.content}`.trim();
 }
 
 function broadSourceExcerpt(source: SourceLike, maxLength = 320): string {
@@ -117,7 +119,12 @@ export function rankSources(
   query: string,
   sources: SourceLike[],
   limit: number,
-  options: { includeUnmatched?: boolean } = {}
+  options: {
+    includeUnmatched?: boolean;
+    preferredSourceIds?: ReadonlySet<string>;
+    recencyWeight?: number;
+    minimumSemanticScore?: number;
+  } = {}
 ): EvidenceExcerpt[] {
   const temporalIntent = detectTemporalSourceIntent(query);
   const candidateSources = temporalIntent ? sources.filter((source) => isSourceKind(source, temporalIntent.kind)) : sources;
@@ -129,27 +136,39 @@ export function rankSources(
       ? candidateSources.filter((source) => sourceTimestamp(source) === maxTimestamp)
       : candidateSources;
 
+  const timestamps = Array.from(new Set(selectedSources.map(sourceTimestamp))).sort((a, b) => a - b);
+  const newestIndex = Math.max(1, timestamps.length - 1);
+  const recencyWeight = options.recencyWeight ?? 0;
   const ranked = selectedSources
     .map((source) => ({
       source,
       score: relevanceScore(query, sourceSearchText(source)),
     }))
-    .filter((item) => temporalIntent || options.includeUnmatched || item.score > 0)
-    .sort((a, b) =>
-      temporalIntent
-        ? sourceTimestamp(b.source) - sourceTimestamp(a.source) || b.score - a.score
-        : b.score - a.score || (options.includeUnmatched
-          ? sourceTimestamp(b.source) - sourceTimestamp(a.source)
-          : 0)
-    )
+    .filter((item) => temporalIntent
+      || options.includeUnmatched
+      || item.score >= (options.minimumSemanticScore ?? Number.EPSILON))
+    .map((item) => {
+      const timestampIndex = Math.max(0, timestamps.indexOf(sourceTimestamp(item.source)));
+      const recency = timestampIndex / newestIndex;
+      const relevanceScale = Math.min(1, item.score / 0.2);
+      const preferredBoost = options.preferredSourceIds?.has(item.source.id) ? 0.3 : 0;
+      const recencyBoost = temporalIntent ? 0 : recencyWeight * recency * relevanceScale;
+      return {
+        ...item,
+        rankingScore: Math.min(1, item.score + preferredBoost + recencyBoost),
+      };
+    })
+    .sort((a, b) => temporalIntent
+      ? sourceTimestamp(b.source) - sourceTimestamp(a.source) || b.score - a.score
+      : b.rankingScore - a.rankingScore || sourceTimestamp(b.source) - sourceTimestamp(a.source))
     .slice(0, limit)
-    .map(({ source, score }) => ({
+    .map(({ source, rankingScore }) => ({
       source_id: source.id,
       filename: source.filename,
       excerpt: options.includeUnmatched
         ? broadSourceExcerpt(source)
         : excerptAroundMatch(sourceSearchText(source), query),
-      score,
+      score: Number(rankingScore.toFixed(3)),
       derived_node_ids: source.derived_node_ids,
     }));
 

@@ -25,6 +25,7 @@ export function createLiveCareerGapStrategy(profile: GapEvaluationProfile): Care
       const urgency = deriveCareerGapAttention(input, result.assessment);
       return {
         gapAssessment: result.assessment,
+        guidance: result.recommendation,
         attention: { urgency },
         partner: {
           action: deriveCareerGapPartnerAction(result.assessment, urgency),

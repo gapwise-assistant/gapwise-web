@@ -7,6 +7,7 @@ import { DurableMemory } from '@/types/contextPack';
 import { processUserAnswer } from '@/lib/gemini';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { EvidenceDrawer } from '@/components/EvidenceDrawer';
+import { projectForReasoning } from '@/lib/context/sourceState';
 
 interface ProjectHomeProps {
   project: Project;
@@ -34,6 +35,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
   const [isEvidenceOpen, setIsEvidenceOpen] = useState(false);
 
   const activeQuestion = project.active_question;
+  const reasoningProject = projectForReasoning(project);
   const activeContextPack = activeQuestion
     ? buildContextPack({
         userId,
@@ -44,15 +46,15 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
       })
     : null;
 
-  const criticalGapsCount = project.nodes.filter(
+  const criticalGapsCount = reasoningProject.nodes.filter(
     (n) => n.type === 'UNKNOWN' && n.status === 'OPEN'
   ).length;
 
-  const weakAssumptionsCount = project.nodes.filter(
+  const weakAssumptionsCount = reasoningProject.nodes.filter(
     (n) => n.type === 'ASSUMPTION' && n.confidence < 0.7 && n.status === 'OPEN'
   ).length;
 
-  const decisionsCount = project.nodes.filter(
+  const decisionsCount = reasoningProject.nodes.filter(
     (n) => n.type === 'DECISION'
   ).length;
 

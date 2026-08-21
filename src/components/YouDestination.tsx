@@ -15,9 +15,9 @@ import type { AnsweredQuestion } from '@/lib/questions/history';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
-import { DecisionAnchorCard } from '@/components/DecisionAnchorCard';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
+import { projectForReasoning } from '@/lib/context/sourceState';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -33,7 +33,6 @@ interface ScopeDestinationProps {
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
   onUpdateProject: (updated: Project) => void;
-  onAnchorDecision?: (projectId: string, title: string, questionNodeIds: string[]) => Promise<Project>;
   onUpdateGeneralContext: (updated: Project) => void;
   onAnswerQuestion: (node: ClarityNode, intent?: 'confirm' | 'correct') => void;
   onReviewDecision: (nodeId: string) => void;
@@ -78,7 +77,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onSelectEverything,
   onOpenNewProject,
   onUpdateProject,
-  onAnchorDecision,
   onUpdateGeneralContext,
   onAnswerQuestion,
   onReviewDecision,
@@ -93,16 +91,17 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   const [showArchived, setShowArchived] = useState(false);
   const priorities = useMemo(() => currentPriorities(memories), [memories]);
   const unclear = useMemo(() => userLevelUnresolvedQuestions(projects), [projects]);
+  const reasoningProject = useMemo(() => projectForReasoning(project), [project]);
   const projectQuestions = useMemo(
     () =>
-      project.nodes
+      reasoningProject.nodes
         .filter(
           (node) =>
             node.status === 'OPEN' &&
             (node.type === 'UNKNOWN' || (node.type === 'ASSUMPTION' && (node.priority ?? node.impact) >= 0.5))
         )
         .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact)),
-    [project.nodes]
+    [reasoningProject.nodes]
   );
   const answeredQuestions = useMemo(() => answeredQuestionHistory(project), [project]);
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);
@@ -186,11 +185,11 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   };
 
   const questionEffectText = (node: ClarityNode) => {
-    const connected = project.edges
+    const connected = reasoningProject.edges
       .filter((edge) => edge.source === node.id || edge.target === node.id)
       .map((edge) => {
         const outgoing = edge.source === node.id;
-        const other = project.nodes.find((candidate) => candidate.id === (outgoing ? edge.target : edge.source));
+        const other = reasoningProject.nodes.find((candidate) => candidate.id === (outgoing ? edge.target : edge.source));
         if (!other || !['GOAL', 'DECISION', 'NEXT_ACTION', 'CONSTRAINT'].includes(other.type)) return null;
         const relationship = edge.type === 'blocks'
           ? outgoing ? 'Blocks' : 'Blocked by'
@@ -205,7 +204,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       })
       .filter((value): value is string => Boolean(value));
     if (connected.length) return connected[0];
-    const reasons = relationshipReasons(project, node.id);
+    const reasons = relationshipReasons(reasoningProject, node.id);
     if (reasons.length) return reasons[0];
     if (node.type === 'ASSUMPTION') return 'Project direction and decision confidence';
     return 'Project direction';
@@ -403,8 +402,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           <p className="mt-4 text-sm text-slate-500">Gapwise has not built a picture of this project yet. Add context to get started.</p>
         )}
       </section>
-
-      <DecisionAnchorCard project={project} onUpdateProject={onUpdateProject} onAnchorDecision={onAnchorDecision} />
 
       {needsAttention && (
         <section className="rounded-xl border border-amber-800/80 bg-amber-950/20 p-5">

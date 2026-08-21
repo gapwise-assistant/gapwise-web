@@ -18,13 +18,16 @@ import {
   TodayQuestionPresentation,
   TodayQuestionSuggestion,
 } from '@/lib/today/questionPlans';
-import { buildTodayFeed, compactQuestionContext } from '@/lib/today/feed';
+import { buildTodayFeed, compactQuestionContext, compactQuestionReason } from '@/lib/today/feed';
 import { RecommendationCard, SnoozeOption } from '@/components/RecommendationCard';
 import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
 import { authFetch } from '@/lib/auth/client';
 import { calendarTimestampFromText, formatCalendarSchedule } from '@/lib/google/calendarFormatting';
 import { OpenQuestions, OpenQuestionRowItem } from '@/components/OpenQuestions';
+import { RecommendedFocus } from '@/components/RecommendedFocus';
+import { rankGaps } from '@/lib/tools/graphTools';
+import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
 interface TodayProps {
   userId: string;
@@ -55,20 +58,21 @@ function decisionForQuestion(project: Project, nodeId: string): string | undefin
 }
 
 function answeredQuestionItems(project: Project): OpenQuestionRowItem[] {
-  const resolvedQuestions = new Map(
-    project.nodes
-      .filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type) && node.status === 'RESOLVED')
-      .map((node) => [node.text, node])
-  );
+  const resolvedQuestions = canonicalQuestionGroups(project)
+    .filter((group) => group.canonical.status === 'RESOLVED');
   const seen = new Set<string>();
   return project.history
     .slice()
     .reverse()
     .flatMap((historyItem) => {
-      const node = resolvedQuestions.get(historyItem.question);
+      const group = resolvedQuestions.find((candidate) => semanticallyEquivalentQuestion(candidate.canonical.text, historyItem.question));
+      const node = group?.canonical;
       if (!node || seen.has(node.id)) return [];
       seen.add(node.id);
       const question = todayQuestionFromNode(project, node);
+      // Keep the exact historical wording for edit/reopen routing while the
+      // canonical node ID remains the identity used by the UI projection.
+      question.question = historyItem.question;
       question.mode = 'edit';
       question.initialAnswer = historyItem.answer;
       question.historyTimestamp = historyItem.timestamp;
@@ -89,8 +93,17 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   const decision = decisionId ? project.nodes.find((node) => node.id === decisionId) : undefined;
   if (!decision) return 'Resolve these before the next important project decision.';
   if (/interview/i.test(decision.text)) return 'Resolve these before continuing the interview process.';
-  const decisionText = decision.text.replace(/[.?!]+$/, '').replace(/^Decide whether\s+/i, 'deciding whether ');
-  return `Resolve these before ${decisionText.charAt(0).toLowerCase()}${decisionText.slice(1)}.`;
+  if (project.deadline) {
+    const deadline = new Date(`${project.deadline}T12:00:00`);
+    if (!Number.isNaN(deadline.getTime())) {
+      const readableDate = deadline.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+      const decisionKind = /go\s*\/\s*no[- ]go|launch|pilot/i.test(decision.text)
+        ? 'go/no-go decision'
+        : 'project decision';
+      return `Resolve these before the ${readableDate} ${decisionKind}.`;
+    }
+  }
+  return 'Resolve these before the next important project decision.';
 }
 
 export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onReopenQuestion, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
@@ -103,6 +116,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const [questionSuggestionWarning, setQuestionSuggestionWarning] = useState('');
   const [hiddenStatuses, setHiddenStatuses] = useState<Record<string, RecommendationStatus>>({});
   const [hiddenRecommendations, setHiddenRecommendations] = useState<Record<string, AttentionCandidate>>({});
+  const [hiddenQuestions, setHiddenQuestions] = useState<Record<string, TodayQuestion>>({});
   const [hiddenQuestionsExpanded, setHiddenQuestionsExpanded] = useState(false);
   const [hiddenRemindersExpanded, setHiddenRemindersExpanded] = useState(false);
   const [hiddenOtherExpanded, setHiddenOtherExpanded] = useState(false);
@@ -144,6 +158,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
 
   React.useEffect(() => {
     setHiddenRecommendations({});
+    setHiddenQuestions({});
     setHiddenQuestionsExpanded(false);
     setHiddenRemindersExpanded(false);
     setHiddenOtherExpanded(false);
@@ -156,30 +171,71 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       status: hiddenStatuses[recommendation.id] ?? recommendation.status,
     }));
   const recommendations = briefRecommendations
-    .filter((recommendation) => recommendation.status === 'active' && !hiddenRecommendations[recommendation.id])
+    .filter((recommendation) => recommendation.status === 'active' && recommendation.kind !== 'risk' && !hiddenRecommendations[recommendation.id])
     .slice(0, 5);
-  const questions = buildTodayQuestions({ project, brief });
+  const rankedGaps = useMemo(() => rankGaps(project), [project]);
+  const persistedGap = project.active_question;
+  const recalculatedPersistedGap = persistedGap
+    ? rankedGaps.find((gap) => gap.node_id === persistedGap.node_id)
+    : undefined;
+  const focusGap = persistedGap
+    ? { ...recalculatedPersistedGap, ...persistedGap, guidance: persistedGap.guidance ?? recalculatedPersistedGap?.guidance }
+    : rankedGaps[0];
+  const focusNode = focusGap ? project.nodes.find((node) => node.id === focusGap.node_id) : undefined;
+  const questions = buildTodayQuestions({
+    project,
+    brief,
+    excludedQuestionNodeIds: focusNode ? [focusNode.id] : [],
+  });
   const feedItems = useMemo(() => buildTodayFeed(recommendations, questions, project), [recommendations, questions, project]);
-  const feedQuestions = feedItems.flatMap((item) => item.question ? [item.question] : []);
-  const openQuestionItems = feedItems
-    .filter((item) => item.itemType === 'QUESTION' && item.question)
-    .map((item, index) => {
-      const presentation = questionPresentations[item.question!.id];
-      const suggestion = questionSuggestions[item.question!.id];
-      const question = presentation
-        ? { ...item.question!, presentationTitle: presentation.title, presentationSummary: presentation.summary }
-        : item.question!;
-      return {
-        id: item.recommendation.id,
-        question: suggestion && hasUsefulSuggestedAnswer(suggestion)
-          ? { ...question, answerSuggestion: suggestion }
-          : question,
-        context: compactQuestionContext(item, project),
-        decisionNodeId: item.decisionNodeId,
-        recommendation: item.recommendation,
-        priority: index === 0,
-      } satisfies OpenQuestionRowItem;
-    });
+  const hiddenCandidates = [
+    ...Object.values(hiddenRecommendations),
+    ...briefRecommendations.filter((recommendation) => recommendation.status !== 'active' && !hiddenRecommendations[recommendation.id]),
+  ];
+  const hiddenFeedItems = useMemo(
+    () => buildTodayFeed(hiddenCandidates, questions, project, 20),
+    [hiddenCandidates, questions, project]
+  );
+  const hiddenQuestionNodeIds = new Set(
+    hiddenFeedItems
+      .filter((item) => item.itemType === 'QUESTION' && item.question)
+      .flatMap((item) => item.question?.sourceNodeIds ?? [])
+  );
+  Object.values(hiddenQuestions).forEach((question) => question.sourceNodeIds.forEach((nodeId) => hiddenQuestionNodeIds.add(nodeId)));
+  const openQuestionsForToday = questions.filter((question) =>
+    question.sourceNodeIds.some((nodeId) => {
+      const node = project.nodes.find((candidate) => candidate.id === nodeId);
+      return node && ['UNKNOWN', 'ASSUMPTION'].includes(node.type) && node.status === 'OPEN';
+    }) && !question.sourceNodeIds.some((nodeId) => hiddenQuestionNodeIds.has(nodeId))
+  );
+  const openQuestionItems = openQuestionsForToday.map((sourceQuestion) => {
+    const directItem = feedItems.find((candidate) =>
+      candidate.itemType === 'QUESTION'
+      && candidate.question
+      && candidate.question.sourceNodeIds.some((nodeId) => sourceQuestion.sourceNodeIds.includes(nodeId))
+    );
+    const fallbackRecommendation = briefRecommendations.find((candidate) =>
+      candidate.status === 'active'
+      && candidate.source_node_ids.some((nodeId) => sourceQuestion.sourceNodeIds.includes(nodeId))
+    );
+    const item = directItem ?? (fallbackRecommendation
+      ? buildTodayFeed([fallbackRecommendation], questions, project, 1)[0]
+      : undefined);
+    const presentation = questionPresentations[sourceQuestion.id];
+    const suggestion = questionSuggestions[sourceQuestion.id];
+    const question = presentation
+      ? { ...sourceQuestion, presentationTitle: presentation.title, presentationSummary: presentation.summary }
+      : sourceQuestion;
+    return {
+      id: item?.recommendation.id ?? `question:${question.id}`,
+      question: suggestion && hasUsefulSuggestedAnswer(suggestion)
+        ? { ...question, answerSuggestion: suggestion }
+        : question,
+      context: item ? compactQuestionContext(item, project) : compactQuestionReason(question.reason),
+      decisionNodeId: item?.decisionNodeId ?? decisionForQuestion(project, question.sourceNodeIds[0]),
+      recommendation: item?.recommendation,
+    } satisfies OpenQuestionRowItem;
+  });
   const answeredItems = useMemo(() => answeredQuestionItems(project), [project]);
   const answeredItemsWithPresentation = useMemo(() => answeredItems.map((item) => {
     const presentation = localQuestionPresentation(item.question);
@@ -194,14 +250,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   }), [answeredItems]);
   const questionItems: OpenQuestionRowItem[] = openQuestionItems;
   const nonQuestionItems = feedItems.filter((item) => item.itemType !== 'QUESTION');
-  const hiddenCandidates = [
-    ...Object.values(hiddenRecommendations),
-    ...briefRecommendations.filter((recommendation) => recommendation.status !== 'active' && !hiddenRecommendations[recommendation.id]),
-  ];
-  const hiddenFeedItems = useMemo(
-    () => buildTodayFeed(hiddenCandidates, questions, project, 20),
-    [hiddenCandidates, questions, project]
-  );
   const hiddenQuestionItems = hiddenFeedItems.filter((item) => item.itemType === 'QUESTION');
   const hiddenReminderItems = hiddenFeedItems.filter((item) => item.itemType === 'REMINDER');
   const hiddenOtherItems = hiddenFeedItems.filter((item) => item.itemType !== 'QUESTION' && item.itemType !== 'REMINDER');
@@ -209,6 +257,22 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const reminderItems = nonQuestionItems.filter((item) => item.itemType === 'REMINDER');
   const otherNonQuestionItems = nonQuestionItems.filter((item) => item.itemType !== 'REMINDER');
   const openQuestionCount = questionItems.filter((item) => !item.answered).length;
+  const feedQuestions = questionItems.map(({ question, context }) => ({
+    ...question,
+    reason: question.reason || context,
+  }));
+  const focusQuestionItem = focusGap
+    ? questionItems.find((item) => item.question.sourceNodeIds.includes(focusGap.node_id))
+    : undefined;
+  const focusQuestion = focusQuestionItem?.question
+    ?? (focusNode ? todayQuestionFromNode(project, focusNode) : undefined);
+  const focusHidden = focusGap
+    ? hiddenQuestionItems.some((item) => item.question?.sourceNodeIds.includes(focusGap.node_id))
+      || Boolean(hiddenRecommendations[`rec_gap_${focusGap.node_id}`])
+    : false;
+  const showRecommendedFocus = Boolean(
+    focusGap?.guidance && focusNode?.status === 'OPEN' && !focusHidden,
+  );
   const promotedCommitmentIds = new Set(
     [...feedItems, ...hiddenFeedItems]
       .filter((item) => item.itemType === 'REMINDER' && item.calendarCommitmentId)
@@ -335,6 +399,22 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     setHiddenStatuses((current) => ({ ...current, [recommendation.id]: 'not_now' }));
   };
 
+  const handleHideQuestion = (question: TodayQuestion, recommendation?: AttentionCandidate) => {
+    if (recommendation) {
+      handleHide(recommendation);
+      return;
+    }
+    setHiddenQuestions((current) => ({ ...current, [question.id]: question }));
+  };
+
+  const handleRestoreQuestion = (question: TodayQuestion) => {
+    setHiddenQuestions((current) => {
+      const next = { ...current };
+      delete next[question.id];
+      return next;
+    });
+  };
+
   const handleRestore = (recommendation: AttentionCandidate) => {
     setHiddenRecommendations((current) => {
       const next = { ...current };
@@ -415,6 +495,59 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       )}
     </section>
   ) : null;
+
+  const renderHiddenQuestionSection = () => {
+    const entries = [
+      ...hiddenQuestionItems.map((item) => ({
+        key: item.recommendation.id,
+        title: item.title,
+        description: item.description,
+        question: item.question,
+        restore: () => handleRestore(item.recommendation),
+      })),
+      ...Object.values(hiddenQuestions).map((question) => ({
+        key: question.id,
+        title: question.presentationTitle || question.question,
+        description: question.presentationSummary || question.reason,
+        question,
+        restore: () => handleRestoreQuestion(question),
+      })),
+    ].filter((entry, index, all) => all.findIndex((candidate) => candidate.key === entry.key) === index);
+    if (!entries.length) return null;
+    return (
+      <section className="space-y-2" aria-labelledby="hidden-question-items-heading">
+        <button
+          type="button"
+          onClick={() => setHiddenQuestionsExpanded((current) => !current)}
+          aria-expanded={hiddenQuestionsExpanded}
+          className="inline-flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-300"
+        >
+          <span id="hidden-question-items-heading">Hidden questions · {entries.length}</span>
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${hiddenQuestionsExpanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+        </button>
+        {hiddenQuestionsExpanded && (
+          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/40">
+            {entries.map((entry) => (
+              <div key={entry.key} className="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-300">{entry.title}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{entry.description}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={entry.restore}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-300 hover:border-cyan-700 hover:bg-cyan-950/30 hover:text-cyan-100"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                  Restore
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  };
 
   const renderResolvedSection = () => answeredItemsWithPresentation.length > 0 ? (
     <section className="space-y-2" aria-labelledby="resolved-questions-heading">
@@ -517,16 +650,24 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
       )}
 
-      {(questionItems.length > 0 || answeredItemsWithPresentation.length > 0 || hiddenQuestionItems.length > 0) && (
+      {showRecommendedFocus && focusGap?.guidance && (
+        <RecommendedFocus
+          guidance={focusGap.guidance}
+          onResolve={focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
+          onViewDecisionMap={focusGap && onViewReasoningPath ? () => onViewReasoningPath(focusGap.node_id) : undefined}
+        />
+      )}
+
+      {(questionItems.length > 0 || answeredItemsWithPresentation.length > 0 || hiddenQuestionItems.length > 0 || Object.keys(hiddenQuestions).length > 0) && (
         <OpenQuestions
           items={questionItems}
           summary={questionSectionSummary(questionItems, project)}
           onAnswer={(question) => onAnswerQuestion?.(question)}
-          onHide={handleHide}
+          onHide={handleHideQuestion}
         />
       )}
 
-      {renderHiddenSection(hiddenQuestionItems, 'Hidden questions', 'hidden-questions-heading', hiddenQuestionsExpanded, () => setHiddenQuestionsExpanded((current) => !current))}
+      {renderHiddenQuestionSection()}
       {renderHiddenSection(hiddenReminderItems, 'Hidden reminders', 'hidden-reminders-heading', hiddenRemindersExpanded, () => setHiddenRemindersExpanded((current) => !current))}
       {renderHiddenSection(hiddenOtherItems, 'Hidden items', 'hidden-items-heading', hiddenOtherExpanded, () => setHiddenOtherExpanded((current) => !current))}
       {renderResolvedSection()}

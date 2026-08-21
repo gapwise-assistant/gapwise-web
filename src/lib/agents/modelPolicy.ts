@@ -82,13 +82,13 @@ function configuredNumber(name: string, fallback: number, minimum = 0): number {
 export function getAgentModelConfig(role: AgentRole): AgentModelConfig {
   const prefix = `AGENT_${role.toUpperCase()}`;
   const defaults = (configuredProfile() === 'flagship' ? flagshipDefaults : cheapDefaults)[role];
-  const legacyModel = role === 'partner' && configuredProfile() === 'cheap'
-    ? envValue('GEMINI_MODEL')
-    : undefined;
+  // Keep GEMINI_MODEL as the shared runtime override for existing live paths.
+  // Role-specific settings still win, so the four agents can diverge when
+  // the caller opts into asymmetric tuning.
+  const legacyModel = envValue('GEMINI_MODEL');
   return {
     role,
-    // GEMINI_MODEL remains the primary setting for the current root/Partner
-    // agent; role-specific settings take precedence for future sub-agents.
+    // Role-specific settings take precedence over the legacy shared setting.
     model: envValue(`${prefix}_MODEL`) ?? legacyModel ?? defaults.model,
     thinkingLevel: configuredThinkingLevel(prefix, defaults.thinkingLevel),
     maxOutputTokens: configuredMaxOutputTokens(prefix, defaults.maxOutputTokens),

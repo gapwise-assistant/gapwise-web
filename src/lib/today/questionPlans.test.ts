@@ -100,6 +100,48 @@ describe('Today question suggestions', () => {
       reason: 'The path affects long-term role fit.',
       provenance: 'Graph node: path',
     }).title).toBe('Confirm there is a funded path into applied AI');
+
+    expect(localQuestionPresentation({
+      id: 'question_retry',
+      question: 'Can the offline queue retry without creating duplicate EHR records?',
+      reason: 'Blocks the pilot decision.',
+      provenance: 'Graph node: retry',
+    }).title).toBe('Verify whether the offline queue can retry without creating duplicate EHR records');
+
+    expect(localQuestionPresentation({
+      id: 'question_budget_approval',
+      question: 'Has Finance approved spending above $45,000 for the pilot?',
+      reason: 'Budget approval is still missing.',
+      provenance: 'Graph node: budget',
+    }).title).toBe('Confirm whether Finance has approved spending above $45,000 for the pilot');
+
+    expect(localQuestionPresentation({
+      id: 'question_build_budget',
+      question: 'Can the final configuration stay under the $1,600 all-in budget after tax and shipping?',
+      reason: 'Determines budget compliance.',
+      provenance: 'Graph node: budget',
+    }).title).toBe('Confirm whether the final configuration can stay under the $1,600 all-in budget after…');
+
+    expect(localQuestionPresentation({
+      id: 'question_fit',
+      question: 'Will the PC run too hot or loud inside the tightly constrained desk opening?',
+      reason: 'Determines acoustic and thermal comfort.',
+      provenance: 'Graph node: fit',
+    }).title).toBe('Confirm whether the PC will run too hot or loud inside the tightly constrained desk…');
+
+    expect(localQuestionPresentation({
+      id: 'question_wifi',
+      question: 'Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?',
+      reason: 'Affects networking requirements.',
+      provenance: 'Graph node: wifi',
+    }).title).toBe('Confirm whether the build needs built-in Wi-Fi, or can an Ethernet cable be used…');
+
+    expect(localQuestionPresentation({
+      id: 'question_bios',
+      question: 'Has the retailer confirmed that the motherboard BIOS supports the selected CPU?',
+      reason: 'Prevents an out-of-box boot failure.',
+      provenance: 'Graph node: bios',
+    }).title).toBe('Confirm whether the retailer has confirmed that the motherboard BIOS supports the…');
   });
 
   it('uses supported career-demo details in deterministic fallback copy', () => {

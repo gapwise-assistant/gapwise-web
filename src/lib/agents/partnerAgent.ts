@@ -2,6 +2,7 @@ import { Project, UserMemoryProfile } from '@/types/clarity';
 import { AttentionAgentOutput, agentNames, GapAgentOutput, partnerAgentOutputSchema, PartnerAgentOutput, validateStructuredOutput } from '@/lib/agents/schemas';
 import { questionPriorityThreshold } from '@/lib/personalization/preferences';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+import { rankGaps } from '@/lib/tools/graphTools';
 
 const partnerModelConfig = getAgentModelConfig('partner');
 
@@ -21,7 +22,17 @@ export function runPartnerAgent(
   attentionOutput: AttentionAgentOutput
 ): PartnerAgentOutput {
   const threshold = questionPriorityThreshold(profile);
-  if (gapOutput.question && gapOutput.selectedGapNodeId && (gapOutput.priority ?? 0) >= threshold) {
+  const selectedGap = gapOutput.selectedGapNodeId
+    ? rankGaps(project).find((gap) => gap.node_id === gapOutput.selectedGapNodeId)
+    : undefined;
+  const decisionValueLevel = selectedGap?.decision_value?.level;
+  const decisionValueAllowsQuestion = decisionValueLevel === 'high'
+    || (profile.question_frequency !== 'low' && decisionValueLevel === 'medium');
+  if (
+    gapOutput.question &&
+    gapOutput.selectedGapNodeId &&
+    ((gapOutput.priority ?? 0) >= threshold || decisionValueAllowsQuestion)
+  ) {
     return validateStructuredOutput(partnerAgentOutputSchema, {
       mode: 'ask_question',
       message:

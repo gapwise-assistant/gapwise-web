@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
 import { buildComingUp, buildTodayQuestions } from '@/lib/today/sections';
 import { AttentionCandidate, DailyBrief } from '@/types/attention';
@@ -69,6 +70,66 @@ describe('Today sections', () => {
     expect(questions.length).toBeLessThanOrEqual(4);
     expect(questions[0].question).toContain('primary target persona');
     expect(questions[0].provenance).toMatch(/src_|Graph node/);
+  });
+
+  it('does not reintroduce a narrower canonical subquestion after excluding the recommended focus', () => {
+    const project = createProjectFromInput({ name: 'Quiet PC', goal: 'Build a quiet PC within budget.' }, '2026-08-11T10:00:00Z');
+    project.nodes.push(
+      {
+        id: 'fit_root',
+        type: 'UNKNOWN',
+        text: 'Will the selected graphics card and CPU cooler fit while keeping temperatures and noise acceptable?',
+        status: 'OPEN',
+        confidence: 0.35,
+        impact: 0.95,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+      },
+      {
+        id: 'fit_subquestion',
+        type: 'UNKNOWN',
+        text: 'Will the PC run too hot or loud inside the tightly constrained desk opening?',
+        status: 'OPEN',
+        confidence: 0.35,
+        impact: 0.9,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+        question_role: 'subquestion',
+        canonical_question_id: 'fit_root',
+      },
+      {
+        id: 'gpu_question',
+        type: 'UNKNOWN',
+        text: 'Which GPU best fits the gaming and Blender workload?',
+        status: 'OPEN',
+        confidence: 0.35,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+      },
+    );
+    const contextPack = buildContextPack({
+      userId: 'demo-user',
+      query: 'What should I answer?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+    });
+
+    const questions = buildTodayQuestions({
+      project,
+      brief: briefWithContextPack(contextPack),
+      now: new Date('2026-08-11T20:00:00Z'),
+      excludedQuestionNodeIds: ['fit_root'],
+    });
+
+    expect(questions.some((question) => /hot or loud|desk opening/i.test(question.question))).toBe(false);
+    expect(questions.some((question) => /GPU/i.test(question.question))).toBe(true);
   });
 
   it('explains why a question matters through graph relationships', () => {

@@ -1,4 +1,4 @@
-import { CandidateGap, NodeType, EdgeType, Project } from '@/types/clarity';
+import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 
@@ -25,6 +25,12 @@ export interface FirestoreNode extends BaseEntity {
   why_it_matters?: string[];
   x?: number;
   y?: number;
+  question_role?: 'canonical' | 'alias' | 'subquestion' | 'assumption' | 'related';
+  canonical_question_id?: string;
+  question_aliases?: string[];
+  reconciliation_confidence?: number;
+  reconciliation_reason?: string;
+  reconciliation_status?: 'reconciled' | 'fallback' | 'pending';
 }
 
 export interface FirestoreEdge extends BaseEntity {
@@ -55,6 +61,7 @@ export interface FirestoreSource extends BaseEntity {
   extraction_hash?: string;
   relevance?: 'relevant' | 'possibly_not_relevant';
   discarded_at?: string;
+  reconciliation_summary?: QuestionReconciliationSummary;
 }
 
 export interface FirestoreContext extends BaseEntity {

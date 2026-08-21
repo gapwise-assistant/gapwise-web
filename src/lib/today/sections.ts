@@ -133,36 +133,45 @@ export function buildTodayQuestions(params: {
   brief: DailyBrief;
   now?: Date;
   hiddenQuestionIds?: string[];
+  excludedQuestionNodeIds?: string[];
 }): TodayQuestion[] {
   const now = params.now ?? new Date();
   const hidden = new Set(params.hiddenQuestionIds ?? []);
+  const excludedNodeIds = new Set(params.excludedQuestionNodeIds ?? []);
   const reasoningProject = projectForReasoning(params.project);
   const contextPack = bestContextPack(params.brief);
   const questions: TodayQuestion[] = [];
+  const addQuestion = (question: TodayQuestion) => {
+    if (questions.some((existing) => existing.id === question.id)) return;
+    if (question.sourceNodeIds.some((nodeId) => excludedNodeIds.has(nodeId))) return;
+    if (hidden.has(question.id)) return;
+    questions.push(question);
+  };
 
-  contextPack?.unresolvedGaps.forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
-  contextPack?.contradictions.forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
+  contextPack?.unresolvedGaps.forEach((node) => addQuestion(todayQuestionFromNode(reasoningProject, node)));
+  // A contradiction/risk is evidence for an unresolved gap, not itself a
+  // question the user should answer from the Today list.
+  contextPack?.contradictions
+    .filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type))
+    .forEach((node) => addQuestion(todayQuestionFromNode(reasoningProject, node)));
   contextPack?.upcomingCommitments.filter(isCalendarNode).forEach((node) => {
     const question = calendarQuestion(node, now);
-    if (question) questions.push(question);
+    if (question) addQuestion(question);
   });
 
-  if (!questions.length) {
+  // Context Packs intentionally stay small. Once Recommended Focus is
+  // removed, backfill from the canonical ranked graph so Today can still
+  // show its full question allowance without duplicating the focus item.
+  if (excludedNodeIds.size > 0) {
     reasoningProject.nodes
-      .filter((node) => node.status === 'OPEN' && ['UNKNOWN', 'ASSUMPTION', 'RISK'].includes(node.type))
+      // Risks and negative facts remain evidence for an unresolved question;
+      // they should not become answerable Today questions on their own.
+      .filter((node) => node.status === 'OPEN' && ['UNKNOWN', 'ASSUMPTION'].includes(node.type))
       .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact))
-      .forEach((node) => questions.push(todayQuestionFromNode(reasoningProject, node)));
+      .forEach((node) => addQuestion(todayQuestionFromNode(reasoningProject, node)));
   }
 
-  const seen = new Set<string>();
-  return questions
-    .filter((question) => !hidden.has(question.id))
-    .filter((question) => {
-      if (seen.has(question.id)) return false;
-      seen.add(question.id);
-      return true;
-    })
-    .slice(0, 4);
+  return questions.slice(0, 4);
 }
 
 export function buildComingUp(

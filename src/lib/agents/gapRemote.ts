@@ -9,6 +9,7 @@ import type { AgentModelConfig } from '@/lib/agents/modelPolicy';
 import type { ContextPack } from '@/types/contextPack';
 import type { DurableMemory } from '@/types/contextPack';
 import type { Project } from '@/types/clarity';
+import type { GapGuidance } from '@/types/clarity';
 
 const gapRunMetadataSchema = z.object({
   runId: z.string().min(1),
@@ -30,8 +31,19 @@ const gapRunMetadataSchema = z.object({
   outputSummary: z.string(),
 });
 
+const gapGuidanceSchema = z.object({
+  focus: z.string().trim().min(3).max(180),
+  whyNow: z.string().trim().min(3).max(260),
+  nextStep: z.string().trim().min(3).max(260),
+  whatCouldChange: z.string().trim().min(3).max(260),
+  supportingIds: z.array(z.string().min(1)).min(1).max(6)
+    .refine((ids) => new Set(ids).size === ids.length, 'Guidance supporting identifiers must be unique.'),
+  generatedBy: z.literal('gap-agent'),
+});
+
 const gapAssessmentResponseSchema = z.object({
   assessment: gapAssessmentV1Schema,
+  recommendation: gapGuidanceSchema.nullable(),
   metadata: gapRunMetadataSchema,
 });
 
@@ -39,6 +51,7 @@ export type GapRemoteMetadata = z.infer<typeof gapRunMetadataSchema>;
 
 export interface GapRemoteResult {
   assessment: GapAssessmentV1;
+  recommendation: GapGuidance | null;
   metadata: GapRemoteMetadata;
 }
 
@@ -108,6 +121,25 @@ function scopedProject(project: Project) {
   };
 }
 
+export function validateGapGuidanceReferences(result: z.infer<typeof gapAssessmentResponseSchema>): void {
+  const selected = result.assessment.candidates.find((candidate) =>
+    candidate.gapId === result.assessment.selectedGapId,
+  );
+  if (!selected) {
+    if (result.recommendation) throw new GapRemoteError('Gap Agent returned guidance without a selected gap.');
+    return;
+  }
+  if (!result.recommendation) throw new GapRemoteError('Gap Agent omitted guidance for the selected gap.');
+  const allowedIds = new Set([
+    ...selected.sourceUnknownNodeIds,
+    ...selected.evidenceReview.evidenceIds,
+    ...selected.affectedDecisions.flatMap((decision) => [decision.decisionId, ...decision.pathNodeIds]),
+  ]);
+  if (result.recommendation.supportingIds.some((id) => !allowedIds.has(id))) {
+    throw new GapRemoteError('Gap Agent guidance referenced unrelated project context.');
+  }
+}
+
 export async function requestGapAssessment(params: {
   userId: string;
   project: Project;
@@ -154,6 +186,7 @@ export async function requestGapAssessment(params: {
     }
     const parsed = gapAssessmentResponseSchema.safeParse(await response.json());
     if (!parsed.success) throw new GapRemoteError('Gap Agent returned an invalid response contract.');
+    validateGapGuidanceReferences(parsed.data);
     return parsed.data;
   } catch (error) {
     if (error instanceof GapRemoteError) throw error;

@@ -2,11 +2,13 @@ import { ContextSource } from '@/types/clarity';
 import { CalendarEventSignal, DriveFileSignal, GmailMessageSignal } from '@/types/google';
 
 function sourceBase(id: string, filename: string, content: string): Omit<ContextSource, 'type'> {
+  const createdAt = new Date().toISOString();
   return {
     id,
     filename,
     content,
-    extracted_at: new Date().toISOString(),
+    extracted_at: createdAt,
+    processed_at: createdAt,
     derived_node_ids: [],
     processing_status: 'completed',
     origin: 'connector',

@@ -66,6 +66,12 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       updatedAt: node.updated_at,
       x: node.x,
       y: node.y,
+      question_role: node.question_role,
+      canonical_question_id: node.canonical_question_id,
+      question_aliases: node.question_aliases,
+      reconciliation_confidence: node.reconciliation_confidence,
+      reconciliation_reason: node.reconciliation_reason,
+      reconciliation_status: node.reconciliation_status,
     })),
     edges: project.edges.map((edge) => ({
       id: edge.id,
@@ -102,6 +108,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
       discarded_at: source.discarded_at,
+      reconciliation_summary: source.reconciliation_summary,
       status: 'ACTIVE',
       createdAt: source.extracted_at,
       updatedAt: source.extracted_at,
@@ -170,6 +177,12 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
       updated_at: node.updatedAt,
       x: node.x,
       y: node.y,
+      question_role: node.question_role,
+      canonical_question_id: node.canonical_question_id,
+      question_aliases: node.question_aliases,
+      reconciliation_confidence: node.reconciliation_confidence,
+      reconciliation_reason: node.reconciliation_reason,
+      reconciliation_status: node.reconciliation_status,
     })),
     edges: edges.map((edge) => ({
       id: edge.id,
@@ -198,6 +211,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
       discarded_at: source.discarded_at,
+      reconciliation_summary: source.reconciliation_summary,
     })),
     history: conversations
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -253,6 +267,12 @@ export function collectionsToGeneralContext(collections: GeneralContextCollectio
       updated_at: node.updatedAt,
       x: node.x,
       y: node.y,
+      question_role: node.question_role,
+      canonical_question_id: node.canonical_question_id,
+      question_aliases: node.question_aliases,
+      reconciliation_confidence: node.reconciliation_confidence,
+      reconciliation_reason: node.reconciliation_reason,
+      reconciliation_status: node.reconciliation_status,
     })),
     edges: edges.map((edge) => ({
       id: edge.id,
@@ -281,6 +301,7 @@ export function collectionsToGeneralContext(collections: GeneralContextCollectio
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
       discarded_at: source.discarded_at,
+      reconciliation_summary: source.reconciliation_summary,
     })),
   };
 }

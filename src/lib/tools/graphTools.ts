@@ -4,6 +4,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { UserMemoryProfile } from '@/types/clarity';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
+import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 
 function timestampId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -42,7 +43,9 @@ export function resolveGap(
   profile: UserMemoryProfile = DEFAULT_USER_PROFILE
 ): Project {
   const updated: Project = JSON.parse(JSON.stringify(project));
-  const gap = updated.nodes.find((node) => node.id === nodeId);
+  const canonicalGroup = canonicalQuestionGroups(updated).find((group) => group.nodeIds.includes(nodeId));
+  const canonicalId = canonicalGroup?.canonical.id ?? nodeId;
+  const gap = updated.nodes.find((node) => node.id === canonicalId);
   if (!gap) return updated;
 
   const now = new Date().toISOString();
@@ -84,5 +87,5 @@ export function rankGaps(project: Project) {
   return reasoningProject.nodes
     .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && node.status === 'OPEN')
     .map((node) => calculateGapPriority(node, reasoningProject, DEFAULT_USER_PROFILE))
-    .sort((a, b) => b.priority - a.priority);
+    .sort((a, b) => b.priority - a.priority || a.node_id.localeCompare(b.node_id));
 }

@@ -22,6 +22,7 @@ import { clearTracesForUser, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelPolicy, getGapEscalationModelConfig } from '@/lib/agents/modelPolicy';
 import { rankGaps } from '@/lib/tools/graphTools';
 import type { TraceAgentRun, TraceGapAnalysis, TraceHandoff, TracePipelineStep } from '@/types/observability';
+import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
 
 export interface GoldenDemoBootstrapResult {
   project: Project;
@@ -161,12 +162,13 @@ function recordDemoDecisionMapActivity(userId: string, project: Project, route: 
         rank: index + 1,
         priority: candidate.priority,
         confidence: Number((1 - candidate.uncertainty).toFixed(3)),
-        summary: `${node?.type.toLowerCase() ?? 'gap'} · ${candidate.blocked_decision_ids.length} linked decisions · ${node?.source_refs.length ?? 0} evidence links`,
+        summary: `${node?.type.toLowerCase() ?? 'gap'} · ${candidate.decision_value?.meaningful_effect_count ?? 0} affected targets · ${node?.source_refs.length ?? 0} evidence links`,
+        decisionValue: decisionValueForTrace(candidate),
       };
     }),
     selectedGapId: candidates[0]?.node_id ?? null,
     selectionReason: candidates.length
-      ? 'Simulation selects the highest deterministic priority after uncertainty, impact, dependencies, urgency, answerability, and user relevance.'
+      ? 'Simulation selects the actionable gap with the highest expected downstream decision value.'
       : 'No open high-impact gap was available in the seed.',
     confidence: candidates[0] ? Number((1 - candidates[0].uncertainty).toFixed(3)) : null,
     evidenceIds: candidates[0] ? project.nodes.find((node) => node.id === candidates[0].node_id)?.source_refs ?? [] : [],

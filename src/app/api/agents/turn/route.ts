@@ -12,7 +12,9 @@ import { rankGaps } from '@/lib/tools/graphTools';
 import { runAttentionAgent } from '@/lib/agents/attentionAgent';
 import { runPartnerAgent } from '@/lib/agents/partnerAgent';
 import { gapAgentOutputSchema, validateStructuredOutput } from '@/lib/agents/schemas';
+import { gapAgentOutputFromAssessment } from '@/lib/agents/gapAssessmentV1';
 import type { AgentTurnResult } from '@/lib/agents/orchestrator';
+import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
 
 function traceAgentConfigs(gapRuntime: GapRuntimeResult) {
   const policy = getAgentModelPolicy();
@@ -33,16 +35,17 @@ function applyLiveGapSelection(result: AgentTurnResult, runtime: GapRuntimeResul
   const selected = runtime.effectiveGapNodeId
     ? ranked.find((candidate) => candidate.node_id === runtime.effectiveGapNodeId) ?? null
     : null;
+  if (selected && runtime.effectiveGuidance) selected.guidance = runtime.effectiveGuidance;
   result.project.active_question = selected;
-  const gapOutput = validateStructuredOutput(gapAgentOutputSchema, {
-    selectedGapNodeId: selected?.node_id ?? null,
-    question: selected?.question ?? null,
-    priority: selected?.priority ?? null,
-    retrievalAnswered: false,
-    reasons: runtime.agentAssessment
-      ? [runtime.agentAssessment.selectionRationale]
-      : ['No validated live Gap Agent assessment was available.'],
-  });
+  const gapOutput = runtime.agentAssessment
+    ? gapAgentOutputFromAssessment(result.project, runtime.agentAssessment)
+    : validateStructuredOutput(gapAgentOutputSchema, {
+      selectedGapNodeId: selected?.node_id ?? null,
+      question: selected?.question ?? null,
+      priority: selected?.priority ?? null,
+      retrievalAnswered: false,
+      reasons: ['No validated live Gap Agent assessment was available.'],
+    });
   const attention = runAttentionAgent(result.project);
   result.partner = runPartnerAgent(result.project, DEFAULT_USER_PROFILE, gapOutput, attention);
 }
@@ -118,23 +121,28 @@ export async function POST(request: Request) {
     }
 
     if (gapRuntime.agentAssessment) {
-      const priorityByNode = new Map(rankGaps(result.project).map((gap) => [gap.node_id, gap.priority]));
+      const gapByNode = new Map(rankGaps(result.project).map((gap) => [gap.node_id, gap]));
       const selected = gapRuntime.agentAssessment.candidates.find((candidate) => candidate.gapId === gapRuntime.agentAssessment?.selectedGapId);
       observability.gapAnalysis = {
         ...observability.gapAnalysis,
         candidates: gapRuntime.agentAssessment.candidates.map((candidate) => {
           const nodeId = candidate.sourceUnknownNodeIds[0];
+          const rankedGap = gapByNode.get(nodeId);
           return {
             id: nodeId,
             rank: 0,
-            priority: priorityByNode.get(nodeId) ?? 0,
+            priority: rankedGap?.priority ?? 0,
             confidence: ({ low: 0.35, medium: 0.65, high: 0.9 })[candidate.assessmentConfidence],
             summary: `${candidate.affectedDecisions.length} affected decisions · ${candidate.evidenceReview.evidenceIds.length} evidence IDs · ${candidate.evidenceReview.answerability}${candidate.suppressionReason ? ` · suppressed: ${candidate.suppressionReason}` : ''}`,
+            decisionValue: rankedGap ? decisionValueForTrace(rankedGap) : undefined,
           };
         }).sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id))
           .slice(0, 5)
           .map((candidate, index) => ({ ...candidate, rank: index + 1 })),
         selectedGapId: gapRuntime.agentGapNodeId,
+        retrievalAnswered: gapRuntime.agentAssessment.selectedGapId === null
+          && gapRuntime.agentAssessment.candidates.length > 0
+          && gapRuntime.agentAssessment.candidates.every((candidate) => candidate.evidenceReview.answerability === 'answered'),
         selectionReason: gapRuntime.agentAssessment.selectionRationale,
         confidence: gapRuntime.metadata?.confidence ?? null,
         evidenceIds: selected?.evidenceReview.evidenceIds ?? [],

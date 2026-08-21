@@ -6,6 +6,7 @@ import {
 } from '@/lib/agents/gapContractV1';
 import { CAREER_GAP_GOLDEN_SET } from '@/lib/evals/careerGapGoldenSet';
 import { materializeCareerGapCase } from '@/lib/evals/careerGapFixture';
+import { rankGaps } from '@/lib/tools/graphTools';
 import {
   careerGapConceptForGapId,
   careerGapConceptForNodeId,
@@ -26,6 +27,7 @@ export const CAREER_GAP_QUALITY_GATES = {
   topConceptAccuracy: 13 / 15,
   evidenceClassificationAccuracy: 14 / 15,
   criticalEvidenceCoverage: 1,
+  guidanceValidity: 1,
 } as const;
 
 export interface CareerGapCaseScore {
@@ -40,6 +42,7 @@ export interface CareerGapCaseScore {
   requiredEvidenceCovered: boolean;
   forbiddenConceptsAvoided: boolean;
   genericQuestionsAvoided: boolean;
+  guidanceValid: boolean;
   attentionCorrect: boolean;
   partnerActionCorrect: boolean;
   escalationCorrect: boolean;
@@ -62,6 +65,7 @@ export interface CareerGapStrategySummary {
     attentionAccuracy: number;
     partnerActionAccuracy: number;
     escalationAccuracy: number;
+    guidanceValidity: number;
   };
   runtime: {
     models: string[];
@@ -107,6 +111,23 @@ function evaluateCandidateStates(goldenCase: CareerGapGoldenCase, assessment: Ga
     if (expected.suppressionReason !== undefined && candidate.suppressionReason !== expected.suppressionReason) return false;
     return true;
   });
+}
+
+function validGuidance(result: CareerGapStrategyResult, assessment: GapAssessmentV1): boolean {
+  const selected = selectedCandidate(assessment);
+  if (!selected) return result.guidance === null;
+  const guidance = result.guidance;
+  if (!guidance) return false;
+  if (!/^(Decide|Confirm|Clarify|Find out|Verify)\b/.test(guidance.focus)) return false;
+  if (![guidance.focus, guidance.whyNow, guidance.nextStep, guidance.whatCouldChange]
+    .every((value) => value.trim().length >= 3)) return false;
+  const allowedIds = new Set([
+    ...selected.sourceUnknownNodeIds,
+    ...selected.evidenceReview.evidenceIds,
+    ...selected.affectedDecisions.flatMap((decision) => [decision.decisionId, ...decision.pathNodeIds]),
+  ]);
+  return guidance.supportingIds.length > 0
+    && guidance.supportingIds.every((id) => allowedIds.has(id));
 }
 
 export function scoreCareerGapCase(
@@ -164,6 +185,9 @@ export function scoreCareerGapCase(
     .every((candidate) => !GENERIC_PATTERNS.some((pattern) => pattern.test(candidate.question.trim())));
   if (!genericQuestionsAvoided) errors.push('An unsuppressed question is generic.');
 
+  const guidanceValid = validGuidance(result, assessment);
+  if (!guidanceValid) errors.push('The selected gap did not include valid grounded user guidance.');
+
   const attentionCorrect = result.attention.urgency === goldenCase.expectedAttentionUrgency;
   const partnerActionCorrect = result.partner.action === goldenCase.expectedPartnerAction;
   if (!attentionCorrect) errors.push(`Expected ${goldenCase.expectedAttentionUrgency} attention, received ${result.attention.urgency}.`);
@@ -187,6 +211,7 @@ export function scoreCareerGapCase(
     requiredEvidenceCovered,
     forbiddenConceptsAvoided,
     genericQuestionsAvoided,
+    guidanceValid,
     attentionCorrect,
     partnerActionCorrect,
     escalationCorrect,
@@ -228,6 +253,7 @@ export async function evaluateCareerGapStrategy(
     attentionAccuracy: rate(caseScores, 'attentionCorrect'),
     partnerActionAccuracy: rate(caseScores, 'partnerActionCorrect'),
     escalationAccuracy: rate(caseScores, 'escalationCorrect'),
+    guidanceValidity: rate(caseScores, 'guidanceValid'),
   };
   const gates = {
     contractValidity: rates.contractValidity >= CAREER_GAP_QUALITY_GATES.contractValidity,
@@ -237,6 +263,7 @@ export async function evaluateCareerGapStrategy(
     topConceptAccuracy: rates.topConceptAccuracy >= CAREER_GAP_QUALITY_GATES.topConceptAccuracy,
     evidenceClassificationAccuracy: rates.evidenceClassificationAccuracy >= CAREER_GAP_QUALITY_GATES.evidenceClassificationAccuracy,
     criticalEvidenceCoverage: rates.criticalEvidenceCoverage >= CAREER_GAP_QUALITY_GATES.criticalEvidenceCoverage,
+    guidanceValidity: rates.guidanceValidity >= CAREER_GAP_QUALITY_GATES.guidanceValidity,
   };
   const runtimeRows = caseScores.flatMap((score) => score.runtime ? [score.runtime] : []);
   const estimatedCosts = runtimeRows.map((row) => row.estimatedCost);
@@ -277,8 +304,8 @@ function percentage(value: number): string {
 
 export function formatCareerGapComparison(summaries: CareerGapStrategySummary[]): string {
   const lines = [
-    '| Strategy | Model / thinking | Avg latency | Tokens in/out | Est. cost | Contract | Top concept | Evidence state | Gates |',
-    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+    '| Strategy | Model / thinking | Avg latency | Tokens in/out | Est. cost | Contract | Top concept | Evidence state | Guidance | Gates |',
+    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
     ...summaries.map((summary) => [
       `| ${summary.strategyLabel}`,
       `${summary.runtime.models.join(', ') || 'deterministic'} / ${summary.runtime.thinkingLevels.join(', ') || 'n/a'}`,
@@ -288,6 +315,7 @@ export function formatCareerGapComparison(summaries: CareerGapStrategySummary[])
       percentage(summary.rates.contractValidity),
       percentage(summary.rates.topConceptAccuracy),
       percentage(summary.rates.evidenceClassificationAccuracy),
+      percentage(summary.rates.guidanceValidity),
       summary.passed ? 'PASS' : 'FAIL',
     ].join(' | ') + ' |'),
   ];
@@ -323,9 +351,16 @@ export const deterministicCareerGapStrategy: CareerGapStrategy = {
   label: 'Current TypeScript ranker through GapAssessment V1',
   run(input) {
     const gapAssessment = assessGapsV1Deterministically(input);
+    const selectedNodeId = gapAssessment.candidates
+      .find((candidate) => candidate.gapId === gapAssessment.selectedGapId)
+      ?.sourceUnknownNodeIds[0] ?? null;
+    const guidance = selectedNodeId
+      ? rankGaps(input.project).find((gap) => gap.node_id === selectedNodeId)?.guidance ?? null
+      : null;
     const urgency = deriveCareerGapAttention(input, gapAssessment);
     return {
       gapAssessment,
+      guidance,
       attention: { urgency },
       partner: { action: deriveCareerGapPartnerAction(gapAssessment, urgency) },
     };

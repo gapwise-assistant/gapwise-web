@@ -1,6 +1,7 @@
 import { rankGaps } from '@/lib/tools/graphTools';
 import type { ContextPack, DurableMemory } from '@/types/contextPack';
 import type { ClarityNode, Project } from '@/types/clarity';
+import { gapAgentOutputSchema, type GapAgentOutput } from '@/lib/agents/schemas';
 import {
   GAP_CONTRACT_VERSION,
   gapAssessmentV1Schema,
@@ -37,16 +38,54 @@ function category(value: number): 'low' | 'medium' | 'high' {
   return 'low';
 }
 
-function candidateNodes(project: Project): ClarityNode[] {
-  return project.nodes.filter((node) =>
-    node.type === 'UNKNOWN' || (node.type === 'ASSUMPTION' && node.confidence < 0.6),
-  );
+interface RetrievalScope {
+  nodeIds: Set<string>;
+  sourceIds: Set<string>;
+  hasGapSelection: boolean;
+}
+
+function retrievalScope(contextPack: ContextPack): RetrievalScope {
+  const selectedGapNodes = [
+    ...contextPack.unresolvedGaps,
+    ...contextPack.recentlyResolvedGaps,
+    ...contextPack.contradictions,
+  ];
+  const nodeIds = new Set(selectedGapNodes.map((node) => node.id));
+  const sourceIds = new Set([
+    ...contextPack.relevantEvidence.map((source) => source.source_id),
+    ...contextPack.provenanceSources.map((source) => source.source_id),
+  ]);
+
+  // An empty pack is possible for a brand-new project or a caller that has
+  // not requested a scoped retrieval yet. Keep the graph fallback in that
+  // case; once retrieval has selected gaps, do not let unrelated graph nodes
+  // leak into the Gap Agent's candidate set.
+  return {
+    nodeIds,
+    sourceIds,
+    hasGapSelection: selectedGapNodes.length > 0,
+  };
+}
+
+function candidateNodes(project: Project, contextPack: ContextPack): ClarityNode[] {
+  const scope = retrievalScope(contextPack);
+  return project.nodes.filter((node) => {
+    const isGap = node.type === 'UNKNOWN' || (node.type === 'ASSUMPTION' && node.confidence < 0.6);
+    if (!isGap) return false;
+    if (!scope.hasGapSelection) return true;
+    return scope.nodeIds.has(node.id)
+      || node.source_refs.some((sourceId) => scope.sourceIds.has(sourceId));
+  });
 }
 
 function findDecisionPaths(project: Project, sourceId: string): string[][] {
   const openDecisionIds = new Set(
     project.nodes
-      .filter((node) => node.type === 'DECISION' && node.status === 'OPEN')
+      // A decision can be marked resolved while still representing the
+      // product choice this uncertainty informs (for example, a demo scope
+      // decision that is being revisited). Only deprecated decisions are out
+      // of the reasoning graph entirely.
+      .filter((node) => node.type === 'DECISION' && node.status !== 'DEPRECATED')
       .map((node) => node.id),
   );
   const outgoing = new Map<string, string[]>();
@@ -85,14 +124,49 @@ function relationshipFor(node: ClarityNode): GapDecisionRelationship {
   return 'could_flip';
 }
 
-function evidenceFor(project: Project, node: ClarityNode): string[] {
+function evidenceFor(project: Project, node: ClarityNode, contextPack: ContextPack): string[] {
+  const scope = retrievalScope(contextPack);
+  const retrievedSourceIds = new Set(scope.sourceIds);
+  const retrievedEvidence = [
+    ...contextPack.relevantEvidence,
+    ...contextPack.provenanceSources,
+  ];
+  // The candidate's own source links are part of the selected graph context,
+  // even when the excerpt ranker did not include every linked document. This
+  // preserves provenance for guidance validation and prevents a relevant
+  // source from becoming invisible merely because another excerpt ranked
+  // higher.
   const ids = new Set(node.source_refs);
+
+  // A source can be retrieved because it derives the node even when the
+  // graph's source_refs have not been backfilled yet. Prefer that scoped
+  // provenance over unrelated source links.
+  retrievedEvidence
+    .filter((source) => source.derived_node_ids.includes(node.id))
+    .forEach((source) => ids.add(source.source_id));
+
   const adjacentNodeIds = project.edges
     .filter((edge) => edge.source === node.id || edge.target === node.id)
     .map((edge) => edge.source === node.id ? edge.target : edge.source);
   project.nodes
     .filter((candidate) => adjacentNodeIds.includes(candidate.id) && candidate.type !== 'DECISION')
-    .forEach((candidate) => candidate.source_refs.forEach((id) => ids.add(id)));
+    .forEach((candidate) => {
+      const hasContradiction = project.edges.some((edge) =>
+        edge.type === 'contradicts'
+        && ((edge.source === node.id && edge.target === candidate.id)
+          || (edge.target === node.id && edge.source === candidate.id)),
+      );
+      candidate.source_refs
+        .filter((sourceId) => retrievedSourceIds.has(sourceId) || hasContradiction)
+        .forEach((id) => ids.add(id));
+    });
+
+  // Preserve graph provenance when a Context Pack was built without source
+  // excerpts. This keeps the assessment useful for older projects while a
+  // scoped pack remains the primary evidence boundary.
+  if (ids.size === 0 && retrievedEvidence.length === 0) {
+    node.source_refs.forEach((id) => ids.add(id));
+  }
   return [...ids].filter((id) => project.sources.some((source) => source.id === id));
 }
 
@@ -100,6 +174,7 @@ function answerabilityFor(
   project: Project,
   node: ClarityNode,
   evidenceIds: string[],
+  retrievedEvidence: Array<{ sourceId: string; text: string }> = [],
 ): { answerability: GapAnswerability; conflictingEvidenceIds: string[] } {
   const resolutionEdges = project.edges.filter((edge) =>
     edge.target === node.id && ['resolves', 'supersedes'].includes(edge.type),
@@ -127,6 +202,28 @@ function answerabilityFor(
       answerability: 'conflicting',
       conflictingEvidenceIds: conflicts,
     };
+  }
+
+  // A retrieved source can close a gap without a user answer when it states a
+  // clear, affirmative result. Do not treat mentions or pending/negative
+  // statuses as answers: “legal has not approved” is useful evidence, but the
+  // approval gap remains open.
+  const questionTerms = node.text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((term) => term.length >= 5);
+  const hasDirectAnswer = retrievedEvidence.some(({ text }) => {
+    const lower = text.toLowerCase();
+    const overlap = questionTerms.filter((term) => lower.includes(term)).length;
+    if (overlap < Math.min(3, Math.max(2, Math.ceil(questionTerms.length * 0.35)))) return false;
+    if (/\b(has not|have not|not yet|pending|unresolved|unknown|not approved|not demonstrated|cannot|can't|failed|stop condition)\b/i.test(lower)) {
+      return false;
+    }
+    return /\b(approved|confirmed|demonstrated|verified|passed|successful|completed|accepted|authorized|available|yes)\b/i.test(lower);
+  });
+  if (hasDirectAnswer) {
+    return { answerability: 'answered', conflictingEvidenceIds: [] };
   }
 
   return {
@@ -169,27 +266,48 @@ function structuralFallbackScore(node: ClarityNode, pathCount: number): number {
   return Number((0.45 * (1 - node.confidence) + 0.45 * node.impact + 0.1 * Math.min(1, pathCount / 2)).toFixed(3));
 }
 
+function decisionChangeCategory(
+  value: NonNullable<ReturnType<typeof rankGaps>[number]['decision_value']>,
+): 'low' | 'medium' | 'high' {
+  if (value.expected_action_change === 'could_flip_decision' && value.structural_leverage >= 0.55) return 'high';
+  if (value.expected_action_change !== 'same_action' && value.structural_leverage >= 0.35) return 'medium';
+  return 'low';
+}
+
 /**
- * Deterministic V1 adapter used for bring-up and comparison. It intentionally
- * does not replace runGapAgent: the current runtime remains stable while the
- * golden set measures where this baseline differs from the new contract.
+ * Deterministic V1 adapter used by local runtime, shadow comparison, and the
+ * candidate scaffold sent to the live ADK Gap Agent.
  */
 export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapAssessmentV1 {
-  const currentScores = new Map(rankGaps(input.project).map((gap) => [gap.node_id, gap.priority]));
+  const rankedGaps = rankGaps(input.project);
+  const currentGaps = new Map(rankedGaps.map((gap) => [gap.node_id, gap]));
   const seenQuestions = new Set<string>();
-  const scored: ScoredCandidate[] = candidateNodes(input.project).map((node) => {
+  const scored: ScoredCandidate[] = candidateNodes(input.project, input.contextPack).map((node) => {
     const paths = findDecisionPaths(input.project, node.id);
-    const evidenceIds = evidenceFor(input.project, node);
-    const evidenceReview = answerabilityFor(input.project, node, evidenceIds);
+    const evidenceIds = evidenceFor(input.project, node, input.contextPack);
+    const retrievedEvidence = [
+      ...input.contextPack.relevantEvidence,
+      ...input.contextPack.provenanceSources,
+    ]
+      .filter((source) => evidenceIds.includes(source.source_id))
+      .map((source) => ({ sourceId: source.source_id, text: `${source.filename} ${source.excerpt}` }));
+    const evidenceReview = answerabilityFor(input.project, node, evidenceIds, retrievedEvidence);
     const normalized = normalizedQuestion(node.text);
     const duplicate = seenQuestions.has(normalized);
     seenQuestions.add(normalized);
-    const suppressionReason = suppressionFor(node, evidenceReview.answerability, paths.length > 0, duplicate);
+    const suppressionReason = suppressionFor(
+      node,
+      evidenceReview.answerability,
+      paths.length > 0,
+      duplicate,
+    );
     const affectedDecisions = paths.map((path) => ({
       decisionId: path.at(-1)!,
       relationship: relationshipFor(node),
       pathNodeIds: path,
     }));
+    const rankedGap = currentGaps.get(node.id);
+    const decisionValue = rankedGap?.decision_value;
     const candidate: GapCandidateV1 = {
       schemaVersion: GAP_CONTRACT_VERSION,
       gapId: `gap:${node.id}`,
@@ -198,8 +316,10 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
       targetUnknown: node.text,
       affectedDecisions,
       evidenceReview: { evidenceIds, ...evidenceReview },
-      decisionChangeLikelihood: category((1 - node.confidence) * node.impact),
-      decisionImpact: category(node.impact),
+      decisionChangeLikelihood: decisionValue
+        ? decisionChangeCategory(decisionValue)
+        : category((1 - node.confidence) * node.impact),
+      decisionImpact: category(decisionValue?.strongest_path?.importance ?? node.impact),
       assessmentConfidence: evidenceReview.answerability === 'conflicting'
         ? 'low'
         : evidenceReview.answerability === 'unanswered'
@@ -208,7 +328,8 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
             ? 'high'
             : 'medium',
       acquisitionPath: suppressionReason ? null : acquisitionPathFor(node),
-      whyItMatters: node.why_it_matters?.[0]
+      whyItMatters: decisionValue?.reason
+        ?? node.why_it_matters?.[0]
         ?? `Resolving this could change ${affectedDecisions.length === 1 ? 'a live decision' : 'live decisions'}.`,
       suppressionReason,
     };
@@ -216,7 +337,7 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
       candidate,
       // This preserves the current ranker as the comparison baseline. The V1
       // contract itself keeps urgency/interruption outside Gap Agent ownership.
-      score: currentScores.get(node.id) ?? structuralFallbackScore(node, paths.length),
+      score: rankedGap?.priority ?? structuralFallbackScore(node, paths.length),
     };
   });
 
@@ -247,4 +368,41 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
     escalationEligible: escalationReasons.size > 0,
     escalationReasons: [...escalationReasons],
   });
+}
+
+/**
+ * The runtime and the four-agent orchestrator consume the same validated
+ * assessment. Keeping this adapter here prevents the deterministic fallback,
+ * shadow comparison, and live route from quietly selecting different gaps.
+ */
+export function gapAgentOutputFromAssessment(
+  project: Project,
+  assessment: GapAssessmentV1,
+): GapAgentOutput {
+  const selected = assessment.candidates.find((candidate) => candidate.gapId === assessment.selectedGapId);
+  const selectedNodeId = selected?.sourceUnknownNodeIds[0] ?? null;
+  const ranked = selectedNodeId
+    ? rankGaps(project).find((candidate) => candidate.node_id === selectedNodeId)
+    : null;
+  const retrievalAnswered = assessment.candidates.length > 0
+    && assessment.selectedGapId === null
+    && assessment.candidates.every((candidate) => candidate.evidenceReview.answerability === 'answered');
+
+  return gapAgentOutputSchema.parse({
+    selectedGapNodeId: selectedNodeId,
+    question: selected?.question ?? null,
+    priority: ranked?.priority ?? null,
+    retrievalAnswered,
+    reasons: [assessment.selectionRationale],
+  });
+}
+
+/**
+ * Older projects can contain a lone UNKNOWN before a DECISION node exists.
+ * The V1 contract correctly suppresses that node as not decision-relevant;
+ * callers may use this compatibility fallback to keep the existing question
+ * surface usable until the graph has a decision target.
+ */
+export function hasLiveDecision(project: Project): boolean {
+  return project.nodes.some((node) => node.type === 'DECISION' && node.status !== 'DEPRECATED');
 }

@@ -85,4 +85,32 @@ describe('POST /api/today/question-plans', () => {
       presentations: [{ questionId: 'question_budget' }],
     });
   });
+
+  it('accepts the full four-question Today allowance in one enrichment call', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: JSON.stringify({ suggestions: [], presentations: [] }),
+      sessionId: 'today_four_questions',
+      sources: [],
+    });
+    const questions = [1, 2, 3, 4].map((index) => ({
+      ...question,
+      id: `question_${index}`,
+      question: `What is the trip detail ${index}?`,
+    }));
+
+    const response = await POST(request({
+      userId: 'demo-user',
+      projectId: 'japan_trip',
+      questions,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askGapswise).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toMatchObject({
+      generatedBy: 'gapswise-agent',
+      suggestions: expect.arrayContaining(questions.map((item) => expect.objectContaining({ questionId: item.id }))),
+      presentations: expect.arrayContaining(questions.map((item) => expect.objectContaining({ questionId: item.id }))),
+    });
+  });
 });

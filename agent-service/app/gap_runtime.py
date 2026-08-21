@@ -21,6 +21,7 @@ from app.gap_contract import (
     GapAssessmentRequest,
     GapAssessmentResponse,
     GapAssessmentV1,
+    GapGuidanceV1,
     GapRunMetadata,
     GapSelectionDraftV1,
     validate_assessment_graph,
@@ -81,6 +82,19 @@ Rules:
   candidate about the same issue; select the downstream UNKNOWN instead.
 - Do not use calendar proximity, deadline urgency, or interruption cost to choose the structural gap.
 - acquisitionPath describes how the fact can be learned; it does not authorize an action.
+- When selectedGapId is not null, return one recommendation with four concise,
+  user-facing fields: focus, whyNow, nextStep, and whatCouldChange.
+- Start focus with an action verb such as Decide, Confirm, Clarify, Find out,
+  or Verify. Make each recommendation field one short sentence.
+- whyNow may use a supplied project deadline or related Context Pack commitment
+  after structural selection; timing must never change which gap you select.
+- nextStep must be the smallest concrete way to acquire the missing answer.
+- whatCouldChange must name the downstream decision, action, scope, sequence,
+  or risk that a different answer could alter.
+- recommendation.supportingIds must contain only identifiers already attached
+  to the selected candidate: its source unknowns, evidence, decision paths, or
+  affected decisions. Never cite unrelated context.
+- If selectedGapId is null, recommendation must be null.
 - selectionRationale and whyItMatters must be concise outcome summaries, not private reasoning.
 - Never invent node IDs, evidence IDs, paths, facts, or decisions.
 - If no actionable gap remains, select null.
@@ -256,10 +270,41 @@ def _apply_selection(
     return GapAssessmentV1.model_validate(payload)
 
 
+def _apply_guidance(
+    draft: GapSelectionDraftV1,
+    assessment: GapAssessmentV1,
+) -> GapGuidanceV1 | None:
+    if draft.selectedGapId is None:
+        return None
+    recommendation = draft.recommendation
+    if recommendation is None:
+        raise ValueError("Gap Agent omitted guidance for the selected gap.")
+    selected = next(
+        (
+            candidate
+            for candidate in assessment.candidates
+            if candidate.gapId == draft.selectedGapId
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Gap Agent guidance references a missing selected gap.")
+    allowed_ids = set(selected.sourceUnknownNodeIds)
+    allowed_ids.update(selected.evidenceReview.evidenceIds)
+    for affected in selected.affectedDecisions:
+        allowed_ids.add(affected.decisionId)
+        allowed_ids.update(affected.pathNodeIds)
+    if not set(recommendation.supportingIds).issubset(allowed_ids):
+        raise ValueError("Gap Agent guidance cites unrelated context identifiers.")
+    return GapGuidanceV1.model_validate(
+        {**recommendation.model_dump(), "generatedBy": "gap-agent"}
+    )
+
+
 async def _run_once(
     request: GapAssessmentRequest,
     config: AgentModelConfig,
-) -> tuple[GapAssessmentV1, dict[str, Any]]:
+) -> tuple[GapAssessmentV1, GapGuidanceV1 | None, dict[str, Any]]:
     session_service = InMemorySessionService()
     run_id = f"gap_{uuid.uuid4().hex}"
     session = await session_service.create_session(
@@ -309,12 +354,13 @@ async def _run_once(
         draft = GapSelectionDraftV1.model_validate_json(final_text)
         assessment = _apply_selection(draft, request)
         validate_assessment_graph(assessment, request.project)
+        recommendation = _apply_guidance(draft, assessment)
     except Exception as error:
         summary = _validation_failure_summary(error)
         raise GapRuntimeError(
             f"Gap Agent returned an invalid assessment ({summary})."
         ) from error
-    return assessment, {
+    return assessment, recommendation, {
         "run_id": run_id,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -342,7 +388,7 @@ async def run_gap_assessment(
     """Run one validated pass and an optional conservative escalation pass."""
     config = _evaluation_override(request) or get_agent_model_config("gap")
     validate_live_model(config.model)
-    assessment, run = await _run_once(request, config)
+    assessment, recommendation, run = await _run_once(request, config)
     final_config = config
     total_input_tokens = run["input_tokens"]
     total_output_tokens = run["output_tokens"]
@@ -361,8 +407,9 @@ async def run_gap_assessment(
         validate_live_model(stronger.model)
         escalation_reason = ", ".join(assessment.escalationReasons)
         try:
-            escalated_assessment, escalated_run = await _run_once(request, stronger)
+            escalated_assessment, escalated_recommendation, escalated_run = await _run_once(request, stronger)
             assessment = escalated_assessment
+            recommendation = escalated_recommendation
             final_config = stronger
             total_input_tokens += escalated_run["input_tokens"]
             total_output_tokens += escalated_run["output_tokens"]
@@ -401,7 +448,12 @@ async def run_gap_assessment(
         ),
         outputSummary=(
             f"{len(assessment.candidates)} candidates; "
-            f"selected {assessment.selectedGapId or 'none'}"
+            f"selected {assessment.selectedGapId or 'none'}; "
+            f"guidance {'returned' if recommendation else 'not applicable'}"
         ),
     )
-    return GapAssessmentResponse(assessment=assessment, metadata=metadata)
+    return GapAssessmentResponse(
+        assessment=assessment,
+        recommendation=recommendation,
+        metadata=metadata,
+    )

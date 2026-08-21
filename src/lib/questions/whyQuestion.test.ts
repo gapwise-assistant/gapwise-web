@@ -129,4 +129,35 @@ describe('question why explanation', () => {
 
     expect(explanation.whatGapswiseKnows).toContain('Housing-related costs should stay at or below $1,750/month');
   });
+
+  it('shows retained subquestions and assumptions under the canonical Resolve view', () => {
+    const project = createGoldenDemoProject();
+    const canonical = {
+      id: 'pc_fit',
+      type: 'UNKNOWN' as const,
+      text: 'Will the components fit and remain quiet?',
+      status: 'OPEN' as const,
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: '2026-08-14T10:00:00Z',
+      updated_at: '2026-08-14T10:00:00Z',
+    };
+    project.nodes.push(
+      canonical,
+      { ...canonical, id: 'pc_fit_gpu', text: 'Can the RTX 5070 fit without unacceptable noise?', question_role: 'subquestion', canonical_question_id: canonical.id },
+      { ...canonical, id: 'pc_fit_assumption', text: 'The existing case will keep the build quiet.', type: 'ASSUMPTION', question_role: 'assumption', canonical_question_id: canonical.id },
+    );
+
+    const explanation = buildQuestionWhyExplanation(project, {
+      ...question(canonical.id),
+      question: canonical.text,
+    });
+
+    expect(explanation.relatedChecks).toEqual(expect.arrayContaining([
+      { kind: 'Subquestion', text: 'Can the RTX 5070 fit without unacceptable noise' },
+      { kind: 'Assumption', text: 'The existing case will keep the build quiet' },
+    ]));
+  });
 });

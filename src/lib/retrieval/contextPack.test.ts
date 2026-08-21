@@ -38,6 +38,113 @@ describe('Context Pack retrieval and durable memory policy', () => {
     expect(pack.relevantEvidence.some((evidence) => evidence.source_id === 'src_recipe')).toBe(false);
   });
 
+  it('prioritizes the newest evidence that resolved a project gap and excludes unrelated memories', () => {
+    const project = createGoldenDemoProject();
+    project.id = 'project_clinicflow';
+    project.title = 'ClinicFlow — Manual AI Walkthrough';
+    project.goal = 'Decide whether and how to launch a safe outpatient intake pilot.';
+    project.nodes = [
+      {
+        id: 'decision_launch',
+        type: 'DECISION',
+        text: 'Choose a full launch, read-only pilot, delay, or workflow research.',
+        status: 'OPEN',
+        confidence: 1,
+        impact: 0.95,
+        source_refs: ['src_pilot'],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00Z',
+        updated_at: '2026-08-20T10:00:00Z',
+      },
+      {
+        id: 'unknown_offline_retry',
+        type: 'UNKNOWN',
+        text: 'Can offline retries occur without creating duplicate EHR records?',
+        status: 'RESOLVED',
+        confidence: 1,
+        impact: 0.95,
+        source_refs: ['src_pilot', 'src_steering', 'src_retry_results'],
+        why_it_matters: [
+          'Resolved by newer evidence from clinicflow-offline-retry-test-results.md: retries create duplicate EHR records.',
+        ],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00Z',
+        updated_at: '2026-08-20T12:00:00Z',
+      },
+      {
+        id: 'unknown_sms_consent',
+        type: 'UNKNOWN',
+        text: 'Is the SMS consent language approved for PHI-related intake?',
+        status: 'OPEN',
+        confidence: 1,
+        impact: 0.9,
+        source_refs: ['src_pilot', 'src_steering'],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00Z',
+        updated_at: '2026-08-20T11:00:00Z',
+      },
+    ];
+    project.edges = [
+      { id: 'edge_retry_launch', source: 'unknown_offline_retry', target: 'decision_launch', type: 'blocks' },
+      { id: 'edge_sms_launch', source: 'unknown_sms_consent', target: 'decision_launch', type: 'blocks' },
+    ];
+    project.sources = [
+      {
+        id: 'src_pilot',
+        filename: 'clinicflow-pilot-brief',
+        type: 'text',
+        content: 'The launch decision is blocked by offline retry safety and SMS consent approval.',
+        extraction_summary: 'The pilot brief lists duplicate EHR records and SMS consent as unresolved.',
+        extracted_at: '2026-08-20T10:00:00Z',
+        derived_node_ids: ['decision_launch', 'unknown_offline_retry', 'unknown_sms_consent'],
+        processing_status: 'completed',
+      },
+      {
+        id: 'src_steering',
+        filename: 'clinicflow-steering-update.md',
+        type: 'text',
+        content: 'Run the offline retry test, then obtain legal approval for SMS consent.',
+        extraction_summary: 'The steering sequence puts retry testing before SMS consent approval.',
+        extracted_at: '2026-08-20T11:00:00Z',
+        derived_node_ids: ['unknown_offline_retry', 'unknown_sms_consent'],
+        processing_status: 'completed',
+      },
+      {
+        id: 'src_retry_results',
+        filename: 'clinicflow-offline-retry-test-results.md',
+        type: 'text',
+        content: 'The 20-record offline retry test created three duplicate EHR records. Use read-only integration or delay.',
+        extraction_summary: 'Offline retries created duplicate EHR records, resolving the retry uncertainty and ruling out automated writes.',
+        extracted_at: '2026-08-20T12:00:00Z',
+        derived_node_ids: ['unknown_offline_retry'],
+        processing_status: 'completed',
+      },
+    ];
+
+    const careerMemory = createDurableMemory('I prefer to avoid frontend-heavy career roles.')!;
+    const duplicateCareerMemory = { ...careerMemory, id: 'duplicate_career_memory' };
+    const pack = buildContextPack({
+      userId: 'demo-user',
+      query: 'The offline retry test is now complete. Explain what changed, which uncertainty is answered, and why SMS consent is next. Cite only ClinicFlow sources. Do not use career memories or other projects.',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      durableMemories: [careerMemory, duplicateCareerMemory],
+      scope: { type: 'project', projectId: project.id },
+    });
+
+    expect(pack.relevantEvidence.map((source) => source.source_id)).toEqual([
+      'src_retry_results',
+      'src_steering',
+      'src_pilot',
+    ]);
+    expect(pack.provenanceSources[0].source_id).toBe('src_retry_results');
+    expect(pack.recentlyResolvedGaps.map((node) => node.id)).toContain('unknown_offline_retry');
+    expect(pack.unresolvedGaps.map((node) => node.id)).toContain('unknown_sms_consent');
+    expect(pack.userPreferences).toEqual([]);
+    expect(pack.includedContextIds).not.toContain(careerMemory.id);
+    expect(pack.includedContextIds).not.toContain(duplicateCareerMemory.id);
+  });
+
   it('retrieves a direct personal answer even when it is unrelated to the project goal', () => {
     const project = createGoldenDemoProject();
     project.title = 'Green pencils';

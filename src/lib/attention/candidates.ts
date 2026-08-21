@@ -291,6 +291,10 @@ export function generateAttentionCandidates(params: {
     );
   });
 
+  // Risks remain in the graph and Context Pack as evidence. They are not
+  // emitted as standalone Today recommendations because a raw risk has no
+  // answer or commitment the user can complete. Its linked UNKNOWN or
+  // explicit NEXT_ACTION is what belongs in the attention feed.
   reasoningProject.nodes
     .filter((node) => node.type === 'RISK' && node.status === 'OPEN')
     .forEach((node) => {

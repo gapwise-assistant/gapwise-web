@@ -49,6 +49,12 @@ describe('career conflict demo workflow', () => {
     expect(state.project.nodes.some((node) => node.text.includes('upcoming recruiter call'))).toBe(true);
     expect(question).toMatchObject({ type: 'UNKNOWN', status: 'OPEN' });
     expect(state.project.active_question?.node_id).toBe(CAREER_CONFLICT_QUESTION_ID);
+    expect(state.project.active_question?.guidance).toMatchObject({
+      generatedBy: 'deterministic',
+      focus: 'Decide whether the Northstar Product Engineer role is worth pursuing.',
+      nextStep: expect.stringMatching(/frontend-heavy period.*recruiter call/i),
+      whatCouldChange: expect.stringMatching(/Northstar interview loop/i),
+    });
     expect(detectCareerConflict(readCareerConflictJobDocument(), state.memories)).toBe(true);
   });
 

@@ -8,6 +8,7 @@ const DAY = 24 * HOUR;
 
 export const DEMO_PDF_EXTRACTION: PdfExtraction = {
   summary: 'Demo document about preparing a Gapwise hackathon presentation.',
+  reconciliation: [],
   nodes: [
     {
       type: 'GOAL',

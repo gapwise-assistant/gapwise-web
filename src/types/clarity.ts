@@ -43,6 +43,18 @@ export interface ClarityNode {
   updated_at: string;
   x?: number;
   y?: number;
+  /**
+   * Optional semantic identity metadata for extracted questions. The raw node
+   * remains in the persisted graph for provenance, while reasoning/UI
+   * projections can collapse aliases and subordinate questions onto the
+   * canonical node.
+   */
+  question_role?: 'canonical' | 'alias' | 'subquestion' | 'assumption' | 'related';
+  canonical_question_id?: string;
+  question_aliases?: string[];
+  reconciliation_confidence?: number;
+  reconciliation_reason?: string;
+  reconciliation_status?: 'reconciled' | 'fallback' | 'pending';
 }
 
 export interface ClarityEdge {
@@ -73,6 +85,17 @@ export interface ContextSource {
   extraction_hash?: string;
   relevance?: 'relevant' | 'possibly_not_relevant';
   discarded_at?: string;
+  reconciliation_summary?: QuestionReconciliationSummary;
+}
+
+export interface QuestionReconciliationSummary {
+  candidate_count: number;
+  canonical_merge_count: number;
+  subquestion_count: number;
+  assumption_count: number;
+  new_question_count: number;
+  fallback_count: number;
+  validation_status: 'passed' | 'fallback' | 'unavailable';
 }
 
 export interface UserMemoryProfile {
@@ -87,6 +110,56 @@ export interface UserMemoryProfile {
 
 export type { DurableMemory, MemoryCategory } from '@/types/contextPack';
 
+export type DecisionValueLevel = 'none' | 'low' | 'medium' | 'high';
+
+export type ExpectedActionChange =
+  | 'same_action'
+  | 'could_confirm'
+  | 'could_change_scope'
+  | 'could_change_sequence'
+  | 'could_change_risk'
+  | 'could_flip_decision';
+
+export interface DecisionValueTarget {
+  node_id: string;
+  node_type: Extract<NodeType, 'GOAL' | 'DECISION' | 'NEXT_ACTION' | 'RISK' | 'CONSTRAINT'>;
+  label: string;
+  importance: number;
+  relationship: EdgeType;
+  path_node_ids: string[];
+  path_edge_ids: string[];
+}
+
+/**
+ * Inspectable structural value of resolving one gap. Scores remain internal;
+ * normal product surfaces use `level` and `reason` only.
+ */
+export interface DecisionValueAssessment {
+  score: number;
+  level: DecisionValueLevel;
+  expected_action_change: ExpectedActionChange;
+  structural_leverage: number;
+  affected_targets: DecisionValueTarget[];
+  strongest_path: DecisionValueTarget | null;
+  urgency_contribution: number;
+  answerability_contribution: number;
+  acquisition_cost: number;
+  acquisition_difficulty: 'low' | 'medium' | 'high';
+  evidence_strength: 'none' | 'partial' | 'strong' | 'conflicting';
+  downstream_reversibility: 'unknown' | 'reversible' | 'partly_reversible' | 'hard_to_reverse';
+  meaningful_effect_count: number;
+  reason: string;
+}
+
+export interface GapGuidance {
+  focus: string;
+  whyNow: string;
+  nextStep: string;
+  whatCouldChange: string;
+  supportingIds: string[];
+  generatedBy: 'gap-agent' | 'deterministic';
+}
+
 export interface CandidateGap {
   node_id: string;
   question: string;
@@ -100,6 +173,8 @@ export interface CandidateGap {
   priority: number;
   reasons: string[];
   blocked_decision_ids: string[];
+  decision_value?: DecisionValueAssessment;
+  guidance?: GapGuidance;
 }
 
 export interface QuestionFeedback {

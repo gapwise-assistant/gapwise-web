@@ -2,6 +2,8 @@ import type { TodayQuestion } from '@/lib/today/sections';
 import { buildDecisionPath } from '@/lib/graph/constellation';
 import { ClarityEdge, ClarityNode, ContextSource, Project } from '@/types/clarity';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
+import { projectForReasoning } from '@/lib/context/sourceState';
+import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
 export interface QuestionWhyEvidence {
   sourceId?: string;
@@ -15,6 +17,8 @@ export interface QuestionWhyExplanation {
   whatGapswiseKnows: string[];
   whatCouldChange: string[];
   evidence: QuestionWhyEvidence[];
+  /** Narrower checks and assumptions retained under the canonical question. */
+  relatedChecks?: Array<{ kind: 'Subquestion' | 'Assumption'; text: string }>;
   reasoningPath: {
     nodeIds: string[];
     edgeIds: string[];
@@ -146,7 +150,12 @@ function findGoal(project: Project, pathNodeIds: string[]): ClarityNode | undefi
 }
 
 export function buildQuestionWhyExplanation(project: Project, question: TodayQuestion): QuestionWhyExplanation {
-  const node = directNodeForQuestion(project, question);
+  const sourceGroup = canonicalQuestionGroups(project).find((group) =>
+    question.sourceNodeIds.some((nodeId) => group.nodeIds.includes(nodeId))
+      || semanticallyEquivalentQuestion(group.canonical.text, question.question)
+  );
+  const reasoningProject = projectForReasoning(project);
+  const node = directNodeForQuestion(reasoningProject, question);
   if (!node) {
     return {
       whyThisMatters: 'This question is present in the current context, but its downstream decision impact has not been recorded yet.',
@@ -154,20 +163,21 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
       whatGapswiseKnows: [],
       whatCouldChange: [],
       evidence: [],
+      relatedChecks: [],
       reasoningPath: null,
     };
   }
 
-  const nodeEdges = edgesForNode(project, node.id);
+  const nodeEdges = edgesForNode(reasoningProject, node.id);
   const relatedNodes = nodeEdges
-    .map((edge) => edgeOtherNode(project, edge, node.id))
+    .map((edge) => edgeOtherNode(reasoningProject, edge, node.id))
     .filter((related): related is ClarityNode => Boolean(related));
-  const supported = supportedNodes(project, node.id);
-  const blocked = blockingNodes(project, node.id);
-  const downstream = downstreamNodes(project, node.id);
-  const path = buildDecisionPath(project, node.id);
-  const goal = findGoal(project, path.nodeIds);
-  const evidence = collectEvidence(project, [node, ...supported, ...relatedNodes]);
+  const supported = supportedNodes(reasoningProject, node.id);
+  const blocked = blockingNodes(reasoningProject, node.id);
+  const downstream = downstreamNodes(reasoningProject, node.id);
+  const path = buildDecisionPath(reasoningProject, node.id);
+  const goal = findGoal(reasoningProject, path.nodeIds);
+  const evidence = collectEvidence(reasoningProject, [node, ...supported, ...relatedNodes]);
   const knownFromNodes = supported
     .filter((related) => ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'DECISION', 'ASSUMPTION'].includes(related.type))
     .map(nodeDescription);
@@ -176,14 +186,20 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
     .map((item) => item.excerpt);
   const whatGapswiseKnows = uniqueText([...knownFromNodes, ...knownFromSources], MAX_KNOWN);
   const allImpactNodes = Array.from(new Map([...blocked, ...downstream, ...path.nodeIds
-    .map((nodeId) => project.nodes.find((candidate) => candidate.id === nodeId))
+    .map((nodeId) => reasoningProject.nodes.find((candidate) => candidate.id === nodeId))
     .filter((candidate): candidate is ClarityNode => Boolean(candidate))]
     .filter((candidate) => candidate.id !== node.id)
     .map((candidate) => [candidate.id, candidate])).values());
   const whatCouldChange = uniqueText([
     ...allImpactNodes.map(changeDescription),
-    ...relationshipChanges(project, node.id),
+    ...relationshipChanges(reasoningProject, node.id),
   ], MAX_CHANGES);
+  const relatedChecks = sourceGroup
+    ? [
+      ...sourceGroup.subquestions.map((item) => ({ kind: 'Subquestion' as const, text: nodeDescription(item) })),
+      ...sourceGroup.assumptions.map((item) => ({ kind: 'Assumption' as const, text: nodeDescription(item) })),
+    ].filter((item) => item.text !== nodeDescription(node)).slice(0, 4)
+    : [];
 
   const whyThisMatters = blocked[0]
     ? `The answer to this question is currently blocking the ${blocked[0].type.toLowerCase().replace('_', ' ')} “${nodeDescription(blocked[0])}”.`
@@ -203,6 +219,7 @@ export function buildQuestionWhyExplanation(project: Project, question: TodayQue
     whatGapswiseKnows,
     whatCouldChange,
     evidence,
+    relatedChecks,
     reasoningPath: path.nodeIds.length > 1 ? path : null,
   };
 }

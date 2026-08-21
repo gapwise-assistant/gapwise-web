@@ -17,6 +17,7 @@ function contextPack(overrides: Partial<ContextPack> = {}): ContextPack {
     activeGoals: [],
     recentImportantEvents: [],
     unresolvedGaps: [],
+    recentlyResolvedGaps: [],
     relevantEvidence: [],
     provenanceSources: [],
     userPreferences: [],

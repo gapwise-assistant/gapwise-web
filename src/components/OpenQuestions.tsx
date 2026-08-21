@@ -38,21 +38,21 @@ interface OpenQuestionsProps {
   items: OpenQuestionRowItem[];
   summary: string;
   onAnswer: (question: TodayQuestion) => void;
-  onHide?: (recommendation: AttentionCandidate) => void;
+  onHide?: (question: TodayQuestion, recommendation?: AttentionCandidate) => void;
 }
 
 function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAnswer' | 'onHide'> & { item: OpenQuestionRowItem }) {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
   useDismissibleMenu(menuOpen, setMenuOpen, menuRef);
-  const canHide = Boolean(item.recommendation && onHide);
+  const canHide = Boolean(onHide);
   const overflowLabels = questionOverflowLabels({
     answered: item.answered,
     canHide,
   });
   const handleOverflowAction = (label: string) => {
     setMenuOpen(false);
-    if (label === 'Hide from Today' && item.recommendation) onHide?.(item.recommendation);
+    if (label === 'Hide from Today') onHide?.(item.question, item.recommendation);
   };
   const toggleMenu = () => {
     if (menuOpen) {
@@ -66,12 +66,9 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
   const displaySummary = item.question.presentationSummary || item.context;
 
   return (
-    <article className={`border-l-2 px-3 py-2.5 sm:px-4 ${item.answered ? 'border-transparent bg-slate-950/30' : item.priority ? 'border-amber-400/70 bg-amber-950/10' : 'border-transparent'}`}>
+    <article className={`border-l-2 border-transparent px-3 py-2.5 sm:px-4 ${item.answered ? 'bg-slate-950/30' : ''}`}>
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
-          {item.priority && !item.answered && (
-            <p className="mb-0.5 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-300">Priority</p>
-          )}
           <p className={`text-[15px] font-bold leading-snug ${item.answered ? 'text-slate-400' : 'text-slate-100'}`}>
             {item.answered && <Check className="mr-1 inline h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />}
             {displayTitle}

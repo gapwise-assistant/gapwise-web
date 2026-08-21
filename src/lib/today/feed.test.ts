@@ -56,7 +56,7 @@ describe('Today primary feed', () => {
     expect(feed).toHaveLength(2);
     expect(feed[0]).toMatchObject({ itemType: 'QUESTION', title: 'What is the real housing budget?' });
     expect(feed[0].question?.id).toBe(question.id);
-    expect(feed[1].itemType).toBe('ACTION');
+    expect(feed[1].itemType).toBe('DECISION');
   });
 
   it('maps calendar commitments to reminders without exposing scores', () => {
@@ -66,6 +66,25 @@ describe('Today primary feed', () => {
 
     expect(feed[0].itemType).toBe('REMINDER');
     expect(feed[0].recommendation.score).toBeDefined();
+  });
+
+  it('does not turn a negative risk fact into a Today ACTION card', () => {
+    const project = createGoldenDemoProject();
+    project.nodes.push({
+      id: 'risk_negative_vendor',
+      type: 'RISK',
+      text: 'The vendor has not demonstrated safe retry behavior.',
+      status: 'OPEN',
+      confidence: 0.4,
+      impact: 0.95,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-11T10:00:00Z',
+      updated_at: '2026-08-11T10:00:00Z',
+    });
+    const feed = buildTodayFeed([candidate(project, 'rec_negative_risk', ['risk_negative_vendor'], 'risk')], [], project);
+
+    expect(feed).toEqual([]);
   });
 
   it('turns graph reasons into short natural question context', () => {

@@ -40,6 +40,7 @@ export interface ContextPack {
   activeGoals: ClarityNode[];
   recentImportantEvents: string[];
   unresolvedGaps: ClarityNode[];
+  recentlyResolvedGaps: ClarityNode[];
   relevantEvidence: EvidenceExcerpt[];
   provenanceSources: EvidenceExcerpt[];
   userPreferences: DurableMemory[];

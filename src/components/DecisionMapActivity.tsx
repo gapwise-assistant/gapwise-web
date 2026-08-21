@@ -182,9 +182,42 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                   <div className="mt-2 space-y-1 text-slate-500">
                     <p className="font-semibold text-slate-400">Candidate gaps</p>
                     {trace.gapAnalysis.candidates.length > 0 ? trace.gapAnalysis.candidates.map((candidate) => (
-                      <p key={candidate.id}>#{candidate.rank} {candidate.id} · priority {candidate.priority.toFixed(3)} · confidence {candidate.confidence.toFixed(3)} · {candidate.summary}</p>
+                      <div key={candidate.id} className="rounded-md border border-slate-800/80 bg-slate-950/40 p-2">
+                        <p>#{candidate.rank} {candidate.id} · priority {candidate.priority.toFixed(3)} · confidence {candidate.confidence.toFixed(3)} · {candidate.summary}</p>
+                        {candidate.decisionValue && (
+                          <div className="mt-1.5 space-y-1 border-t border-slate-800/70 pt-1.5 text-slate-600">
+                            <p>
+                              Decision value: <span className="text-slate-300">{candidate.decisionValue.level} ({candidate.decisionValue.score.toFixed(3)})</span>
+                              {' · '}expected change: {candidate.decisionValue.expectedActionChange.replaceAll('_', ' ')}
+                            </p>
+                            <p>
+                              Structural leverage {candidate.decisionValue.structuralLeverage.toFixed(3)}
+                              {' · '}urgency contribution {candidate.decisionValue.urgencyContribution.toFixed(3)}
+                              {' · '}answerability contribution {candidate.decisionValue.answerabilityContribution.toFixed(3)}
+                            </p>
+                            <p>
+                              Acquisition: {candidate.decisionValue.acquisitionDifficulty}
+                              {' · '}evidence: {candidate.decisionValue.evidenceStrength}
+                              {' · '}reversibility: {candidate.decisionValue.downstreamReversibility.replaceAll('_', ' ')}
+                            </p>
+                            <p title={candidate.decisionValue.affectedTargets.map((target) => `${target.type}:${target.id}`).join(', ')}>
+                              Affected targets: {candidate.decisionValue.affectedTargets.map((target) => `${target.type} · ${target.id}`).join(' | ') || 'none'}
+                            </p>
+                            <p title={candidate.decisionValue.strongestPathNodeIds.join(' → ')}>
+                              Strongest path: {candidate.decisionValue.strongestPathNodeIds.join(' → ') || 'none'}
+                              {candidate.decisionValue.strongestRelationship ? ` · ${candidate.decisionValue.strongestRelationship}` : ''}
+                            </p>
+                            <p>{candidate.decisionValue.reason}</p>
+                          </div>
+                        )}
+                      </div>
                     )) : <p>No candidate gaps.</p>}
                     <p className="mt-1 text-slate-400">Selected gap: <span className="text-cyan-200">{trace.gapAnalysis.selectedGapId ?? 'none'}</span></p>
+                    {typeof trace.gapAnalysis.retrievalAnswered === 'boolean' && (
+                      <p>Retrieved context: <span className={trace.gapAnalysis.retrievalAnswered ? 'text-emerald-300' : 'text-slate-400'}>
+                        {trace.gapAnalysis.retrievalAnswered ? 'already answers the candidates' : 'does not answer the selected gap'}
+                      </span></p>
+                    )}
                     <p>Reason: {trace.gapAnalysis.selectionReason}</p>
                     <p>Confidence: {trace.gapAnalysis.confidence === null ? 'n/a' : trace.gapAnalysis.confidence.toFixed(3)} · Evidence IDs: {trace.gapAnalysis.evidenceIds.join(', ') || 'none'}</p>
                     <p>Escalated: {trace.gapAnalysis.escalated ? 'yes' : 'no'}{trace.gapAnalysis.escalationReason ? ` · ${trace.gapAnalysis.escalationReason}` : ''}</p>

@@ -56,7 +56,7 @@ function summaryValue(value: unknown): string | null {
     .replace(/\s{2,}/g, ' ')
     .trim();
   if (normalized.length < 8 || normalized.length > 180) return null;
-  if (/^(?:blocks?|affects?)\b|^this (?:question|answer)\b.*\b(?:decision|interview)\b/i.test(normalized)) return null;
+  if (/^(?:blocks?|affects?)\b|\bblocks?:\s*["“]|^explicitly blocks\b|^this (?:question|answer)\b.*\b(?:decision|interview)\b/i.test(normalized)) return null;
   const firstSentence = normalized.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? normalized;
   return sentence(firstSentence, 150);
 }
@@ -68,6 +68,47 @@ function questionWithoutPunctuation(question: string): string {
 
 function lowerFirst(value: string): string {
   return value.charAt(0).toLowerCase() + value.slice(1);
+}
+
+const ACTION_VERBS = '(?:stay|run|fit|handle|support|remain|use|avoid|occur|work|meet|keep|need|include|require|operate|pass|reach|provide|allow|change|continue|be|have)';
+const HAS_VERBS = '(?:approved|accepted|agreed|checked|confirmed|completed|demonstrated|provided|received|reviewed|selected|supported|verified|run|passed|resolved|changed|met|shown|supplied)';
+
+function deterministicYesNoTitle(raw: string): string | null {
+  const canOrWill = raw.match(new RegExp(`^(Can|Will)\\s+(.+?)\\s+(safely\\s+)?(${ACTION_VERBS})\\b(.*)$`, 'i'));
+  if (canOrWill) {
+    const auxiliary = canOrWill[1].toLowerCase();
+    const subject = canOrWill[2];
+    const adverb = canOrWill[3] ?? '';
+    const verb = canOrWill[4];
+    const remainder = canOrWill[5] ?? '';
+    return `Confirm whether ${subject} ${auxiliary} ${adverb}${verb}${remainder}`;
+  }
+
+  const does = raw.match(new RegExp(`^Does\\s+(.+?)\\s+(${ACTION_VERBS})\\b(.*)$`, 'i'));
+  if (does) {
+    const inflections: Record<string, string> = {
+      be: 'is',
+      have: 'has',
+      include: 'includes',
+      keep: 'keeps',
+      need: 'needs',
+      operate: 'operates',
+      pass: 'passes',
+      provide: 'provides',
+      reach: 'reaches',
+      remain: 'remains',
+      require: 'requires',
+      support: 'supports',
+      use: 'uses',
+      work: 'works',
+    };
+    const verb = does[2].toLowerCase();
+    return `Confirm whether ${does[1]} ${inflections[verb] ?? `${verb}s`}${does[3] ?? ''}`;
+  }
+
+  const has = raw.match(new RegExp(`^Has\\s+(.+?)\\s+(${HAS_VERBS})\\b(.*)$`, 'i'));
+  if (has) return `Confirm whether ${has[1]} has ${has[2]}${has[3] ?? ''}`;
+  return null;
 }
 
 function namedCompany(facts: string[]): string | undefined {
@@ -110,11 +151,19 @@ function deterministicPresentation(question: TodayQuestionLike): TodayQuestionPr
   const raw = questionWithoutPunctuation(question.question);
   const lower = lowerFirst(raw);
   let title: string;
-  if (wrappedQuestion || /^what percentage\b/i.test(raw)) title = `Find out ${lower}`;
+  const canQuestion = raw.match(/^can\s+(one coordinator|the offline queue)\s+(.+)$/i);
+  const hasQuestion = raw.match(/^has\s+(.+)$/i);
+  const doesQuestion = raw.match(/^does\s+(.+)$/i);
+  const yesNoTitle = deterministicYesNoTitle(raw);
+  if (yesNoTitle) title = yesNoTitle;
+  else if (canQuestion) title = `Verify whether ${canQuestion[1]} can ${canQuestion[2]}`;
+  else if (hasQuestion) title = `Confirm whether ${lower.replace(/^has\s+/i, '')}`;
+  else if (doesQuestion) title = `Confirm whether ${lower.replace(/^does\s+/i, '')}`;
+  else if (wrappedQuestion || /^what percentage\b/i.test(raw)) title = `Find out ${lower}`;
   else if (/^what\b/i.test(raw)) title = `Find out ${lower}`;
   else if (/^which\b/i.test(raw)) title = `Clarify ${lower}`;
   else if (/^is there\b/i.test(raw)) title = `Confirm there is ${lower.replace(/^is there\s+/i, '')}`;
-  else if (/^is\b/i.test(raw)) title = `Confirm ${lower.replace(/^is\s+/i, '')}`;
+  else if (/^is\b/i.test(raw)) title = `Confirm whether ${lower.replace(/^is\s+/i, '')}`;
   else if (/^(are|does|do|can|will|should)\b/i.test(raw)) title = `Confirm ${lower.replace(/^(are|does|do|can|will|should)\s+/i, 'that ')}`;
   else title = `Clarify ${lower}`;
 

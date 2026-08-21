@@ -444,7 +444,9 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
               <p className="text-[10px] font-bold uppercase text-slate-500">Processed</p>
-              <p className="mt-1 text-xs text-slate-300">{formatDate(selectedSource.processed_at) ?? 'Not processed yet'}</p>
+              <p className="mt-1 text-xs text-slate-300">
+                {formatDate(selectedSource.processed_at ?? (selectedSource.processing_status === 'completed' ? selectedSource.extracted_at : undefined)) ?? 'Not processed yet'}
+              </p>
             </div>
           </div>
 
@@ -493,6 +495,12 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                 <div className="mt-2 space-y-2 rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400">
                   {selectedSource.storage_url && <p className="break-all"><span className="font-semibold text-slate-300">Stored at:</span> {selectedSource.storage_url}</p>}
                   {selectedSource.model_used && <p><span className="font-semibold text-slate-300">Analysis:</span> {selectedSource.model_used}</p>}
+                  {selectedSource.reconciliation_summary && (
+                    <p>
+                      <span className="font-semibold text-slate-300">Question reconciliation:</span>{' '}
+                      {selectedSource.reconciliation_summary.canonical_merge_count} merged, {selectedSource.reconciliation_summary.subquestion_count} subquestion{selectedSource.reconciliation_summary.subquestion_count === 1 ? '' : 's'}, {selectedSource.reconciliation_summary.new_question_count} new · {selectedSource.reconciliation_summary.validation_status}
+                    </p>
+                  )}
                   {selectedSource.hash && <p className="break-all"><span className="font-semibold text-slate-300">File fingerprint:</span> {selectedSource.hash}</p>}
                   {selectedSource.error_message && <p className="text-rose-300"><span className="font-semibold">Issue:</span> {selectedSource.error_message}</p>}
                 </div>

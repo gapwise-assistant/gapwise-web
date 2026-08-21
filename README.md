@@ -14,6 +14,37 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+### Localhost with live AI
+
+To start the web app and Python ADK service together with the cheapest live
+Gemini configuration, run:
+
+```bash
+npm run dev:ai
+```
+
+The command validates Google Application Default Credentials and the Gemini
+3.5+ model policy, forces `GAP_AGENT_MODE=live`, starts the agent on port 8080,
+starts Next.js on port 3000, and stops both processes when you press Ctrl+C.
+It uses local file-backed project storage by default while still allowing live
+Vertex AI calls. If credentials are missing, first run:
+
+```bash
+gcloud auth application-default login
+```
+
+On Today, `Gap Agent` means validated live AI guidance was applied.
+`Project analysis` means the deterministic fallback was used; open Decision Map
+activity to see the sanitized failure reason.
+
+For a complete product walkthrough using a deliberately messy, non-hardcoded
+ClinicFlow project, follow [`docs/full-live-ai-scenario.md`](docs/full-live-ai-scenario.md).
+After `npm run dev:ai` is ready, seed it with:
+
+```bash
+CONFIRM_LIVE_AI_COST=true npm run scenario:ai
+```
+
 ### Google sign-in
 
 In real mode, Gapswise requires Firebase Authentication. In the Firebase

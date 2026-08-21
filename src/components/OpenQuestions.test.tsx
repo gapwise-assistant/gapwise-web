@@ -24,7 +24,7 @@ function row(id: string, question: string, overrides: Partial<OpenQuestionRowIte
 }
 
 describe('OpenQuestions', () => {
-  it('groups open and answered rows with compact progress and one priority marker', () => {
+  it('groups open and answered rows without a duplicate priority marker', () => {
     const items = [
       row('persona', 'Who is the primary target persona?', { priority: true }),
       row('scenario', 'What should the demo show?'),
@@ -50,8 +50,8 @@ describe('OpenQuestions', () => {
     expect(html).not.toContain('Review decision');
     expect(html).toContain('Edit');
     expect(html).toContain('August 31, 2026.');
-    expect((html.match(/>Priority</g) ?? []).length).toBe(1);
-    expect((html.match(/aria-haspopup="menu"/g) ?? []).length).toBe(0);
+    expect((html.match(/>Priority</g) ?? []).length).toBe(0);
+    expect((html.match(/aria-haspopup="menu"/g) ?? []).length).toBe(2);
     expect(html).not.toContain('QUESTION');
   });
 

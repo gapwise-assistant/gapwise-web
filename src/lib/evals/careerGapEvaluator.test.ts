@@ -37,6 +37,7 @@ describe('CareerGap Golden Set v1', () => {
       expect(score.contractValid).toBe(true);
       expect(score.answeredSuppressionCorrect).toBe(true);
       expect(score.genericQuestionsAvoided).toBe(true);
+      expect(score.guidanceValid).toBe(true);
     }
   });
 
@@ -54,6 +55,7 @@ describe('CareerGap Golden Set v1', () => {
       'topConceptAccuracy',
       'evidenceClassificationAccuracy',
       'criticalEvidenceCoverage',
+      'guidanceValidity',
     ]);
   });
 

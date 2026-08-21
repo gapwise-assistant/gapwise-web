@@ -34,11 +34,28 @@ export interface TraceGapCandidate {
   priority: number;
   confidence: number;
   summary: string;
+  decisionValue?: {
+    score: number;
+    level: 'none' | 'low' | 'medium' | 'high';
+    expectedActionChange: string;
+    affectedTargets: Array<{ id: string; type: string }>;
+    strongestPathNodeIds: string[];
+    strongestRelationship: string | null;
+    structuralLeverage: number;
+    urgencyContribution: number;
+    answerabilityContribution: number;
+    acquisitionDifficulty: 'low' | 'medium' | 'high';
+    evidenceStrength: 'none' | 'partial' | 'strong' | 'conflicting';
+    downstreamReversibility: 'unknown' | 'reversible' | 'partly_reversible' | 'hard_to_reverse';
+    reason: string;
+  };
 }
 
 export interface TraceGapAnalysis {
   candidates: TraceGapCandidate[];
   selectedGapId: string | null;
+  /** True when scoped evidence answered every candidate, so no new question was selected. */
+  retrievalAnswered?: boolean;
   selectionReason: string;
   confidence: number | null;
   evidenceIds: string[];

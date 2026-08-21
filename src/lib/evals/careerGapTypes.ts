@@ -1,6 +1,6 @@
 import type { GapAnswerability, GapAssessmentV1, GapDecisionChangeLikelihood, GapEscalationReason, GapSuppressionReason } from '@/lib/agents/gapContractV1';
 import type { ContextPack, DurableMemory } from '@/types/contextPack';
-import type { Project } from '@/types/clarity';
+import type { GapGuidance, Project } from '@/types/clarity';
 import type { SafeCalendarEvent } from '@/types/google';
 
 export const CAREER_GAP_FIXTURE_VERSION = 'career-gap-v1' as const;
@@ -74,6 +74,7 @@ export interface CareerGapStrategyInput {
 
 export interface CareerGapStrategyResult {
   gapAssessment: GapAssessmentV1;
+  guidance: GapGuidance | null;
   attention: { urgency: ExpectedAttentionUrgency };
   partner: { action: ExpectedPartnerAction };
   runtime?: {

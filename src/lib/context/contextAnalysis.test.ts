@@ -65,6 +65,145 @@ describe('AI context graph analysis', () => {
     expect(result.project.clarity_score).toBe(calculateClarityScore(result.project));
   });
 
+  it('applies the batched Context Agent reconciliation to an existing canonical question', async () => {
+    const project = projectWithGoal('Build a quiet PC within budget.');
+    project.nodes.push({
+      id: 'q_psu',
+      type: 'UNKNOWN',
+      text: 'Can the existing 650 W power supply safely run the selected GPU?',
+      status: 'OPEN',
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The retailer has not guaranteed the older power supply.',
+      nodes: [{ type: 'UNKNOWN', text: 'Is the old 650 W PSU safe for the chosen GPU?', confidence: 0.9, impact: 0.9 }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'PARAPHRASE',
+        canonical_question_id: 'q_psu',
+        confidence: 0.96,
+        reason: 'The candidate asks the same PSU safety question with shorter wording.',
+      }],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_psu_quote',
+      filename: 'retailer-quote.txt',
+      content: 'Is the old 650 W PSU safe for the chosen GPU?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.filter((node) => node.type === 'UNKNOWN')).toHaveLength(1);
+    expect(result.project.nodes.find((node) => node.id === 'q_psu')).toMatchObject({
+      source_refs: ['src_psu_quote'],
+      question_aliases: ['Is the old 650 W PSU safe for the chosen GPU?'],
+      reconciliation_status: 'reconciled',
+    });
+    expect(result.project.sources.find((source) => source.id === 'src_psu_quote')?.reconciliation_summary).toMatchObject({
+      canonical_merge_count: 1,
+      validation_status: 'passed',
+    });
+  });
+
+  it('keeps explicit source wording when Gemini paraphrases a PC question', async () => {
+    const project = projectWithGoal('Build a quiet PC within budget.');
+    project.nodes.push({
+      id: 'q_wifi',
+      type: 'UNKNOWN',
+      text: 'Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?',
+      status: 'OPEN',
+      confidence: 0.8,
+      impact: 0.7,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The networking choice remains open.',
+      nodes: [{
+        type: 'UNKNOWN',
+        text: 'Does the build require wireless network access?',
+        confidence: 0.9,
+        impact: 0.7,
+      }],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_wifi_notes',
+      filename: 'room-and-network-notes.txt',
+      content: 'Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const wifi = result.project.nodes.find((node) => node.id === 'q_wifi');
+    expect(wifi?.text).toBe('Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?');
+    expect(wifi?.text).not.toContain('wireless network access');
+    expect(wifi?.source_refs).toContain('src_wifi_notes');
+  });
+
+  it('collapses paraphrases returned by the same Context Agent response', async () => {
+    const genAI = mockGenAI({
+      summary: 'The operating-system choice is still open.',
+      nodes: [
+        { type: 'UNKNOWN', text: 'Do I need Windows Pro for Hyper-V and Remote Desktop, or is Windows Home sufficient?', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'Is Windows Home sufficient for the project, or are Windows Pro features like Hyper-V and Remote Desktop required?', confidence: 0.88, impact: 0.8 },
+      ],
+      reconciliation: [
+        { candidate_index: 0, classification: 'NEW_UNCERTAINTY', confidence: 0.8, reason: 'New operating-system uncertainty.' },
+        { candidate_index: 1, classification: 'NEW_UNCERTAINTY', confidence: 0.8, reason: 'Another operating-system wording from the source.' },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Build a quiet PC within budget.'), input({
+      sourceId: 'src_os_notes',
+      filename: 'operating-system-notes.txt',
+      content: [
+        'The operating-system decision remains open.',
+        'Do I need Windows Pro for Hyper-V and Remote Desktop, or is Windows Home sufficient?',
+      ].join('\n'),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('src_os_notes'));
+    expect(questions).toHaveLength(1);
+    expect(questions[0]?.question_aliases).toContain('Is Windows Home sufficient for the project, or are Windows Pro features like Hyper-V and Remote Desktop required?');
+    expect(result.project.sources.find((source) => source.id === 'src_os_notes')?.reconciliation_summary).toMatchObject({
+      canonical_merge_count: 1,
+      validation_status: 'passed',
+    });
+  });
+
+  it('keeps every explicit unresolved question even when the model returns only surrounding evidence', async () => {
+    const genAI = mockGenAI({
+      summary: 'The ClinicFlow brief has several launch gates.',
+      nodes: [
+        { type: 'KNOWN', text: 'The pilot has a September go/no-go deadline.', confidence: 0.95, impact: 0.85 },
+        { type: 'RISK', text: 'Duplicate records would be unsafe.', confidence: 0.9, impact: 0.9 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Make a safe ClinicFlow pilot decision.'), input({
+      filename: 'clinicflow-brief.md',
+      content: [
+        'The go/no-go decision is blocked by four unresolved inputs:',
+        '- Who owns clinical accountability for medication corrections?',
+        '- Can offline retries avoid duplicate EHR records?',
+        '- Is SMS consent approved for PHI intake?',
+        '- Can one coordinator handle peak exception review?',
+      ].join('\n'),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('src_japan_notes'));
+    expect(questions.map((node) => node.text)).toEqual(expect.arrayContaining([
+      'Who owns clinical accountability for medication corrections?',
+      'Can offline retries avoid duplicate EHR records?',
+      'Is SMS consent approved for PHI intake?',
+      'Can one coordinator handle peak exception review?',
+    ]));
+    expect(questions).toHaveLength(4);
+  });
+
   it('allows a small goal-relevant inferred gap and rejects generic unknowns', async () => {
     const genAI = mockGenAI({
       summary: 'The trip outline is missing a decision-driving budget.',

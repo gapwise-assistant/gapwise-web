@@ -2,6 +2,7 @@ import type { AttentionCandidate } from '@/types/attention';
 import type { Project, ClarityNode } from '@/types/clarity';
 import { todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
+import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
 export type TodayItemType = 'QUESTION' | 'ACTION' | 'DECISION' | 'REMINDER';
 
@@ -33,7 +34,13 @@ export function todayItemType(recommendation: AttentionCandidate, project: Proje
   const nodes = sourceNodes(recommendation, project);
   if (questionNode(nodes)) return 'QUESTION';
   if (nodes.some((node) => node.type === 'DECISION')) return 'DECISION';
-  return 'ACTION';
+  // Only explicit graph actions belong in the ACTION lane. Risks and negative
+  // facts are evidence for a question, not tasks the user can mark
+  // Done/Snooze from Today.
+  if (nodes.some((node) => node.type === 'NEXT_ACTION')) {
+    return 'ACTION';
+  }
+  return 'DECISION';
 }
 
 export function compactQuestionContext(item: TodayFeedItem, project: Project): string {
@@ -50,8 +57,16 @@ export function compactQuestionContext(item: TodayFeedItem, project: Project): s
   return 'Your answer will guide the next project decision.';
 }
 
+export function compactQuestionReason(reason: string): string {
+  if (/\b(?:blocks?|affects?|depends on|blocked by)\b/i.test(reason)) {
+    return 'Your answer will shape the next project decision.';
+  }
+  if (/^this unresolved item/i.test(reason)) return 'This uncertainty can affect the next project decision.';
+  return reason;
+}
+
 function actionableNode(nodes: ClarityNode[]): ClarityNode | undefined {
-  return nodes.find((node) => ['NEXT_ACTION', 'DECISION', 'RISK'].includes(node.type));
+  return nodes.find((node) => ['NEXT_ACTION', 'DECISION'].includes(node.type));
 }
 
 function displayTitle(recommendation: AttentionCandidate, itemType: TodayItemType, project: Project): string {
@@ -59,16 +74,13 @@ function displayTitle(recommendation: AttentionCandidate, itemType: TodayItemTyp
   if (itemType === 'QUESTION') return questionNode(nodes)?.text ?? recommendation.next_action;
   if (itemType === 'REMINDER') return recommendation.title.replace(/^Prepare for\s+/i, '');
   if (itemType === 'DECISION') return actionableNode(nodes)?.text ?? recommendation.title;
-  if (itemType === 'ACTION' && recommendation.kind === 'risk') {
-    return recommendation.next_action.replace(/^Decide a mitigation for:\s*/i, '') || recommendation.title;
-  }
   return recommendation.title;
 }
 
-function displayDescription(recommendation: AttentionCandidate, itemType: TodayItemType): string {
+function displayDescription(recommendation: AttentionCandidate, itemType: TodayItemType, title: string): string {
   const reason = recommendation.reason.trim();
   const blockedDecision = reason.match(/^Blocks decision:\s*"(.+)"$/i);
-  if (blockedDecision) return `This question is blocking ${blockedDecision[1]}.`;
+  if (blockedDecision) return 'This question could change the next project decision.';
   if (/^Blocks primary project goal execution$/i.test(reason)) {
     return itemType === 'QUESTION'
       ? 'Answering this reduces uncertainty around the current project direction.'
@@ -77,7 +89,8 @@ function displayDescription(recommendation: AttentionCandidate, itemType: TodayI
   if (/^High downstream impact/i.test(reason)) return 'This can change an important downstream decision.';
   if (/^Currently unverified/i.test(reason)) return 'The available evidence is still incomplete.';
   if (/^Determines the 4-minute hackathon demo scenario/i.test(reason)) return 'This could shape the next important project decision.';
-  return reason;
+  const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return normalized(reason) === normalized(title) ? '' : reason;
 }
 
 function calendarCommitmentFor(recommendation: AttentionCandidate): ClarityNode | undefined {
@@ -87,10 +100,11 @@ function calendarCommitmentFor(recommendation: AttentionCandidate): ClarityNode 
 }
 
 function matchingQuestion(recommendation: AttentionCandidate, questions: TodayQuestion[], project: Project): TodayQuestion | undefined {
-  const existing = questions.find((question) => question.sourceNodeIds.some((nodeId) => recommendation.source_node_ids.includes(nodeId)));
+  const sourceQuestion = questionNode(sourceNodes(recommendation, project));
+  const existing = questions.find((question) => question.sourceNodeIds.some((nodeId) => recommendation.source_node_ids.includes(nodeId))
+    || (sourceQuestion && semanticallyEquivalentQuestion(question.question, sourceQuestion.text)));
   if (existing) return existing;
-  const node = questionNode(sourceNodes(recommendation, project));
-  return node ? todayQuestionFromNode(project, node) : undefined;
+  return sourceQuestion ? todayQuestionFromNode(project, sourceQuestion) : undefined;
 }
 
 function linkedDecisionNodeId(recommendation: AttentionCandidate, project: Project): string | undefined {
@@ -113,7 +127,13 @@ function linkedDecisionNodeId(recommendation: AttentionCandidate, project: Proje
 function underlyingKey(itemType: TodayItemType, recommendation: AttentionCandidate, project: Project): string {
   const nodes = sourceNodes(recommendation, project);
   const primaryNode = itemType === 'QUESTION' ? questionNode(nodes) : actionableNode(nodes);
-  if (primaryNode) return `${itemType}:${primaryNode.id}`;
+  if (primaryNode) {
+    if (itemType === 'QUESTION') {
+      const group = canonicalQuestionGroups(project).find((candidate) => candidate.nodeIds.includes(primaryNode.id));
+      return `${itemType}:${group?.canonical.id ?? primaryNode.id}`;
+    }
+    return `${itemType}:${primaryNode.id}`;
+  }
   return `${itemType}:${recommendation.id}`;
 }
 
@@ -128,15 +148,20 @@ export function buildTodayFeed(
 
   recommendations.forEach((recommendation) => {
     const itemType = todayItemType(recommendation, project);
+    // A risk node is retained in the graph and retrieval context, but it is
+    // not a standalone Today action. Its actionable UNKNOWN (if any) is what
+    // the user should resolve.
+    if (itemType === 'DECISION' && recommendation.kind === 'risk') return;
     const key = underlyingKey(itemType, recommendation, project);
     if (seen.has(key)) return;
     seen.add(key);
     const calendarCommitment = itemType === 'REMINDER' ? calendarCommitmentFor(recommendation) : undefined;
+    const title = displayTitle(recommendation, itemType, project);
     items.push({
       recommendation,
       itemType,
-      title: displayTitle(recommendation, itemType, project),
-      description: displayDescription(recommendation, itemType),
+      title,
+      description: displayDescription(recommendation, itemType, title),
       calendarStart: calendarCommitment ? calendarTimestampFromText(calendarCommitment.text, 'Starts') : undefined,
       calendarEnd: calendarCommitment ? calendarTimestampFromText(calendarCommitment.text, 'Ends') : undefined,
       calendarSource: calendarCommitment ? 'Google Calendar' : undefined,

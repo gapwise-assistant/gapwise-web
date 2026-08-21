@@ -1,4 +1,5 @@
 import type { ClarityNode, Project } from '@/types/clarity';
+import { projectForReasoning } from '@/lib/context/sourceState';
 
 export interface CurrentPictureItem {
   id: string;
@@ -108,8 +109,9 @@ function summarizeBlockerQuestion(text: string): string {
 
 /** Returns the highest-priority open UNKNOWN that directly blocks a decision or next action. */
 export function buildNeedsAttention(project: Project): NeedsAttentionItem | null {
-  const nodes = new Map(project.nodes.map((node) => [node.id, node]));
-  const blockers = project.edges
+  const reasoningProject = projectForReasoning(project);
+  const nodes = new Map(reasoningProject.nodes.map((node) => [node.id, node]));
+  const blockers = reasoningProject.edges
     .filter((edge) => edge.type === 'blocks')
     .map((edge) => {
       const source = nodes.get(edge.source);
@@ -117,7 +119,7 @@ export function buildNeedsAttention(project: Project): NeedsAttentionItem | null
       if (
         !source ||
         !target ||
-        source.type !== 'UNKNOWN' ||
+        !['UNKNOWN', 'ASSUMPTION'].includes(source.type) ||
         source.status !== 'OPEN' ||
         target.status === 'DEPRECATED' ||
         !['DECISION', 'NEXT_ACTION'].includes(target.type)

@@ -22,7 +22,7 @@ export interface AnswerQuestionDecisionSupport {
   } | null;
 }
 
-type ResolveSection = 'know' | 'affects' | 'changes' | 'options' | 'sources';
+type ResolveSection = 'know' | 'affects' | 'changes' | 'checks' | 'options' | 'sources';
 
 export interface AnswerQuestionTarget {
   nodeId?: string;
@@ -126,6 +126,7 @@ export function AnswerQuestionModal({
   const sources = (target.explanation?.evidence ?? []).filter((source) => source.title.trim());
   const whatThisAffects = (target.explanation?.whatThisBlocks ?? []).filter((item) => item.trim());
   const whatCouldChange = (target.explanation?.whatCouldChange ?? []).filter((item) => item.trim());
+  const relatedChecks = (target.explanation?.relatedChecks ?? []).filter((item) => item.text.trim()).slice(0, 4);
   const decisionSupport = target.decisionSupport;
   const hasOptions = Boolean(decisionSupport && (decisionSupport.options.length > 0 || decisionSupport.recommendation));
   const selectedOption = decisionSupport?.options.find((option) => option.id === selectedOptionId);
@@ -207,6 +208,18 @@ export function AnswerQuestionModal({
               {whatCouldChange.length > 0 && (
                 <AccordionSection id="changes" label="What your answer could change" open={openSections.includes('changes')} onToggle={toggleSection}>
                   <ul className="space-y-2">{whatCouldChange.slice(0, 3).map((item) => <li key={item} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />{presentationImpact(item)}</li>)}</ul>
+                </AccordionSection>
+              )}
+              {relatedChecks.length > 0 && (
+                <AccordionSection id="checks" label="Related checks" open={openSections.includes('checks')} onToggle={toggleSection}>
+                  <ul className="space-y-2">
+                    {relatedChecks.map((item) => (
+                      <li key={`${item.kind}-${item.text}`} className="flex gap-2 text-xs leading-relaxed text-slate-300">
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-500" />
+                        <span><span className="font-semibold text-slate-400">{item.kind}:</span> {item.text}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </AccordionSection>
               )}
               {hasOptions && decisionSupport && (

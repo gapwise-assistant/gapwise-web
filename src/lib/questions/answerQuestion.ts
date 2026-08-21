@@ -6,6 +6,7 @@ import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { Project } from '@/types/clarity';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
+import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -30,7 +31,8 @@ export interface ReopenAnsweredQuestionResult {
 }
 
 function assertAnswerable(project: Project, nodeId: string) {
-  const node = project.nodes.find((item) => item.id === nodeId);
+  const group = canonicalQuestionGroups(project).find((candidate) => candidate.nodeIds.includes(nodeId));
+  const node = group?.canonical ?? project.nodes.find((item) => item.id === nodeId);
   if (!node) return null;
   if (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION') {
     throw new StorageError('Only an open question or assumption can be answered.', 'VALIDATION_ERROR');

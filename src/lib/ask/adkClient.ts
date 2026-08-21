@@ -60,6 +60,7 @@ const contextPackResponseSchema = z.object({
     provenanceSources: z.array(evidenceSchema).default([]),
     activeGoals: z.array(graphNodeSchema).default([]),
     unresolvedGaps: z.array(graphNodeSchema).default([]),
+    recentlyResolvedGaps: z.array(graphNodeSchema).default([]),
     recentDecisions: z.array(graphNodeSchema).default([]),
     contradictions: z.array(graphNodeSchema).default([]),
     userPreferences: z.array(z.object({
@@ -232,7 +233,8 @@ function compactAdkTextChunks(chunks: string[]): string {
 }
 
 function removeRepeatedContent(text: string): string {
-  const withoutRepeatedBlocks = removeRepeatedMarkdownBlocks(text);
+  const withoutCumulativeDraft = keepLastRepeatedOpening(text);
+  const withoutRepeatedBlocks = removeRepeatedMarkdownBlocks(withoutCumulativeDraft);
   const paragraphs = withoutRepeatedBlocks
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.trim())
@@ -247,6 +249,20 @@ function removeRepeatedContent(text: string): string {
     return true;
   });
   return removeRepeatedSentenceRun(unique.join('\n\n').trim());
+}
+
+function keepLastRepeatedOpening(text: string): string {
+  if (text.length < 160) return text;
+  const openingWords = text.match(/[a-zA-Z0-9'-]+/g)?.slice(0, 8) ?? [];
+  if (openingWords.length < 8) return text;
+  const openingPattern = openingWords
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^a-zA-Z0-9]+');
+  const matches = Array.from(text.matchAll(new RegExp(openingPattern, 'gi')));
+  const last = matches[matches.length - 1];
+  if (matches.length < 2 || last.index === undefined || last.index < 80) return text;
+  const repeatedBlockStart = text.lastIndexOf('\n', last.index - 1) + 1;
+  return text.slice(repeatedBlockStart).trim();
 }
 
 function removeRepeatedMarkdownBlocks(text: string): string {
@@ -309,6 +325,24 @@ function compactContextText(value: string, maxLength = 500): string {
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
 }
 
+function mergedContextEvidence(contextPack: AskContextPack): Array<z.infer<typeof evidenceSchema>> {
+  const merged = new Map<string, z.infer<typeof evidenceSchema>>();
+  [...contextPack.relevantEvidence, ...contextPack.provenanceSources].forEach((item) => {
+    const existing = merged.get(item.source_id);
+    if (!existing) {
+      merged.set(item.source_id, item);
+      return;
+    }
+    merged.set(item.source_id, {
+      ...item,
+      excerpt: existing.excerpt,
+      score: Math.max(existing.score ?? 0, item.score ?? 0),
+      supports: Array.from(new Set([...(existing.supports ?? []), ...(item.supports ?? [])])),
+    });
+  });
+  return Array.from(merged.values());
+}
+
 function contextPromptForAgent(message: string, contextPack: AskContextPack | null, projectId?: string): string {
   if (!contextPack) return message;
   const sections: string[] = [];
@@ -319,11 +353,16 @@ function contextPromptForAgent(message: string, contextPack: AskContextPack | nu
   addSection('Active goals', contextPack.activeGoals.map((node) => compactContextText(node.text)));
   addSection('User preferences', contextPack.userPreferences.map((memory) => compactContextText(memory.text)));
   addSection('Unresolved questions', contextPack.unresolvedGaps.map((node) => compactContextText(node.text)));
+  addSection('Recently answered questions', contextPack.recentlyResolvedGaps.map((node) => compactContextText(
+    `${node.text}${node.why_it_matters?.length ? ` — ${node.why_it_matters.join(' ')}` : ''}`
+  )));
   addSection('Recent decisions', contextPack.recentDecisions.map((node) => compactContextText(node.text)));
-  addSection('Relevant project documents and evidence', [...contextPack.provenanceSources, ...contextPack.relevantEvidence].map((source) => `${source.filename}: ${compactContextText(source.excerpt)}`));
+  addSection('Relevant project documents and evidence', mergedContextEvidence(contextPack).map((source) => `${source.filename}: ${compactContextText(source.excerpt)}`));
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
   if (!sections.length) return message;
   return [
+    'PRELOADED GAPWISE CONTEXT PACK',
+    'This Context Pack was retrieved for the exact user question below. Use it directly; do not retrieve a second Context Pack for this turn.',
     'Use the selected project context below as the source of truth. Do not invent facts outside it.',
     projectId ? `Project scope: ${projectId}` : 'Scope: all available context',
     sections.join('\n\n'),
@@ -358,20 +397,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
       return { sources: [], contextPack: null };
     }
 
-    const evidence = [
-      ...parsed.data.contextPack.provenanceSources,
-      ...parsed.data.contextPack.relevantEvidence,
-    ];
-    const mergedEvidence = new Map<string, (typeof evidence)[number]>();
-    evidence.forEach((item) => {
-      const existing = mergedEvidence.get(item.source_id);
-      mergedEvidence.set(item.source_id, {
-        ...existing,
-        ...item,
-        supports: item.supports ?? existing?.supports,
-      });
-    });
-    const evidenceSources: AskSource[] = Array.from(mergedEvidence.values()).map((item) => ({
+    const evidenceSources: AskSource[] = mergedContextEvidence(parsed.data.contextPack).map((item) => ({
       id: item.source_id,
       title: humanizeSourceTitle(item.filename),
       excerpt: item.excerpt,
@@ -385,6 +411,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
     const selectedNodes = [
       ...parsed.data.contextPack.activeGoals,
       ...parsed.data.contextPack.unresolvedGaps,
+      ...parsed.data.contextPack.recentlyResolvedGaps,
       ...parsed.data.contextPack.recentDecisions,
       ...parsed.data.contextPack.contradictions,
     ];
@@ -438,7 +465,7 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
 }
 
 function isRefusal(answer: string): boolean {
-  return /\b(?:cannot|can't|can not|unable to|do not have access|don't have access|do not have a|don't have a|limited to|not able to|as an ai|i am an ai|i'm an ai|only help with)\b/i.test(answer);
+  return /\b(?:i\s+(?:cannot|can't|can not|am unable to|am not able to|do not have access|don't have access|do not have a|don't have a)|as an ai|i am an ai|i'm an ai|i can only help with|i'm limited to|i am limited to)\b/i.test(answer);
 }
 
 function directEvidenceAnswer(question: string, answer: string, sources: AskSource[]): string | null {

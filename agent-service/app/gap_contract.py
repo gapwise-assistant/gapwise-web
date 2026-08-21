@@ -136,6 +136,26 @@ class GapAssessmentV1(BaseModel):
         return self
 
 
+class GapGuidanceDraftV1(BaseModel):
+    """Concise, grounded product copy returned with one selected gap."""
+
+    focus: str = Field(min_length=3, max_length=180)
+    whyNow: str = Field(min_length=3, max_length=260)
+    nextStep: str = Field(min_length=3, max_length=260)
+    whatCouldChange: str = Field(min_length=3, max_length=260)
+    supportingIds: list[str] = Field(min_length=1, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_supporting_ids(self) -> GapGuidanceDraftV1:
+        if len(self.supportingIds) != len(set(self.supportingIds)):
+            raise ValueError("Guidance supporting identifiers must be unique.")
+        return self
+
+
+class GapGuidanceV1(GapGuidanceDraftV1):
+    generatedBy: Literal["gap-agent"] = "gap-agent"
+
+
 class GapSelectionDraftV1(BaseModel):
     """Compact ADK output; deterministic graph fields stay authoritative."""
 
@@ -144,6 +164,15 @@ class GapSelectionDraftV1(BaseModel):
     selectionRationale: str = Field(min_length=1)
     escalationEligible: bool
     escalationReasons: list[EscalationReason]
+    recommendation: GapGuidanceDraftV1 | None
+
+    @model_validator(mode="after")
+    def validate_recommendation_presence(self) -> GapSelectionDraftV1:
+        if self.selectedGapId is None and self.recommendation is not None:
+            raise ValueError("A completed decision cannot include gap guidance.")
+        if self.selectedGapId is not None and self.recommendation is None:
+            raise ValueError("A selected gap requires user-facing guidance.")
+        return self
 
 
 class GapGraphNode(BaseModel):
@@ -216,6 +245,7 @@ class GapRunMetadata(BaseModel):
 
 class GapAssessmentResponse(BaseModel):
     assessment: GapAssessmentV1
+    recommendation: GapGuidanceV1 | None
     metadata: GapRunMetadata
 
 

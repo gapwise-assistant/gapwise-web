@@ -4,11 +4,14 @@ import { agentNames, OrchestratorTrace, orchestratorTraceSchema, PartnerAgentOut
 import { runAttentionAgent } from '@/lib/agents/attentionAgent';
 import { runContextAgent } from '@/lib/agents/contextAgent';
 import { assessGapEscalation, runGapAgent } from '@/lib/agents/gapAgent';
+import { assessGapsV1Deterministically, gapAgentOutputFromAssessment, hasLiveDecision } from '@/lib/agents/gapAssessmentV1';
 import { runPartnerAgent } from '@/lib/agents/partnerAgent';
 import { createGraphNode, rankGaps } from '@/lib/tools/graphTools';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { getAgentModelPolicy, getGapEscalationModelConfig } from '@/lib/agents/modelPolicy';
 import type { TraceAgentRun, TraceGapAnalysis, TraceHandoff } from '@/types/observability';
+import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
+import { reconcileQuestionCandidate } from '@/lib/questions/canonical';
 
 export interface AgentTurnResult {
   project: Project;
@@ -49,6 +52,40 @@ export function runGapswiseOrchestrator(
   const policy = getAgentModelPolicy();
   const escalationConfig = getGapEscalationModelConfig();
   const workingProject: Project = JSON.parse(JSON.stringify(params.project));
+  const contextStarted = Date.now();
+  const contextResult = runContextAgent(params.input, workingProject);
+  const contextLatency = Date.now() - contextStarted;
+
+  if (params.applyGraphUpdates) {
+    contextResult.graphUpdate.createNodes.forEach((node) => {
+      const reconciliation = reconcileQuestionCandidate(node, workingProject);
+      const isQuestion = node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
+      createGraphNode(workingProject, {
+        type: node.type,
+        text: node.text,
+        confidence: node.confidence,
+        impact: node.impact,
+        source_refs: node.sourceRefs,
+        ...(isQuestion ? {
+          question_role: reconciliation.classification === 'SUBQUESTION'
+            ? 'subquestion'
+            : reconciliation.classification === 'ASSUMPTION' || node.type === 'ASSUMPTION'
+              ? 'assumption'
+              : reconciliation.classification === 'RELATED_BUT_DISTINCT'
+                ? 'related'
+              : 'canonical',
+          canonical_question_id: reconciliation.canonicalQuestionId,
+          reconciliation_confidence: reconciliation.confidence,
+          reconciliation_reason: reconciliation.reason,
+          reconciliation_status: 'fallback' as const,
+        } : {}),
+      });
+    });
+  }
+
+  // Build the pack after local extraction so the Gap Agent sees the same
+  // project state that the rest of this turn will reason about. The pack is
+  // now the candidate/evidence boundary, rather than an unused trace input.
   const contextPack = buildContextPack({
     userId: params.userId,
     query: params.input,
@@ -56,26 +93,22 @@ export function runGapswiseOrchestrator(
     profile: params.profile,
     durableMemories: params.durableMemories,
   });
-  const contextStarted = Date.now();
-  const contextResult = runContextAgent(params.input, workingProject);
-  const contextLatency = Date.now() - contextStarted;
-
-  if (params.applyGraphUpdates) {
-    contextResult.graphUpdate.createNodes.forEach((node) => {
-      createGraphNode(workingProject, {
-        type: node.type,
-        text: node.text,
-        confidence: node.confidence,
-        impact: node.impact,
-        source_refs: node.sourceRefs,
-      });
-    });
-  }
 
   const candidates = rankGaps(workingProject);
   const escalation = assessGapEscalation(workingProject, candidates);
   const gapStarted = Date.now();
-  const gapOutput = runGapAgent(workingProject);
+  const gapAssessment = assessGapsV1Deterministically({
+    project: workingProject,
+    contextPack,
+    memories: params.durableMemories ?? [],
+  });
+  const gapOutput = gapAssessment.selectedGapId || hasLiveDecision(workingProject)
+    ? gapAgentOutputFromAssessment(workingProject, gapAssessment)
+    : runGapAgent(workingProject);
+  const effectiveGap = gapOutput.selectedGapNodeId
+    ? candidates.find((candidate) => candidate.node_id === gapOutput.selectedGapNodeId) ?? null
+    : null;
+  workingProject.active_question = effectiveGap;
   const gapLatency = Date.now() - gapStarted;
   const attentionStarted = Date.now();
   const attentionOutput = runAttentionAgent(workingProject);
@@ -83,6 +116,23 @@ export function runGapswiseOrchestrator(
   const partnerStarted = Date.now();
   const partner = runPartnerAgent(workingProject, params.profile, gapOutput, attentionOutput);
   const partnerLatency = Date.now() - partnerStarted;
+  const gapByNode = new Map(candidates.map((candidate) => [candidate.node_id, candidate]));
+  const gapTraceCandidates = gapAssessment.candidates
+    .map((candidate) => {
+      const nodeId = candidate.sourceUnknownNodeIds[0];
+      const rankedGap = gapByNode.get(nodeId);
+      return {
+        id: nodeId,
+        rank: 0,
+        priority: rankedGap?.priority ?? 0,
+        confidence: ({ low: 0.35, medium: 0.65, high: 0.9 }[candidate.assessmentConfidence] ?? 0),
+        summary: `${candidate.affectedDecisions.length} affected decisions · ${candidate.evidenceReview.evidenceIds.length} evidence IDs · ${candidate.evidenceReview.answerability}${candidate.suppressionReason ? ` · suppressed: ${candidate.suppressionReason}` : ''}`,
+        decisionValue: rankedGap ? decisionValueForTrace(rankedGap) : undefined,
+      };
+    })
+    .sort((left, right) => right.priority - left.priority || left.id.localeCompare(right.id))
+    .slice(0, 5)
+    .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 
   const runFor = (
     role: keyof typeof policy,
@@ -111,24 +161,23 @@ export function runGapswiseOrchestrator(
   });
 
   const gapAnalysis: TraceGapAnalysis = {
-    candidates: candidates.slice(0, 5).map((candidate, index) => {
-      const node = workingProject.nodes.find((item) => item.id === candidate.node_id);
-      return {
-        id: candidate.node_id,
-        rank: index + 1,
-        priority: candidate.priority,
-        confidence: Number((1 - candidate.uncertainty).toFixed(3)),
-        summary: `${node?.type.toLowerCase() ?? 'gap'} · ${candidate.blocked_decision_ids.length} linked decisions · ${node?.source_refs.length ?? 0} evidence links`,
-      };
-    }),
+    candidates: gapTraceCandidates,
     selectedGapId: gapOutput.selectedGapNodeId,
+    retrievalAnswered: gapOutput.retrievalAnswered,
     selectionReason: gapOutput.selectedGapNodeId
-      ? 'Highest deterministic priority after uncertainty, impact, dependencies, urgency, answerability, and user relevance.'
+      ? gapAssessment.selectedGapId
+        ? gapAssessment.selectionRationale
+        : 'No live decision target exists yet; retained the existing graph question until one is created.'
       : 'No open high-impact gap was available.',
     confidence: gapOutput.selectedGapNodeId
-      ? gapAnalysisConfidence(candidates[0])
+      ? (() => {
+        const selected = gapAssessment.candidates.find((candidate) => candidate.gapId === gapAssessment.selectedGapId);
+        return selected
+          ? ({ low: 0.35, medium: 0.65, high: 0.9 }[selected.assessmentConfidence] ?? null)
+          : null;
+      })()
       : null,
-    evidenceIds: workingProject.nodes.find((node) => node.id === gapOutput.selectedGapNodeId)?.source_refs ?? [],
+    evidenceIds: gapAssessment.candidates.find((candidate) => candidate.gapId === gapAssessment.selectedGapId)?.evidenceReview.evidenceIds ?? [],
     escalated: false,
     escalationReason: escalation.reasons.length
       ? `${escalation.reasons.join('; ')}; deterministic runner recorded no retry.`
@@ -151,7 +200,7 @@ export function runGapswiseOrchestrator(
     runFor(
       'gap',
       gapLatency,
-      `${candidates.length} ranked gap candidates`,
+      `${gapAssessment.candidates.length} scoped Context Pack gap candidates`,
       gapOutput.selectedGapNodeId ? `Selected ${gapOutput.selectedGapNodeId}` : 'No unresolved gap selected',
       gapAnalysis.confidence,
       gapAnalysis.escalationReason,
@@ -175,13 +224,13 @@ export function runGapswiseOrchestrator(
   const handoffs: TraceHandoff[] = [
     {
       id: `${turnId}_context_gap`, from: 'Context', to: 'Gap',
-      inputCount: contextPack.includedContextIds.length, outputCount: candidates.length,
-      selectedIds: candidates.slice(0, 5).map((candidate) => candidate.node_id),
-      summary: 'Context Pack and extracted graph candidates handed to gap ranking.',
+      inputCount: contextPack.includedContextIds.length, outputCount: gapAssessment.candidates.length,
+      selectedIds: gapAssessment.candidates.slice(0, 5).map((candidate) => candidate.sourceUnknownNodeIds[0]),
+      summary: 'Context Pack scoped the graph candidates and supplied retrieved evidence to Gap assessment.',
     },
     {
       id: `${turnId}_gap_attention`, from: 'Gap', to: 'Attention',
-      inputCount: candidates.length, outputCount: gapOutput.selectedGapNodeId ? 1 : 0,
+      inputCount: gapAssessment.candidates.length, outputCount: gapOutput.selectedGapNodeId ? 1 : 0,
       selectedIds: gapOutput.selectedGapNodeId ? [gapOutput.selectedGapNodeId] : [],
       summary: 'Ranked uncertainty handed to attention prioritization.',
     },
@@ -226,8 +275,4 @@ export function runGapswiseOrchestrator(
   });
 
   return { project: workingProject, partner, contextPack, trace, observability: { agentRuns, gapAnalysis, handoffs } };
-}
-
-function gapAnalysisConfidence(candidate: ReturnType<typeof rankGaps>[number] | undefined): number | null {
-  return candidate ? Number((1 - candidate.uncertainty).toFixed(3)) : null;
 }

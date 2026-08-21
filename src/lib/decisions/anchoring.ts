@@ -58,7 +58,7 @@ function compactTitle(value: string): string {
  * create graph structure: the user must be looking at a pending choice.
  */
 export function hasExplicitOpenDecisionCue(value: string): boolean {
-  return /\b(?:open decision|pending decision|unresolved decision|decision pending|decision\s*:\s*(?:should|whether|which|do|can|will|choose|launch|pilot)|decision or choice remains?\s+(?:open|pending|unresolved)|go\s*\/\s*no[- ]go|still deciding|we need to decide|need to decide|decide whether|should we|choose between|launch or|pilot or|before we decide)\b/i.test(value);
+  return /\b(?:open decision|pending(?:\s+[a-z0-9/-]+){0,3}\s+decision|unresolved(?:\s+[a-z0-9/-]+){0,3}\s+decision|decision pending|decision\s*:\s*(?:should|whether|which|do|can|will|choose|launch|pilot)|decision or choice remains?\s+(?:open|pending|unresolved)|go\s*\/\s*no[- ]go|still deciding|we need to decide|need to decide|decide whether|should we|choose between|launch or|pilot or|before we decide|open launch decision)\b/i.test(value);
 }
 
 export function extractOpenDecisionTitle(value: string): string | null {
