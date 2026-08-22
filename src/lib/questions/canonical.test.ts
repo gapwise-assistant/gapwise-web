@@ -26,38 +26,52 @@ function question(
 }
 
 describe('canonical question projection', () => {
-  it('groups PC-build paraphrases by uncertainty family while keeping decisions distinct', () => {
-    const project = createProjectFromInput({ name: 'Quiet PC', goal: 'Build a quiet workstation.' }, '2026-08-20T09:00:00.000Z');
+  it('groups generic token-containment paraphrases while keeping distinct subjects separate', () => {
+    const project = createProjectFromInput({ name: 'Pilot planning', goal: 'Coordinate a safe clinic rollout.' }, '2026-08-20T09:00:00.000Z');
     project.nodes.push(
-      question('gpu', 'Which GPU best fits gaming, Blender, and local AI?', 'OPEN', []),
-      question('psu', 'Can the existing 650 W power supply safely run the selected GPU?', 'OPEN', []),
-      question('fit', 'Will the selected graphics card and cooler fit while keeping noise acceptable?', 'OPEN', []),
-      question('budget', 'Can the final configuration stay under $1,600 after tax and shipping?', 'OPEN', []),
-      question('ram', 'Is 32 GB enough for Blender scenes and local AI, or is 64 GB required?', 'OPEN', []),
-      question('bios', 'Has the retailer confirmed the motherboard BIOS supports the CPU?', 'OPEN', []),
-      question('wifi', 'Does the build need built-in Wi-Fi?', 'OPEN', []),
-      question('psu_alias', 'Is the old 650 W PSU safe for the chosen GPU?', 'OPEN', []),
-      question('fit_alias', 'Can the RTX 5070 and CPU cooler fit without unacceptable heat or noise?', 'OPEN', []),
-      question('budget_alias', 'Does the $1,472 balanced quote remain below $1,600 after shipping?', 'OPEN', []),
-      question('ram_alias', 'Is 32 GB enough for the largest Blender scene plus a local model?', 'OPEN', []),
+      question('mri', 'Which MRI time is correct?', 'OPEN', []),
+      question('mri_alias', 'What is the correct MRI appointment time?', 'OPEN', []),
+      question('medication_budget', 'What is the monthly medication budget for clinic visits?', 'OPEN', []),
+      question('transport_budget', 'What is the monthly transport budget for clinic visits?', 'OPEN', []),
+      question('clinic_wifi', 'Is clinic Wi-Fi available?', 'OPEN', []),
+      question('home_ethernet', 'Can home ethernet be used?', 'OPEN', []),
     );
 
     const groups = canonicalQuestionGroups(project);
-    expect(groups).toHaveLength(7);
-    expect(groups.find((group) => group.canonical.id === 'psu')?.nodeIds).toEqual(expect.arrayContaining(['psu', 'psu_alias']));
-    const subquestionProject = createProjectFromInput({ name: 'Quiet PC', goal: 'Build a quiet workstation.' }, '2026-08-20T09:00:00.000Z');
-    subquestionProject.nodes.push(question('fit_root', 'Will the selected graphics card and cooler fit while keeping noise acceptable?', 'OPEN', []));
-    expect(reconcileQuestionCandidate({ type: 'UNKNOWN', text: 'Can the RTX 5070 and cooler fit in the case?' }, subquestionProject)).toMatchObject({
-      classification: 'SUBQUESTION',
-      canonicalQuestionId: 'fit_root',
+    expect(groups).toHaveLength(5);
+    expect(groups.find((group) => group.canonical.id === 'mri')?.nodeIds).toEqual(expect.arrayContaining(['mri', 'mri_alias']));
+    expect(groups.find((group) => group.canonical.id === 'medication_budget')?.nodeIds).toEqual(['medication_budget']);
+    expect(groups.find((group) => group.canonical.id === 'transport_budget')?.nodeIds).toEqual(['transport_budget']);
+    expect(groups.find((group) => group.canonical.id === 'clinic_wifi')?.nodeIds).toEqual(['clinic_wifi']);
+    expect(groups.find((group) => group.canonical.id === 'home_ethernet')?.nodeIds).toEqual(['home_ethernet']);
+    expect(reconcileQuestionCandidate({ type: 'UNKNOWN', text: 'What is the correct MRI appointment time?' }, project)).toMatchObject({
+      classification: 'PARAPHRASE',
+      canonicalQuestionId: 'mri',
     });
-    expect(reconcileQuestionCandidate({
-      type: 'UNKNOWN',
-      text: 'Will the PC run too hot or loud inside the tightly constrained desk opening?',
-    }, subquestionProject)).toMatchObject({
+
+    const subquestionProject = createProjectFromInput({ name: 'Pilot planning', goal: 'Coordinate a safe clinic rollout.' }, '2026-08-20T09:00:00.000Z');
+    subquestionProject.nodes.push(question('launch_date', 'Which launch date is approved for the rollout?', 'OPEN', []));
+    expect(reconcileQuestionCandidate({ type: 'UNKNOWN', text: 'Which specific launch date is approved for the rollout?' }, subquestionProject)).toMatchObject({
       classification: 'SUBQUESTION',
-      canonicalQuestionId: 'fit_root',
+      canonicalQuestionId: 'launch_date',
     });
+  });
+
+  it('honors an explicit canonical relationship even when lexical similarity is low', () => {
+    const project = createProjectFromInput({ name: 'Pilot planning', goal: 'Coordinate a safe clinic rollout.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      question('root', 'Which MRI time is correct?', 'OPEN', []),
+      {
+        ...question('explicit_alias', 'What amount is allocated to transportation each month?', 'OPEN', []),
+        canonical_question_id: 'root',
+        question_role: 'alias',
+        reconciliation_status: 'reconciled',
+      },
+    );
+
+    expect(canonicalQuestionGroups(project)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ canonical: expect.objectContaining({ id: 'root' }), nodeIds: ['root', 'explicit_alias'] }),
+    ]));
   });
 
   it('collapses legacy semantic aliases and rewires their decision edges', () => {
@@ -74,7 +88,11 @@ describe('canonical question projection', () => {
     );
     project.nodes.push(
       question('authority_a', 'Who has final clinical accountability and legal authority to correct medication or allergy information?', 'OPEN', ['brief']),
-      question('authority_b', 'Dr. Maya Chen has not accepted clinical accountability for medication and allergy corrections.', 'OPEN', ['steering']),
+      {
+        ...question('authority_b', 'Dr. Maya Chen has not accepted clinical accountability for medication and allergy corrections.', 'OPEN', ['steering']),
+        canonical_question_id: 'authority_a',
+        question_role: 'alias',
+      },
       {
         id: 'decision_launch', type: 'DECISION', text: 'Choose the ClinicFlow pilot option.', status: 'OPEN', confidence: 0.9, impact: 0.95,
         source_refs: ['brief', 'steering'], created_by: 'agent', created_at: '2026-08-20T09:00:00.000Z', updated_at: '2026-08-21T09:00:00.000Z',
@@ -113,11 +131,37 @@ describe('canonical question projection', () => {
     expect(canonicalQuestionGroups(project)).toHaveLength(2);
   });
 
+  it('selects the reconciled model wording over a malformed status fallback', () => {
+    const project = createProjectFromInput({ name: 'Surgery preparation', goal: 'Complete preparation.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      {
+        ...question('model_authorization', 'Has the insurance company approved the procedure authorization, or what was the outcome of the review expected by October 9?', 'OPEN', ['surgery']),
+        reconciliation_status: 'reconciled',
+      },
+      {
+        ...question('fallback_authorization', 'What current status is recorded for insurance company told me the procedure authorization?', 'OPEN', ['surgery']),
+        reconciliation_status: 'fallback',
+      },
+    );
+
+    const groups = canonicalQuestionGroups(project);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.canonical.text).toContain('Has the insurance company approved');
+    const reasoningQuestions = projectForReasoning(project).nodes.filter((node) => node.type === 'UNKNOWN');
+    expect(reasoningQuestions).toHaveLength(1);
+    expect(reasoningQuestions[0]?.text).toContain('Has the insurance company approved');
+    expect(rankGaps(project).some((gap) => /insurance company told me/i.test(gap.question))).toBe(false);
+  });
+
   it('lets a resolved equivalent suppress an older open alias everywhere in reasoning', () => {
     const project = createProjectFromInput({ name: 'ClinicFlow', goal: 'Make the pilot decision.' }, '2026-08-20T09:00:00.000Z');
     project.nodes.push(
       question('retry_open', 'Can the offline queue retry without creating duplicate EHR records?', 'OPEN', []),
-      question('retry_resolved', 'The offline retry test confirmed the connector cannot avoid duplicate EHR records.', 'RESOLVED', ['retry-test']),
+      {
+        ...question('retry_resolved', 'The offline retry test confirmed the connector cannot avoid duplicate EHR records.', 'RESOLVED', ['retry-test']),
+        canonical_question_id: 'retry_open',
+        question_role: 'alias',
+      },
     );
 
     const reasoning = projectForReasoning(project);

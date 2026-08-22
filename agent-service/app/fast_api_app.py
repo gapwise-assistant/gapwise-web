@@ -17,14 +17,17 @@ import hmac
 import logging
 import os
 from collections.abc import AsyncIterator
+from typing import Any
 
 import google.auth
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
 from google.cloud import logging as google_cloud_logging
+from google.genai import types
+from pydantic import BaseModel, Field
 
 from app.app_utils import services
 from app.app_utils.a2a import attach_a2a_routes
@@ -48,6 +51,82 @@ allow_origins = (
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+class WebResearchRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+
+
+class AskRouteRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    trusted_context: dict[str, Any] = Field(default_factory=dict)
+
+
+def _check_internal_secret(value: str | None) -> None:
+    configured_secret = os.environ.get("GAPSWISE_INTERNAL_API_SECRET", "").strip()
+    if configured_secret and not hmac.compare_digest(configured_secret, value or ""):
+        raise HTTPException(status_code=401, detail="Invalid internal service secret.")
+
+
+async def _run_private_agent(
+    runner: Runner,
+    app_name: str,
+    user_id: str,
+    message: str,
+    state: dict[str, Any] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    session_service = services.get_session_service()
+    session = await session_service.create_session(
+        app_name=app_name,
+        user_id=user_id,
+        state=state,
+    )
+    events: list[dict[str, Any]] = []
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session.id,
+        new_message=types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=message)],
+        ),
+    ):
+        events.append(event.model_dump(mode="json", exclude_none=True))
+    return session.id, events
+
+
+def _event_texts(events: list[dict[str, Any]]) -> list[str]:
+    texts: list[str] = []
+    for event in events:
+        content = event.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        texts.extend(
+            part["text"]
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip()
+        )
+    return texts
+
+
+def _route_from_events(events: list[dict[str, Any]]):
+    from app.agent import AskRouteDecision
+
+    for text in reversed(_event_texts(events)):
+        candidate = text.strip()
+        if candidate.startswith("```"):
+            candidate = candidate.strip("`").strip()
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+        try:
+            return AskRouteDecision.model_validate_json(candidate)
+        except ValueError:
+            continue
+    raise RuntimeError("The routing agent returned no structured route decision.")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if is_demo_mode():
@@ -66,16 +145,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         severity="INFO",
     )
     from app.agent import app as adk_app
-    from app.agent import root_agent
+    from app.agent import root_agent, routing_app, web_research_app
 
+    session_service = services.get_session_service()
+    artifact_service = services.get_artifact_service()
     runner = Runner(
         app=adk_app,
-        session_service=services.get_session_service(),
-        artifact_service=services.get_artifact_service(),
+        session_service=session_service,
+        artifact_service=artifact_service,
+        auto_create_session=True,
+    )
+    web_research_runner = Runner(
+        app=web_research_app,
+        session_service=session_service,
+        artifact_service=artifact_service,
+        auto_create_session=True,
+    )
+    routing_runner = Runner(
+        app=routing_app,
+        session_service=session_service,
+        artifact_service=artifact_service,
         auto_create_session=True,
     )
     app.state.runner = runner
     app.state.agent_app_name = adk_app.name
+    app.state.web_research_runner = web_research_runner
+    app.state.web_research_app_name = web_research_app.name
+    app.state.routing_runner = routing_runner
+    app.state.routing_app_name = routing_app.name
     await attach_a2a_routes(
         app,
         agent=root_agent,
@@ -119,11 +216,7 @@ async def assess_gap(
     x_gapswise_internal_secret: str | None = Header(default=None),
 ) -> GapAssessmentResponse:
     """Run the scoped structured Gap Agent without exposing prompt content."""
-    configured_secret = os.environ.get("GAPSWISE_INTERNAL_API_SECRET", "").strip()
-    if configured_secret and not hmac.compare_digest(
-        configured_secret, x_gapswise_internal_secret or ""
-    ):
-        raise HTTPException(status_code=401, detail="Invalid internal service secret.")
+    _check_internal_secret(x_gapswise_internal_secret)
     if is_demo_mode():
         raise HTTPException(
             status_code=503,
@@ -146,6 +239,70 @@ async def assess_gap(
         severity="INFO",
     )
     return response
+
+
+@app.post("/internal/web-research")
+async def run_web_research(
+    request: WebResearchRequest,
+    http_request: Request,
+    x_gapswise_internal_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run the web research agent through its own registered ADK application."""
+    _check_internal_secret(x_gapswise_internal_secret)
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=503,
+            detail="External verification failed: web research is disabled in demo mode.",
+        )
+    runner = getattr(http_request.app.state, "web_research_runner", None)
+    if runner is None:
+        raise HTTPException(status_code=503, detail="External verification failed: web research is unavailable.")
+    try:
+        session_id, events = await _run_private_agent(
+            runner,
+            http_request.app.state.web_research_app_name,
+            request.user_id,
+            request.message,
+        )
+    except Exception as error:
+        startup_logger.warning("Web research agent failed safely: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="External verification failed: web research could not be completed.",
+        ) from error
+    return {"sessionId": session_id, "events": events}
+
+
+@app.post("/internal/ask-route")
+async def route_ask(
+    request: AskRouteRequest,
+    http_request: Request,
+    x_gapswise_internal_secret: str | None = Header(default=None),
+) -> dict[str, str]:
+    """Classify an Ask request before the Partner Agent is allowed to run."""
+    _check_internal_secret(x_gapswise_internal_secret)
+    if is_demo_mode():
+        raise HTTPException(status_code=503, detail="Ask routing is disabled in demo mode.")
+    runner = getattr(http_request.app.state, "routing_runner", None)
+    if runner is None:
+        raise HTTPException(status_code=503, detail="Ask routing is unavailable.")
+    prompt = (
+        "Classify this request according to your routing policy. Return only the structured output.\n\n"
+        f"Request:\n{request.message}\n\n"
+        f"Trusted context supplied by Gapwise:\n{request.trusted_context}"
+    )
+    try:
+        _, events = await _run_private_agent(
+            runner,
+            http_request.app.state.routing_app_name,
+            request.user_id,
+            prompt,
+        )
+        decision = _route_from_events(events)
+    except Exception as error:
+        startup_logger.warning("Ask routing agent failed safely: %s", type(error).__name__)
+        raise HTTPException(status_code=502, detail="Ask routing could not produce a valid decision.") from error
+    return decision.model_dump()
 
 
 # Main execution

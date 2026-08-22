@@ -35,49 +35,64 @@ export function questionIdentityKey(text: string): string {
   return Array.from(new Set(tokens)).sort().join(' ');
 }
 
-function questionMeaningOverlap(left: string, right: string): number {
-  const leftTokens = new Set(questionIdentityKey(left).split(' ').filter(Boolean));
-  const rightTokens = new Set(questionIdentityKey(right).split(' ').filter(Boolean));
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  const union = new Set([...leftTokens, ...rightTokens]).size;
-  return intersection / Math.max(1, union);
+const QUESTION_SUBJECT_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'be', 'can', 'could', 'does', 'do', 'for', 'from',
+  'has', 'have', 'how', 'i', 'is', 'it', 'me', 'may', 'must', 'my', 'of', 'or',
+  'our', 'should', 'that', 'the', 'this', 'to', 'what', 'when', 'where', 'which',
+  'who', 'why', 'will', 'would', 'we', 'with', 'you', 'your',
+  'approv', 'approve', 'approval', 'approved', 'authority', 'authoritative', 'check',
+  'clarif', 'clarify', 'confirm', 'confirmed', 'confirmation', 'current', 'determin',
+  'determine', 'expected', 'find', 'inform', 'informed', 'out', 'outcome', 'pending',
+  'record', 'recorded', 'require', 'required', 'requirement', 'need', 'needed', 'needs',
+  'must',
+  'review', 'reviewed', 'reviewing', 'source', 'statu', 'status', 'uncertain',
+  'unconfirm', 'unknown', 'unresolved', 'missing', 'still', 'being', 'tell', 'told',
+  'said', 'say', 'advis', 'reported', 'notif', 'emailed', 'messaged', 'owner',
+  'team', 'office', 'manager', 'department', 'organization', 'provider',
+]);
+
+function questionSubjectTokens(text: string): Set<string> {
+  return new Set(questionIdentityKey(text)
+    .split(' ')
+    .filter((token) => token && !QUESTION_SUBJECT_STOP_WORDS.has(token)));
 }
 
 /**
- * A small deterministic semantic layer complements the Context Agent. It is
- * deliberately about stable decision subjects, not arbitrary word overlap,
- * so the local/demo path can reconcile common paraphrases without making a
- * network call.
+ * Generic subject matching shared by candidate finalization and graph
+ * canonicalization. It compares substantive tokens only; no domain vocabulary
+ * is used, and a single shared token is never enough to merge questions.
  */
-function questionFamily(text: string): string | undefined {
-  const value = text.toLowerCase();
-  if (/(?:psu|power\s+supply|\b(?:650|750)\s*w\b)/i.test(value)
-    && /safe|safely|safety|stabil|run|reuse|capacity|watt|power|reliab/i.test(value)) return 'power-supply-safety';
-  if (/(?:fit|clearance|case|cooler|noise|quiet|temperature|thermal|acoustic|\bhot\b|\bloud\b|airflow|ventilation|chassis|desk\s+opening)/i.test(value)
-    && /(?:case|cooler|desk|component|hardware|noise|temperature|thermal|acoustic|\bhot\b|\bloud\b|airflow|ventilation|chassis|opening|clearance)/i.test(value)) return 'physical-fit-noise';
-  if (/(?:gpu|graphics\s+card|graphics\s+processing)/i.test(value)
-    && /better\s+fit|which\s+gpu|choose|workload|gaming|blender|local\s+ai|mix/i.test(value)) return 'gpu-selection';
-  if (/(?:\b32\s*gb\b|\b64\s*gb\b|memory|ram)/i.test(value)
-    && /enough|required|capacity|scene|render|model|sufficient|upgrade/i.test(value)) return 'memory-capacity';
-  if (/(?:budget|tax|shipping|all[- ]in|total|quote|\$\s*1[,.]?600)/i.test(value)) return 'build-budget';
-  if (/(?:bios|motherboard|boot)/i.test(value) && /support|compatible|version|boot|ship/i.test(value)) return 'bios-compatibility';
-  if (/(?:wi[- ]?fi|ethernet|cable|wireless)/i.test(value)) return 'network-connectivity';
-  if (/(?:windows|operating\s+system|os\s+license|hyper[- ]?v|remote\s+desktop)/i.test(value)
-    && /(?:home|pro|license|feature|sufficient|required|need|remote|virtual)/i.test(value)) return 'operating-system';
-
-  // Existing high-value project families. These are intentionally narrow so
-  // generic questions are not accidentally collapsed together.
-  if (/(?:clinical|medical).*(?:accountab|owner|authority)|(?:accountab|owner|authority).*(?:medication|allergy|correction)/i.test(value)) return 'clinical-correction-authority';
-  if (/(?:offline|queued?|retry|idempot|duplicate).*(?:ehr|record)|(?:ehr|record).*(?:offline|queued?|retry|duplicate)/i.test(value)) return 'ehr-retry-integrity';
-  if (/(?:sms|text\s+message).*consent|consent.*(?:sms|text\s+message|phi)/i.test(value)) return 'sms-consent';
-  if (/(?:coordinator|exception\s+review).*(?:peak|safe|capacity)|(?:peak|capacity).*(?:coordinator|exception)/i.test(value)) return 'exception-review-capacity';
-  if (/(?:audit\s+log|audit\s+trail).*(?:distinguish|separate|edit)|(?:distinguish|separate|edit).*(?:audit\s+log|audit\s+trail)/i.test(value)) return 'audit-log-provenance';
-  return undefined;
+export function questionsShareSubject(left: string, right: string): boolean {
+  const leftTokens = questionSubjectTokens(left);
+  const rightTokens = questionSubjectTokens(right);
+  if (!leftTokens.size || !rightTokens.size) return false;
+  const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  if (shared < 2) return false;
+  const leftCoverage = shared / leftTokens.size;
+  const rightCoverage = shared / rightTokens.size;
+  const smallerSize = Math.min(leftTokens.size, rightTokens.size);
+  return (leftCoverage >= 0.75 && rightCoverage >= 0.75) || shared === smallerSize;
 }
 
+function isStatusFallbackQuestion(text: string): boolean {
+  return /^what (?:current )?status\b/i.test(text.trim())
+    || /^what .+ is currently confirmed\??$/i.test(text.trim());
+}
+
+function questionTextsShouldMerge(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase()
+    || semanticallyEquivalentQuestion(left, right)
+    || questionsShareSubject(left, right);
+}
+
+/**
+ * Compatibility export for callers that used the old family API. Families are
+ * no longer inferred from product or domain vocabulary; only the normalized
+ * identity is exposed as a deterministic key.
+ */
 export function questionFamilyKey(text: string): string | undefined {
-  return questionFamily(text);
+  const key = questionIdentityKey(text);
+  return key || undefined;
 }
 
 export interface QuestionReconciliationResult {
@@ -131,18 +146,22 @@ export function reconcileQuestionCandidates(
 }
 
 function appearsNarrowerThan(candidate: string, existing: string): boolean {
-  const candidateValue = candidate.toLowerCase();
-  const existingValue = existing.toLowerCase();
-  const candidateSpecific = /\b(?:rtx|rx|5070|9070|5060|balanced|performance|quiet|value|largest|normal|quote|selected|hot|loud|airflow|ventilation|chassis|thermal|acoustic)\b|desk\s+opening/i.test(candidateValue);
-  const existingGeneric = /\b(?:selected|chosen|actual mix|final configuration|normal|existing|the build)\b/i.test(existingValue);
-  return candidateSpecific && existingGeneric && candidateValue !== existingValue;
+  if (candidate === existing) return false;
+  const candidateTokens = new Set(questionIdentityKey(candidate).split(' ').filter(Boolean));
+  const existingTokens = new Set(questionIdentityKey(existing).split(' ').filter(Boolean));
+  if (candidateTokens.size <= existingTokens.size || existingTokens.size < 3) return false;
+  if (![...existingTokens].every((token) => candidateTokens.has(token))) return false;
+
+  // Added descriptive nouns can be ordinary paraphrase ("appointment time").
+  // Require a generic, explicit narrowing marker before calling it a
+  // subquestion; no domain vocabulary belongs in this fallback.
+  return /\b(?:specific|selected|chosen|option|variant|version|instance|scenario|case)\b/i.test(candidate);
 }
 
 /**
  * Offline reconciliation used by demo mode and as a safe fallback when the
- * Context Agent is unavailable. It is intentionally conservative: unrelated
- * subjects never merge, while well-known project subjects receive stable
- * family matching.
+ * Context Agent is unavailable. It is intentionally conservative and does not
+ * assume any product or domain vocabulary.
  */
 export function reconcileQuestionCandidate(
   candidate: Pick<ClarityNode, 'type' | 'text'>,
@@ -156,8 +175,10 @@ export function reconcileQuestionCandidate(
     };
   }
 
-  const canonicalQuestions = canonicalQuestionGroups(project).map((group) => group.canonical);
-  const equivalent = canonicalQuestions.find((question) => semanticallyEquivalentQuestion(question.text, candidate.text));
+  const canonicalQuestions = canonicalQuestionGroups(project)
+    .map((group) => group.canonical);
+  const equivalent = canonicalQuestions.find((question) => [question.text, ...(question.question_aliases ?? [])]
+    .some((text) => questionTextsShouldMerge(text, candidate.text)));
   if (!equivalent) {
     return {
       classification: candidate.type === 'ASSUMPTION' ? 'ASSUMPTION' : 'NEW_UNCERTAINTY',
@@ -195,28 +216,10 @@ export function reconcileQuestionCandidate(
  * involved, so changing copy cannot change graph identity or ranking.
  */
 export function semanticallyEquivalentQuestion(left: string, right: string): boolean {
-  if (questionIdentityKey(left) === questionIdentityKey(right)) return true;
-  const leftFamily = questionFamily(left);
-  const rightFamily = questionFamily(right);
-  if (leftFamily && leftFamily === rightFamily) return true;
-  if (questionMeaningOverlap(left, right) >= 0.78) return true;
-
-  const sharedCriticalTerms = [
-    ['clinical', 'accountab'],
-    ['medication', 'allergy'],
-    ['offline', 'retry'],
-    ['duplicate', 'ehr'],
-    ['sms', 'consent'],
-    ['coordinator', 'exception'],
-    ['audit', 'log'],
-  ].some(([first, second]) => {
-    const combined = `${left} ${right}`.toLowerCase();
-    return combined.includes(first)
-      && combined.includes(second)
-      && left.toLowerCase().includes(first)
-      && right.toLowerCase().includes(first);
-  });
-  return sharedCriticalTerms;
+  const leftKey = questionIdentityKey(left);
+  const rightKey = questionIdentityKey(right);
+  if (!leftKey || !rightKey) return false;
+  return leftKey === rightKey || questionsShareSubject(left, right);
 }
 
 export interface CanonicalQuestionGroup {
@@ -238,6 +241,9 @@ function canonicalNode(nodes: ClarityNode[]): ClarityNode {
   const ordered = [...nodes].sort((left, right) =>
     statusRank(right.status) - statusRank(left.status)
     || Number((right.question_role ?? 'canonical') === 'canonical') - Number((left.question_role ?? 'canonical') === 'canonical')
+    || (Number(isStatusFallbackQuestion(left.text)) - Number(isStatusFallbackQuestion(right.text)))
+    || (Number(right.reconciliation_status === 'reconciled') - Number(left.reconciliation_status === 'reconciled'))
+    || (right.confidence - left.confidence)
     || (right.source_refs.length - left.source_refs.length)
     || ((right.priority ?? right.impact) - (left.priority ?? left.impact))
     || left.created_at.localeCompare(right.created_at)
@@ -294,12 +300,14 @@ export function canonicalQuestionGroups(project: Pick<Project, 'nodes'>): Canoni
   candidates
     .filter((node) => !assigned.has(node.id))
     .forEach((node) => {
-      // A model-approved RELATED_BUT_DISTINCT result is an explicit boundary:
-      // keep it separate even when the wording shares a broad subject family.
-      const group = node.question_role === 'related'
-        ? undefined
-        : groups.find((candidate) => !candidate.some((item) => item.question_role === 'related')
-          && semanticallyEquivalentQuestion(candidate[0].text, node.text));
+      // NEW_UNCERTAINTY and RELATED_BUT_DISTINCT are advisory classifications.
+      // A genuinely different subject remains separate; matching substantive
+      // subjects still resolve to one canonical question.
+      const group = groups.find((candidate) => candidate.some((item) =>
+        [item.text, ...(item.question_aliases ?? [])].some((text) =>
+          [node.text, ...(node.question_aliases ?? [])].some((candidateText) => questionTextsShouldMerge(text, candidateText))
+        )
+      ));
       if (group) group.push(node);
       else groups.push([node]);
       assigned.add(node.id);

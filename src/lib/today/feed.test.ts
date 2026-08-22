@@ -93,9 +93,31 @@ describe('Today primary feed', () => {
     const question = todayQuestionFromNode(project, questionNode);
     const feedItem = buildTodayFeed([candidate(project, 'rec_question', [questionNode.id])], [question], project)[0];
 
-    expect(compactQuestionContext(feedItem, project)).toBe('Your answer will shape the next project decision.');
+    expect(compactQuestionContext(feedItem, project)).toMatch(/^Your answer will shape “.+”\.$/);
 
-    question.question = 'Does this primarily frontend role remain acceptable given your preference to avoid frontend-heavy roles?';
-    expect(compactQuestionContext({ ...feedItem, question }, project)).toBe('Conflicts with your role preferences.');
+    const preferenceQuestion = { ...feedItem, question: { ...question, question: 'Which option matches my current priorities?' } };
+    const conflictRecommendation = {
+      ...preferenceQuestion,
+      decisionNodeId: undefined,
+      recommendation: { ...preferenceQuestion.recommendation, reason: 'New evidence contradicts a current preference.' },
+    };
+    expect(compactQuestionContext(conflictRecommendation, project)).toBe('This conflicts with a recorded preference or assumption.');
+
+    const decision = {
+      id: 'decision_next_step',
+      type: 'DECISION' as const,
+      text: 'Choose the next validated option',
+      status: 'OPEN' as const,
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: '2026-08-14T10:00:00Z',
+      updated_at: '2026-08-14T10:00:00Z',
+    };
+    project.nodes.push(decision);
+    project.edges.push({ id: 'question-blocks-next-step', source: questionNode.id, target: decision.id, type: 'blocks' });
+    expect(compactQuestionContext({ ...feedItem, decisionNodeId: decision.id }, project))
+      .toBe('Your answer will shape “Choose the next validated option”.');
   });
 });

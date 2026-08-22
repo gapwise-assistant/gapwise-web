@@ -29,8 +29,7 @@ export function calculateGapPriority(
     reasons.push('No supporting evidence is attached yet.');
   }
 
-  const trimmed = node.text.trim();
-  const question = trimmed.endsWith('?') ? trimmed : `Clarify: ${trimmed}?`;
+  const question = node.text;
 
   return {
     node_id: node.id,

@@ -1,31 +1,32 @@
-import { AskResult, AskSource } from '@/lib/ask/adkClient';
-import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
-import { loadDurableMemories } from '@/lib/memory/serverStore';
-import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
-import { loadProjectForScope } from '@/lib/storage';
+import { AppScope } from '@/types/scope';
+import { AskResult, AskSource } from '@/types/ask';
 import { ContextPack } from '@/types/contextPack';
-import { createLocalDemoProjects, demoCalendarEvents, demoCareerConflictCalendarEvents, demoKintaGenCalendarEvents } from '@/lib/demo/localFixtures';
-import { createCareerConflictDemoMemories, createCareerConflictDemoProject, CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
-import { createKintaGenDemoMemories, createKintaGenDemoProject, KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
+import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
+import { createCareerConflictDemoMemories, createCareerConflictDemoProject } from '@/lib/demo/careerConflict';
+import { createKintaGenDemoMemories, createKintaGenDemoProject } from '@/lib/demo/kintagen';
+import { createLocalDemoProjects, demoCalendarEvents, demoCareerConflictCalendarEvents, demoKintaGenCalendarEvents } from '@/lib/demo/localFixtures';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { memoriesFromProfile } from '@/lib/memory/store';
-import { EVERYTHING_SCOPE } from '@/types/scope';
-import type { Project } from '@/types/clarity';
+import { loadProjectForScope } from '@/lib/storage';
 import { contextualSuggestionsFromPack } from '@/lib/ask/suggestions';
+import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
+import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 
-const localContextInstruction = 'Use only the selected project context and clearly distinguish known facts from unresolved questions.';
+const EVERYTHING_SCOPE: AppScope = { type: 'everything' };
+const localContextInstruction = 'Deterministic local demo response based only on the selected project context.';
 
-interface LocalAskContextParams {
+async function loadLocalAskContext(params: {
   userId: string;
   projectId?: string;
   query: string;
   includeBroadContext?: boolean;
-}
-
-async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ project: Project; pack: ContextPack }> {
+  excludeMessageId?: string;
+  excludeSourceId?: string;
+}): Promise<{ project: { id: string; title: string; goal: string }; pack: ContextPack }> {
   try {
     const loaded = await loadProjectForScope(params.userId, params.projectId);
-    const memories = await loadDurableMemories(params.userId, DEFAULT_USER_PROFILE);
+    const memories = memoriesFromProfile(DEFAULT_USER_PROFILE);
     return {
       project: loaded.project,
       pack: await buildContextPackForUser({
@@ -36,6 +37,8 @@ async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ pro
         durableMemories: memories,
         includeBroadContext: params.includeBroadContext,
         scope: loaded.scope,
+        excludeMessageId: params.excludeMessageId,
+        excludeSourceId: params.excludeSourceId,
       }),
     };
   } catch (error) {
@@ -68,6 +71,8 @@ async function loadLocalAskContext(params: LocalAskContextParams): Promise<{ pro
         includeBroadContext: params.includeBroadContext,
         calendarCommitments: calendarEventsToCommitmentNodes(fallbackCalendarEvents, now, 10),
         scope: params.projectId ? { type: 'project', projectId: project.id } : EVERYTHING_SCOPE,
+        excludeMessageId: params.excludeMessageId,
+        excludeSourceId: params.excludeSourceId,
       }),
     };
   }
@@ -180,11 +185,15 @@ export async function askGapswiseLocally(params: {
   message: string;
   sessionId?: string;
   projectId?: string;
+  excludeMessageId?: string;
+  excludeSourceId?: string;
 }): Promise<AskResult> {
   const { project, pack } = await loadLocalAskContext({
     userId: params.userId,
     projectId: params.projectId,
     query: params.message,
+    excludeMessageId: params.excludeMessageId,
+    excludeSourceId: params.excludeSourceId,
   });
   const contextUsed = contextUsedFromPack(pack, project.title);
   return {

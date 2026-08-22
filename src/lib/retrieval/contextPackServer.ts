@@ -9,6 +9,8 @@ import { demoCareerConflictCalendarEvents, demoCalendarEvents, demoKintaGenCalen
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { isDemoMode } from '@/lib/runtime/demoMode';
+import { getStorageProvider } from '@/lib/storage';
+import { AskChatMessage, AskResearchEvidence } from '@/types/ask';
 
 export async function buildContextPackForUser(
   input: ContextPackInput,
@@ -16,18 +18,44 @@ export async function buildContextPackForUser(
     hasCalendarTokens?: typeof hasGoogleOAuthTokens;
     listCalendarEvents?: typeof listContextPackCalendarEvents;
     listMemories?: typeof loadDurableMemories;
+    listAskMessages?: (userId: string) => Promise<AskChatMessage[]>;
+    listAskResearch?: (userId: string) => Promise<AskResearchEvidence[]>;
     now?: Date;
   } = {}
 ): Promise<ContextPack> {
   const hasTokens = deps.hasCalendarTokens ?? hasGoogleOAuthTokens;
   const listEvents = deps.listCalendarEvents ?? listContextPackCalendarEvents;
   const listMemories = deps.listMemories ?? loadDurableMemories;
+  const listAskMessages = deps.listAskMessages ?? ((userId: string) => getStorageProvider().getAskMessages(userId));
+  const listAskResearch = deps.listAskResearch ?? ((userId: string) => getStorageProvider().getAskResearch(userId));
   const now = deps.now ?? new Date();
   let calendarCommitments: ClarityNode[] = [];
   let durableMemories = input.durableMemories;
 
   if (!durableMemories) {
     durableMemories = await listMemories(input.userId, input.profile);
+  }
+
+  let conversationMessages = input.conversationMessages;
+  let researchEvidence = input.researchEvidence;
+  try {
+    if (!conversationMessages) conversationMessages = await listAskMessages(input.userId);
+    if (!researchEvidence) researchEvidence = await listAskResearch(input.userId);
+  } catch {
+    conversationMessages ??= [];
+    researchEvidence ??= [];
+  }
+  if (input.scope?.type === 'project') {
+    const projectId = input.scope.projectId;
+    conversationMessages = conversationMessages.filter((message) => message.projectId === projectId);
+    researchEvidence = researchEvidence.filter((research) => research.projectId === projectId);
+  }
+  if (input.excludeMessageId) {
+    conversationMessages = conversationMessages.filter((message) => message.id !== input.excludeMessageId);
+  }
+  researchEvidence = researchEvidence.filter((research) => research.status !== 'pending');
+  if (input.excludeMessageId) {
+    researchEvidence = researchEvidence.filter((research) => research.assistantMessageId !== input.excludeMessageId);
   }
 
   if (input.project.id === CAREER_CONFLICT_DEMO_ID || input.project.id === KINTAGEN_DEMO_ID) {
@@ -64,5 +92,11 @@ export async function buildContextPackForUser(
     calendarCommitments = [];
   }
 
-  return buildContextPack({ ...input, durableMemories, calendarCommitments });
+  return buildContextPack({
+    ...input,
+    durableMemories,
+    calendarCommitments,
+    conversationMessages,
+    researchEvidence,
+  });
 }

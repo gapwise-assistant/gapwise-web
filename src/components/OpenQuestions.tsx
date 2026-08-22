@@ -62,7 +62,7 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
     closeOpenMenus();
     setMenuOpen(true);
   };
-  const displayTitle = item.question.presentationTitle || item.question.question;
+  const displayTitle = item.question.question;
   const displaySummary = item.question.presentationSummary || item.context;
 
   return (

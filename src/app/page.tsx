@@ -595,7 +595,7 @@ export default function Home() {
     node: Project['nodes'][number],
     intent?: 'confirm' | 'correct',
     answerSuggestion?: TodayQuestion['answerSuggestion'],
-    presentation?: Pick<TodayQuestion, 'presentationTitle' | 'presentationSummary'>,
+    presentation?: Pick<TodayQuestion, 'presentationSummary'>,
   ) => {
     const owner = projects.find((candidate) => candidate.nodes.some((item) => item.id === node.id))
       ?? (generalContext.nodes.some((item) => item.id === node.id) ? generalContext : undefined);
@@ -612,7 +612,7 @@ export default function Home() {
     setAnswerTarget({
       nodeId: node.id,
       question: node.text,
-      presentationTitle: presentation?.presentationTitle ?? fallbackPresentation.title,
+      presentationTitle: node.text,
       presentationSummary: presentation?.presentationSummary ?? fallbackPresentation.summary,
       reason: node.why_it_matters?.[0],
       projectId: owner?.id,
@@ -700,7 +700,7 @@ export default function Home() {
       ...(questionContext ? (() => {
         const localPresentation = localQuestionPresentation(questionContext);
         return {
-          presentationTitle: localPresentation.title,
+          presentationTitle: questionContext.question,
           presentationSummary: localPresentation.summary,
         };
       })() : {}),
@@ -977,7 +977,6 @@ export default function Home() {
                 : undefined;
               if (node) {
                 openGraphQuestion(node, undefined, question.answerSuggestion, {
-                  presentationTitle: question.presentationTitle,
                   presentationSummary: question.presentationSummary,
                 });
               }

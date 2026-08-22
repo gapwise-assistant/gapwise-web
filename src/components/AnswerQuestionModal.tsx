@@ -166,7 +166,7 @@ export function AnswerQuestionModal({
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Resolve</p>
             <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold leading-relaxed text-slate-100">
-              {target.presentationTitle ?? target.question}
+              {target.question}
             </h2>
             {(target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason) && (
               <p className="mt-2 text-sm leading-relaxed text-slate-400">{target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason}</p>

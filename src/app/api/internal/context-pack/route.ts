@@ -12,7 +12,10 @@ const contextPackRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   query: z.string().trim().min(1, 'query is required'),
   projectId: z.string().trim().min(1).optional(),
+  chatId: z.string().trim().min(1).optional(),
   includeBroadContext: z.boolean().optional(),
+  excludeMessageId: z.string().trim().min(1).optional(),
+  excludeSourceId: z.string().trim().min(1).optional(),
 });
 
 export async function POST(request: Request) {
@@ -53,6 +56,8 @@ export async function POST(request: Request) {
     profile: DEFAULT_USER_PROFILE,
     scope,
     includeBroadContext: parsed.data.includeBroadContext,
+    excludeMessageId: parsed.data.excludeMessageId,
+    excludeSourceId: parsed.data.excludeSourceId,
   });
 
   return NextResponse.json({ contextPack });

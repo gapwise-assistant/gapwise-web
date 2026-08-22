@@ -312,7 +312,7 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
       schemaVersion: GAP_CONTRACT_VERSION,
       gapId: `gap:${node.id}`,
       sourceUnknownNodeIds: [node.id],
-      question: node.text.trim().endsWith('?') ? node.text.trim() : `${node.text.trim()}?`,
+      question: node.text,
       targetUnknown: node.text,
       affectedDecisions,
       evidenceReview: { evidenceIds, ...evidenceReview },

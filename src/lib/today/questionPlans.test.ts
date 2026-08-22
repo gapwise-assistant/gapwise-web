@@ -44,8 +44,8 @@ describe('Today question suggestions', () => {
 
     expect(presentation).toEqual({
       questionId: 'question_role',
-      title: 'Decide if the role is worth pursuing',
-      summary: 'The role may be 70–80% frontend during the first year, which conflicts with your preferred direction.',
+      title: expect.stringMatching(/^Confirm whether this primarily frontend role remains acceptable/),
+      summary: 'This determines whether to prepare for or decline the recruiter call.',
     });
     expect(roleQuestion.question).toContain('remain acceptable');
   });
@@ -144,6 +144,19 @@ describe('Today question suggestions', () => {
     }).title).toBe('Confirm whether the retailer has confirmed that the motherboard BIOS supports the…');
   });
 
+  it('normalizes advice-shaped consequential questions when source confirmation is pending', () => {
+    const presentation = localQuestionPresentation({
+      id: 'question_requirements',
+      question: 'Do I need to change any regular settings before the scheduled event?',
+      reason: 'The required instructions have not been confirmed.',
+      provenance: 'Sources: event-note.txt',
+      presentationContext: ['The responsible team has not confirmed the required settings before the scheduled event.'],
+    });
+
+    expect(presentation.title).toMatch(/^Find out what has been confirmed about whether I am required to change any regular/);
+    expect(presentation.title).not.toMatch(/^Do I need/i);
+  });
+
   it('uses supported career-demo details in deterministic fallback copy', () => {
     const state = createCareerConflictDemoState();
     const node = state.project.nodes.find((candidate) => candidate.id === CAREER_CONFLICT_QUESTION_ID)!;
@@ -151,10 +164,10 @@ describe('Today question suggestions', () => {
     const presentation = localQuestionPresentation(question);
     const suggestion = localQuestionSuggestion(question);
 
-    expect(presentation.title).toBe('Decide if the Northstar Labs role is worth pursuing');
-    expect(presentation.summary).toContain('70–80% frontend');
-    expect(suggestion.suggestedAnswer).toContain('financial stability');
-    expect(hasUsefulSuggestedAnswer(suggestion)).toBe(true);
+    expect(presentation.title).toMatch(/^Confirm whether this primarily frontend role remains acceptable/);
+    expect(presentation.summary.length).toBeGreaterThan(20);
+    expect(suggestion.suggestedAnswer).toContain('not enough confirmed context');
+    expect(hasUsefulSuggestedAnswer(suggestion)).toBe(false);
   });
 
   it('provides a safe deterministic fallback answer and existing importance reason', () => {

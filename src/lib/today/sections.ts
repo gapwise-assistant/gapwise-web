@@ -100,7 +100,7 @@ export function todayQuestionFromNode(project: Project, node: ClarityNode): Toda
   const reasons = relationshipReasons(project, node.id, 2);
   const question: TodayQuestion = {
     id: `question_${node.id}`,
-    question: node.text.endsWith('?') ? node.text : `What should we do about: ${node.text}?`,
+    question: node.text,
     reason: [node.why_it_matters?.[0], ...reasons].filter(Boolean).slice(0, 2).join(' ') || 'This unresolved item can affect the next decision.',
     provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
     sourceNodeIds: [node.id],

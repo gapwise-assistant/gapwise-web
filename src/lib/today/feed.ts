@@ -44,16 +44,11 @@ export function todayItemType(recommendation: AttentionCandidate, project: Proje
 }
 
 export function compactQuestionContext(item: TodayFeedItem, project: Project): string {
-  const questionText = item.question?.question ?? '';
-  if (/remain acceptable|role preference|role fit|avoid frontend-heavy/i.test(questionText)) {
-    return 'Conflicts with your role preferences.';
-  }
   const decision = item.decisionNodeId
     ? project.nodes.find((node) => node.id === item.decisionNodeId)
     : undefined;
-  if (decision && /interview/i.test(decision.text)) return 'Your answer will determine whether to continue into the interview process.';
-  if (decision) return 'Your answer will shape the next project decision.';
-  if (/conflict|contradict/i.test(item.recommendation.reason)) return 'This conflicts with a current preference.';
+  if (decision) return `Your answer will shape “${decision.text.replace(/\s+/g, ' ').trim()}”.`;
+  if (/conflict|contradict/i.test(item.recommendation.reason)) return 'This conflicts with a recorded preference or assumption.';
   return 'Your answer will guide the next project decision.';
 }
 

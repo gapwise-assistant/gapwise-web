@@ -2,14 +2,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { POST } from './route';
 import { askGapswiseLocally } from '@/lib/ask/localDemoAdapter';
+import { getStorageProvider } from '@/lib/storage';
+import { StorageProvider } from '@/lib/storage/types';
+import { persistAskConversationContext } from '@/lib/ask/conversationContext';
 
 vi.mock('@/lib/ask/adkClient', () => ({
-  AskAgentError: class AskAgentError extends Error {},
+  AskAgentError: class AskAgentError extends Error {
+    stage?: string;
+
+    constructor(message: string, options?: { stage?: string }) {
+      super(message);
+      this.stage = options?.stage;
+    }
+  },
   askGapswise: vi.fn(),
 }));
 vi.mock('@/lib/ask/localDemoAdapter', () => ({ askGapswiseLocally: vi.fn() }));
+vi.mock('@/lib/storage', () => ({ getStorageProvider: vi.fn() }));
+vi.mock('@/lib/ask/conversationContext', () => ({ persistAskConversationContext: vi.fn() }));
 
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
+const askStorage = {
+  getAskChats: vi.fn(),
+  saveAskChat: vi.fn(),
+  saveAskMessage: vi.fn(),
+};
 
 function jsonRequest(body: unknown): Request {
   return new Request('http://localhost/api/ask', {
@@ -22,6 +39,15 @@ function jsonRequest(body: unknown): Request {
 describe('POST /api/ask', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(getStorageProvider).mockReturnValue(askStorage as unknown as StorageProvider);
+    askStorage.getAskChats.mockResolvedValue([]);
+    askStorage.saveAskChat.mockResolvedValue(undefined);
+    askStorage.saveAskMessage.mockResolvedValue(undefined);
+    vi.mocked(persistAskConversationContext).mockResolvedValue({
+      sourceId: 'ask_chat_1_message_1',
+      openQuestionIds: [],
+      openQuestions: [],
+    });
     if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
     else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
   });
@@ -39,6 +65,7 @@ describe('POST /api/ask', () => {
     vi.mocked(askGapswise).mockResolvedValue({
       answer: 'Focus on the target-persona decision.',
       sessionId: 'session_123',
+      execution: { route: 'web_research', agent: 'Web Research Agent', toolCalls: ['google_search'] },
       sources: [
         {
           id: 'src_2',
@@ -67,9 +94,10 @@ describe('POST /api/ask', () => {
     await expect(response.json()).resolves.toMatchObject({
       answer: 'Focus on the target-persona decision.',
       sessionId: 'session_123',
+      execution: { route: 'web_research', agent: 'Web Research Agent', toolCalls: ['google_search'] },
       modelConfig: expect.objectContaining({
         provider: 'Vertex AI / Google ADK',
-        agent: 'Partner Agent',
+        agent: 'Web Research Agent',
         model: 'gemini-3.5-flash-lite',
         thinkingLevel: 'low',
         maxOutputTokens: 1024,
@@ -96,6 +124,28 @@ describe('POST /api/ask', () => {
       userId: 'demo-user',
       message: 'What am I neglecting?',
     });
+  });
+
+  it('passes the saved message and generated source exclusions to Context Pack retrieval', async () => {
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: 'The current answer.',
+      sessionId: 'session_123',
+      sources: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'What is the MiniDV format?',
+      chatId: 'chat_1',
+      userMessageId: 'message_1',
+      projectId: 'project_a',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askGapswise).toHaveBeenCalledWith(expect.objectContaining({
+      excludeMessageId: 'message_1',
+      excludeSourceId: 'ask_chat_1_message_1',
+    }));
   });
 
   it('uses a local context response when the ADK agent is unavailable', async () => {
@@ -131,11 +181,61 @@ describe('POST /api/ask', () => {
     });
   });
 
+  it('does not use local context when ADK routing fails', async () => {
+    vi.mocked(askGapswise).mockRejectedValue(new AskAgentError('ADK routing failed.', { stage: 'routing' }));
+    vi.mocked(askGapswiseLocally).mockResolvedValue({
+      answer: 'This local answer must not be returned.',
+      sessionId: 'local_fallback_session',
+      sources: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'Search online for the current format specification.',
+      projectId: 'project_hackathon',
+    }));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: 'External verification failed: the request could not be routed safely.',
+    });
+    expect(askGapswiseLocally).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid requests', async () => {
     const response = await POST(jsonRequest({ userId: 'demo-user', message: '' }));
 
     expect(response.status).toBe(400);
     expect(askGapswise).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { projectId: 'project_b', sessionId: 'session_a', message: 'project scope mismatch', status: 403, code: 'PERMISSION_DENIED' },
+    { projectId: 'project_a', sessionId: 'session_b', message: 'ADK session mismatch', status: 400, code: 'VALIDATION_ERROR' },
+  ])('rejects an existing chat with a $message', async ({ projectId, sessionId, status, code }) => {
+    askStorage.getAskChats.mockResolvedValue([{
+      id: 'chat_1',
+      userId: 'demo-user',
+      scopeType: 'project',
+      projectId: 'project_a',
+      title: 'Existing chat',
+      adkSessionId: 'session_a',
+      createdAt: '2026-08-20T10:00:00.000Z',
+      updatedAt: '2026-08-20T10:00:00.000Z',
+    }]);
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'Continue this chat',
+      chatId: 'chat_1',
+      userMessageId: 'message_1',
+      projectId,
+      sessionId,
+    }));
+
+    expect(response.status).toBe(status);
+    expect(askGapswise).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({ code });
   });
 
   it('returns a graceful error when the ADK agent is unavailable', async () => {

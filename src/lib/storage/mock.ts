@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { collectionsToProject, collectionsToProjects, projectToCollections, ProjectCollections } from '@/lib/storage/projectMapper';
 import {
@@ -25,11 +26,14 @@ interface MockDatabase {
       feedback: FirestoreFeedback[];
       events: FirestoreEvent[];
       memories: Array<DurableMemory & { userId: string }>;
+      askChats: AskChatSession[];
+      askMessages: AskChatMessage[];
+      askResearch: AskResearchEvidence[];
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch';
 
 const EMPTY_USER = {
   contexts: [],
@@ -42,6 +46,9 @@ const EMPTY_USER = {
   feedback: [],
   events: [],
   memories: [],
+  askChats: [],
+  askMessages: [],
+  askResearch: [],
 };
 
 export class MockStorageProvider implements StorageProvider {
@@ -79,6 +86,9 @@ export class MockStorageProvider implements StorageProvider {
       feedback: current.feedback ?? [],
       events: current.events ?? [],
       memories: current.memories ?? [],
+      askChats: current.askChats ?? [],
+      askMessages: current.askMessages ?? [],
+      askResearch: current.askResearch ?? [],
     };
     await this.writeDb(db);
   }
@@ -160,6 +170,40 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'conversations', { ...conversation, userId });
   }
 
+  async getAskChats(userId: string): Promise<AskChatSession[]> {
+    return (await this.getUser(userId)).askChats ?? [];
+  }
+
+  async saveAskChat(userId: string, chat: AskChatSession): Promise<void> {
+    await this.upsert(userId, 'askChats', { ...chat, userId });
+  }
+
+  async deleteAskChat(userId: string, chatId: string): Promise<void> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    user.askChats = user.askChats.filter((chat) => chat.id !== chatId);
+    user.askMessages = user.askMessages.filter((message) => message.chatId !== chatId);
+    user.askResearch = user.askResearch.filter((research) => research.chatId !== chatId);
+    db.users[userId] = user;
+    await this.writeDb(db);
+  }
+
+  async getAskMessages(userId: string): Promise<AskChatMessage[]> {
+    return (await this.getUser(userId)).askMessages ?? [];
+  }
+
+  async saveAskMessage(userId: string, message: AskChatMessage): Promise<void> {
+    await this.upsert(userId, 'askMessages', { ...message, userId });
+  }
+
+  async getAskResearch(userId: string): Promise<AskResearchEvidence[]> {
+    return (await this.getUser(userId)).askResearch ?? [];
+  }
+
+  async saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void> {
+    await this.upsert(userId, 'askResearch', { ...research, userId });
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return (await this.getUser(userId)).feedback;
   }
@@ -205,6 +249,9 @@ export class MockStorageProvider implements StorageProvider {
       feedback: [],
       events: [],
       memories: [],
+      askChats: [],
+      askMessages: [],
+      askResearch: [],
     };
     await this.writeDb(db);
   }

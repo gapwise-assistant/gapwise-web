@@ -38,6 +38,70 @@ describe('Context Pack retrieval and durable memory policy', () => {
     expect(pack.relevantEvidence.some((evidence) => evidence.source_id === 'src_recipe')).toBe(false);
   });
 
+  it('excludes the current Ask message, generated source, and source-only graph nodes', () => {
+    const project = createGoldenDemoProject();
+    const currentSourceId = 'ask_chat_current_message';
+    const currentMessageId = 'message_current';
+    project.sources.push({
+      id: currentSourceId,
+      filename: 'Ask current message.txt',
+      type: 'note',
+      content: 'The current message contains the MiniDV question and should not support its own answer.',
+      extracted_at: '2026-08-21T10:00:00Z',
+      derived_node_ids: ['node_only_from_current_message'],
+      processing_status: 'completed',
+      origin: 'user',
+    });
+    project.nodes.push({
+      id: 'node_only_from_current_message',
+      type: 'UNKNOWN',
+      text: 'What is the MiniDV format?',
+      status: 'OPEN',
+      confidence: 1,
+      impact: 0.5,
+      source_refs: [currentSourceId],
+      created_by: 'user',
+      created_at: '2026-08-21T10:00:00Z',
+      updated_at: '2026-08-21T10:00:00Z',
+    });
+
+    const pack = buildContextPack({
+      userId: 'demo-user',
+      query: 'What is the MiniDV format?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      excludeMessageId: currentMessageId,
+      excludeSourceId: currentSourceId,
+      conversationMessages: [
+        {
+          id: currentMessageId,
+          chatId: 'chat',
+          userId: 'demo-user',
+          role: 'user',
+          text: 'What is the MiniDV format?',
+          sources: [],
+          createdAt: '2026-08-21T10:00:00Z',
+        },
+        {
+          id: 'message_previous',
+          chatId: 'chat',
+          userId: 'demo-user',
+          role: 'user',
+          text: 'Earlier project planning notes.',
+          sources: [],
+          createdAt: '2026-08-20T10:00:00Z',
+        },
+      ],
+    });
+
+    expect(pack.relevantConversationExcerpts?.some((item) => item.messageId === currentMessageId)).toBe(false);
+    expect(pack.relevantEvidence.some((item) => item.source_id === currentSourceId)).toBe(false);
+    expect(pack.provenanceSources.some((item) => item.source_id === currentSourceId)).toBe(false);
+    expect(pack.unresolvedGaps.some((node) => node.id === 'node_only_from_current_message')).toBe(false);
+    expect(pack.includedContextIds).not.toContain(currentSourceId);
+    expect(pack.includedContextIds).not.toContain('node_only_from_current_message');
+  });
+
   it('prioritizes the newest evidence that resolved a project gap and excludes unrelated memories', () => {
     const project = createGoldenDemoProject();
     project.id = 'project_clinicflow';

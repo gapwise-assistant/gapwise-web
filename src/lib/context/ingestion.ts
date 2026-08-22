@@ -4,6 +4,7 @@ import { projectForReasoning } from '@/lib/context/sourceState';
 import { linkOpenDecisionQuestions, matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
 import {
   questionIdentityKey,
+  questionsShareSubject,
   reconcileQuestionCandidate,
   semanticallyEquivalentQuestion,
   type QuestionReconciliationClassification,
@@ -26,6 +27,7 @@ export interface PrecomputedSourceNode {
   canonicalCandidateIndex?: number;
   reconciliationConfidence?: number;
   reconciliationReason?: string;
+  questionAliases?: string[];
 }
 
 export interface PrecomputedRelationship {
@@ -90,7 +92,7 @@ export function inferNodeType(content: string): ClarityNode['type'] {
 
 /**
  * Context documents often state an unresolved question in a bullet list, or
- * state the missing answer indirectly ("legal has not approved...").  Keep a
+ * state the missing answer indirectly ("the required approval has not been recorded"). Keep a
  * small deterministic extractor beside ingestion so demo mode and an
  * unavailable model still produce the same useful graph shape.  This is not a
  * second ranking system: it only preserves explicit uncertainty from the
@@ -112,47 +114,74 @@ function sentenceLines(content: string): string[] {
     .filter(Boolean);
 }
 
+const STATUS_PREDICATE = /\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b/gi;
+const REPORTING_CLAUSE = /\b(?:told|said|informed|advised|reported|notified|emailed|messaged)\s+(?:me|us|him|her|them)\s+/i;
+
+function cleanStatusSubject(value: string): string | undefined {
+  const subject = value
+    .replace(/^[\s"“'(]+|[\s"”').!?]+$/g, '')
+    .replace(/^\s*(?:the|this|my|our|a|an)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return subject.length >= 2 ? subject : undefined;
+}
+
+/**
+ * Extracts the noun phrase immediately before a generic pending-status
+ * predicate. Reporting clauses are grammar boundaries, so an actor such as
+ * an authority's reporting clause cannot become part of the status subject.
+ */
+function statusSubjects(line: string): string[] {
+  return Array.from(line.matchAll(STATUS_PREDICATE))
+    .map((match) => {
+      const predicateStart = match.index ?? 0;
+      let prefix = line.slice(0, predicateStart);
+      prefix = prefix.split(/[,;:]|\b(?:and|but|while|although)\b/i).at(-1) ?? prefix;
+      const reporting = prefix.match(REPORTING_CLAUSE);
+      if (reporting?.index !== undefined) prefix = prefix.slice(reporting.index + reporting[0].length);
+      return cleanStatusSubject(prefix);
+    })
+    .filter((value): value is string => Boolean(value));
+}
+
+function subjectForStatusLine(line: string): string | undefined {
+  return statusSubjects(line)[0];
+}
+
+/**
+ * Converts an explicit negative or pending statement into a confirmation
+ * question without guessing the domain, answer, owner, or next decision.
+ * Passive status statements use the subject as the thing to verify; active
+ * statements preserve the named source and action ("The responsible source
+ * has not confirmed X" -> "Has the responsible source confirmed X?").
+ */
 function negativeStatementQuestion(line: string): string | undefined {
   const normalized = line.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!/(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b|\b(?:still )?(?:pending|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
+  if (!/(?:has|have|had)\s+not\b|\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b|\b(?:pending|under review|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
     return undefined;
   }
 
-  if (/(?:clinical )?(?:accountab|ownership)/i.test(line) && /(?:not accepted|(?:has|have|had) not agreed|not recorded|no .*owner|without .*owner)/i.test(line)) {
-    return 'Who will accept final clinical accountability for the pilot?';
+  const active = line.match(/^(.+?)\s+(has|have|had)\s+not\s+(?:yet\s+)?(approved|confirmed|accepted|agreed|provided|reviewed|verified|demonstrated|selected|recorded)\s+(.+?)[.!?]?$/i);
+  if (active?.[1] && active[3] && active[4]) {
+    const actor = (active[1].split(/,|\band\b/i).at(-1)?.trim() ?? active[1].trim())
+      .replace(/^(The|A|An)\b/, (article) => article.toLowerCase());
+    const object = active[4].replace(/[.!?]+$/, '').trim();
+    return `Has ${actor} ${active[3].toLowerCase()} ${object}?`;
   }
-  if (/(?:sms|text message).*consent|consent.*(?:sms|text message)/i.test(line) && /(?:not approved|not confirmed|under legal review|unapproved|pending)/i.test(line)) {
-    return 'Is the SMS consent language approved for PHI-related intake?';
+
+  const passive = line.match(/^(.+?)\s+has\s+not\s+(?:yet\s+)?(?:been\s+)?(approved|confirmed|reviewed|verified|recorded)[.!?]?$/i);
+  if (passive?.[1]) {
+    const subject = passive[1].replace(/^\s*(?:the|a|an)\s+/i, '').trim();
+    return `What ${subject} is currently confirmed?`;
   }
-  if (/(?:offline|queued?|retry|idempot|duplicate)/i.test(line) && /(?:not demonstrated|not supplied|not provided|not confirmed|no stable|duplicate|missing)/i.test(line)) {
-    return 'Can offline retries occur without creating duplicate EHR records?';
-  }
-  if (/(?:bios|motherboard)/i.test(line) && /(?:not confirmed|not verified|unknown|unconfirmed|pending|missing)/i.test(line)) {
-    return 'Has the retailer confirmed that the motherboard BIOS supports the selected CPU?';
-  }
-  if (/(?:coordinator|exception review|peak|manual correction)/i.test(line) && /(?:not confirmed|not demonstrated|assumption|unclear|cannot|can\s+not)/i.test(line)) {
-    return 'Can one coordinator safely handle exception review during the peak?';
-  }
-  if (/(?:correction role|admin override|medication|allergy).*\b(?:not approved|not confirmed|not accepted|policy)/i.test(line)) {
-    return 'Who is authorized to approve medication or allergy corrections?';
-  }
-  return undefined;
+
+  const subject = subjectForStatusLine(line);
+  if (!subject) return undefined;
+  return `What current status is recorded for ${subject}?`;
 }
 
-export function extractDeterministicQuestionNodes(content: string): PrecomputedSourceNode[] {
-  const lines = sentenceLines(content);
-  const questions = new Map<string, string>();
-  lines.forEach((line) => {
-    const cleaned = cleanQuestionLine(line);
-    if (cleaned.endsWith('?') && cleaned.length >= 12) {
-      questions.set(questionIdentityKey(cleaned), cleaned);
-      return;
-    }
-    const inferred = negativeStatementQuestion(cleaned);
-    if (inferred) questions.set(questionIdentityKey(inferred), inferred);
-  });
-
-  return Array.from(questions.values()).map((text) => ({
+function questionNodesFromTexts(texts: string[]): PrecomputedSourceNode[] {
+  return Array.from(new Map(texts.map((text) => [questionIdentityKey(text), text])).values()).map((text) => ({
     type: 'UNKNOWN',
     text,
     confidence: 0.86,
@@ -162,11 +191,60 @@ export function extractDeterministicQuestionNodes(content: string): PrecomputedS
   }));
 }
 
+/** Questions written literally by the user, kept with their original wording. */
+export function extractLiteralQuestionNodes(content: string): PrecomputedSourceNode[] {
+  const questions = sentenceLines(content)
+    .map((line) => cleanQuestionLine(line))
+    .filter((line) => line.endsWith('?') && line.length >= 12);
+  return questionNodesFromTexts(questions);
+}
+
+/**
+ * Questions inferred from pending or negative prose. These are fallback
+ * candidates only; successful model analysis does not call this extractor.
+ */
+export function extractInferredStatusQuestionNodes(content: string): PrecomputedSourceNode[] {
+  const inferredQuestions: string[] = [];
+  sentenceLines(content).forEach((line) => {
+    const cleaned = cleanQuestionLine(line);
+    if (cleaned.endsWith('?')) return;
+
+    const inferred = negativeStatementQuestion(cleaned);
+    if (inferred) inferredQuestions.push(inferred);
+
+    // A prose sentence can contain more than one explicit status clause
+    // ("Transport is uncertain, and the team has not confirmed ..."). Keep
+    // both uncertainties without interpreting either domain.
+    statusSubjects(cleaned).forEach((subject) => {
+      if (inferred?.toLowerCase().includes(subject.toLowerCase())) return;
+      inferredQuestions.push(`What current status is recorded for ${subject}?`);
+    });
+  });
+  return questionNodesFromTexts(inferredQuestions);
+}
+
+/**
+ * Compatibility entry point for demo and model-unavailable ingestion. It
+ * combines literal and inferred candidates only when no model finalizer is
+ * available to choose between them.
+ */
+export function extractDeterministicQuestionNodes(content: string): PrecomputedSourceNode[] {
+  return questionNodesFromTexts([
+    ...extractLiteralQuestionNodes(content).map((node) => node.text),
+    ...extractInferredStatusQuestionNodes(content).map((node) => node.text),
+  ]);
+}
+
 function extractDeterministicEvidenceNodes(content: string): PrecomputedSourceNode[] {
   const seen = new Set<string>();
   return sentenceLines(content)
-    .filter((line) => /(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b|\b(?:pending|under review|unapproved|unconfirmed|missing)\b/i.test(line))
-    .filter((line) => /accountab|owner|correction|medication|allergy|offline|retry|idempot|duplicate|sms|consent|coordinator|exception|audit|budget|approval/i.test(line))
+    .filter((line) => {
+      const explicitNegative = /(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b/i.test(line);
+      const pendingStatus = /\b(?:pending|under review|unapproved|unconfirmed|missing)\b/i.test(line);
+      // A pending decision/deadline is already represented by the decision
+      // extractor; retain evidence for unresolved prerequisites instead.
+      return explicitNegative || (pendingStatus && !/\b(?:decision|deadline)\b/i.test(line));
+    })
     .filter((line) => {
       const key = line.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       if (seen.has(key)) return false;
@@ -217,30 +295,16 @@ function fallbackNodesForSource(content: string): PrecomputedSourceNode[] {
 
 function inferFallbackResolutionTargets(project: Project, content: string): ClarityNode[] {
   const lower = content.toLowerCase();
-  const negative = /\b(?:not|no|never|cannot|can't|unable|without|under review|pending)\b/.test(lower);
-  const targets: ClarityNode[] = [];
-  const addMatching = (predicate: (node: ClarityNode) => boolean) => {
-    project.nodes
-      .filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type) && node.status === 'OPEN' && predicate(node))
-      .forEach((node) => targets.push(node));
-  };
+  if (!/\b(?:test|trial|experiment|demonstrated|confirmed|approved|completed|produced|passed|verified|shows?|recorded)\b/i.test(lower)) return [];
 
-  if (/(?:offline|queued?|retry|idempot|duplicate)/i.test(lower)
-    && /(?:test|duplicate|idempot|without duplicates|no stable|cannot be safely used|repeated|written twice|produced)/i.test(lower)
-    && !/(?:has|have|had)\s+not\s+(?:demonstrated|supplied|provided|confirmed)/i.test(lower)) {
-    addMatching((node) => /offline|retry|duplicate|ehr|idempot/i.test(node.text));
-  }
-  if (!negative && /(?:sms|text message).*consent|consent.*(?:sms|text message)/i.test(lower)
-    && /(?:approved|approval|signed off|cleared)/i.test(lower)) {
-    addMatching((node) => /sms|consent|phi/i.test(node.text));
-  }
-  if (!negative && /(?:clinical )?(?:accountab|ownership).*(?:accepted|agreed|named|assigned)/i.test(lower)) {
-    addMatching((node) => /accountab|owner|authority|medication|allergy/i.test(node.text));
-  }
-  if (!negative && /(?:coordinator|exception review).*(?:safe|capacity|handled|covered|confirmed)/i.test(lower)) {
-    addMatching((node) => /coordinator|exception|peak/i.test(node.text));
-  }
-  return Array.from(new Map(targets.map((node) => [node.id, node])).values());
+  const contentTokens = new Set(questionIdentityKey(content).split(' ').filter(Boolean));
+  const genericTokens = new Set(['current', 'status', 'record', 'recorded', 'confirm', 'confirmed', 'approval', 'approved', 'review', 'reviewed']);
+  return project.nodes.filter((node) => {
+    if (!['UNKNOWN', 'ASSUMPTION'].includes(node.type) || node.status !== 'OPEN') return false;
+    const questionTokens = questionIdentityKey(node.text).split(' ').filter((token) => !genericTokens.has(token));
+    const overlap = questionTokens.filter((token) => contentTokens.has(token)).length;
+    return overlap >= 3;
+  });
 }
 
 export function summarizeExtraction(source: Pick<ContextSource, 'type' | 'content'>): string {
@@ -271,6 +335,10 @@ function nodeKey(type: ClarityNode['type'], text: string): string {
     if (key) return `${type}:question:${key}`;
   }
   return `${type}:${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
+}
+
+function fallbackStatusEquivalent(left: string, right: string): boolean {
+  return questionsShareSubject(left, right);
 }
 
 function mergeUnique(values: string[] | undefined, additions: string[] | undefined): string[] | undefined {
@@ -348,7 +416,8 @@ export async function ingestContextSource(
   const content = input.content.trim();
   const previousSource = updated.sources.find((source) => source.id === sourceId);
   const previousDerivedNodeIds = new Set(previousSource?.derived_node_ids ?? []);
-  const shouldCreateNode = Boolean(content) && (input.processingStatus ?? (content ? 'completed' : 'failed')) !== 'failed';
+  const shouldCreateNode = Boolean(content)
+    && ((input.processingStatus ?? (content ? 'completed' : 'failed')) !== 'failed' || Boolean(input.derivedNodes?.length));
   if (previousSource) {
     if (shouldCreateNode) {
       previousDerivedNodeIds.forEach((nodeId) => {
@@ -401,7 +470,10 @@ export async function ingestContextSource(
   updated.sources.push(newSource);
 
   if (shouldCreateNode) {
-    const nodesToProcess = derivedNodes.length
+    // An explicitly supplied empty list is a successful model result with no
+    // derived nodes. Only callers that omit derivedNodes use deterministic
+    // demo/model-unavailable extraction.
+    const nodesToProcess = input.derivedNodes !== undefined
       ? derivedNodes
       : fallbackNodesForSource(content);
     const nodeIds: string[] = [];
@@ -429,16 +501,29 @@ export async function ingestContextSource(
         : undefined;
       const key = nodeKey(node.type, node.text);
       const exactExistingNode = updated.nodes.find((candidate) => nodeKey(candidate.type, candidate.text) === key);
-      const existingNode = (questionClassification === 'PARAPHRASE' && reconciliationTarget)
+      const deterministicParaphraseTarget = deterministicReconciliation?.classification === 'PARAPHRASE'
+        && questionClassification !== 'SUBQUESTION'
+        && questionClassification !== 'ASSUMPTION';
+      let existingNode = ((questionClassification === 'PARAPHRASE' || deterministicParaphraseTarget) && reconciliationTarget)
         ? reconciliationTarget
-        : exactExistingNode
-        ?? ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalQuestionId && !node.questionClassification
-          ? updated.nodes.find((candidate) =>
-              (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
-              && semanticallyEquivalentQuestion(candidate.text, node.text)
-            )
-          : undefined);
+        : exactExistingNode;
+      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalQuestionId && !node.questionClassification) {
+        existingNode = updated.nodes.find((candidate) =>
+          (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
+          && semanticallyEquivalentQuestion(candidate.text, node.text)
+        );
+      }
+      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalQuestionId && !node.questionClassification) {
+        existingNode = updated.nodes.find((candidate) =>
+          (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
+          && fallbackStatusEquivalent(node.text, candidate.text)
+        );
+      }
       if (existingNode) {
+        const previousText = existingNode.text;
+        if (node.questionClassification && existingNode.reconciliation_status === 'fallback') {
+          existingNode.text = node.text;
+        }
         existingNode.source_refs = Array.from(new Set([...existingNode.source_refs, sourceId]));
         existingNode.confidence = Math.max(existingNode.confidence, node.confidence);
         existingNode.impact = Math.max(existingNode.impact, node.impact ?? node.confidence);
@@ -446,8 +531,10 @@ export async function ingestContextSource(
         if (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') {
           existingNode.question_aliases = Array.from(new Set([
             ...(existingNode.question_aliases ?? []),
+            ...(node.questionAliases ?? []),
+            ...(previousText === existingNode.text ? [] : [previousText]),
             ...(node.text === existingNode.text ? [] : [node.text]),
-          ]));
+          ].filter((text) => text && text !== existingNode.text)));
           if (questionClassification === 'PARAPHRASE') existingNode.question_role = 'canonical';
         }
         existingNode.reconciliation_confidence = Math.max(
@@ -490,7 +577,9 @@ export async function ingestContextSource(
                 : 'canonical')
           : undefined,
         canonical_question_id: canonicalQuestionId,
-        question_aliases: node.type === 'UNKNOWN' || node.type === 'ASSUMPTION' ? [] : undefined,
+        question_aliases: node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'
+          ? Array.from(new Set((node.questionAliases ?? []).filter((text) => text && text !== node.text)))
+          : undefined,
         reconciliation_confidence: node.reconciliationConfidence ?? deterministicReconciliation?.confidence,
         reconciliation_reason: node.reconciliationReason ?? deterministicReconciliation?.reason,
         reconciliation_status: node.questionClassification ? 'reconciled' : ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') ? 'fallback' : undefined),

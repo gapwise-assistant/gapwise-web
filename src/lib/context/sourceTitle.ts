@@ -1,6 +1,9 @@
 export function humanizeSourceTitle(filename: string): string {
   const basename = filename.split(/[\\/]/).filter(Boolean).at(-1) ?? filename;
   const withoutExtension = basename.replace(/\.[a-z0-9]{1,5}$/i, '').trim();
+  if (/^Ask\s+chat\b/i.test(withoutExtension) || /^ask_chat_/i.test(withoutExtension) || /^ask_[a-z0-9]+_[a-z0-9]+/i.test(withoutExtension)) {
+    return 'Conversation context';
+  }
   const title = withoutExtension
     .replace(/[_-]+/g, ' ')
     .replace(/([a-z])([0-9])/gi, '$1 $2')

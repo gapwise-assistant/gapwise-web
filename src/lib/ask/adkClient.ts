@@ -2,29 +2,27 @@ import { z } from 'zod';
 import { GoogleAuth } from 'google-auth-library';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
+import type { AskExecution, AskOpenQuestion, AskRoute, AskSearchSuggestions, AskSource } from '@/types/ask';
 
-export interface AskSource {
-  id: string;
-  title: string;
-  excerpt: string;
-  score?: number;
-  kind: 'source' | 'graph' | 'memory' | 'calendar';
-  supports?: string[];
-  reason?: string;
-}
+export type { AskSource } from '@/types/ask';
 
 export interface AskResult {
   answer: string;
-  sessionId: string;
+  sessionId?: string;
   sources: AskSource[];
+  execution?: AskExecution;
   promptUsed?: string;
   contextUsed?: {
     projectTitle: string;
     items: string[];
   };
+  assistantMessageId?: string;
+  openQuestionIds?: string[];
+  openQuestions?: AskOpenQuestion[];
+  searchSuggestions?: AskSearchSuggestions;
 }
 
-export type AskFailureStage = 'agent-auth' | 'agent-unavailable' | 'context-pack' | 'gemini';
+export type AskFailureStage = 'agent-auth' | 'agent-unavailable' | 'context-pack' | 'gemini' | 'routing';
 
 export class AskAgentError extends Error {
   readonly stage: AskFailureStage;
@@ -54,6 +52,19 @@ const evidenceSchema = z.object({
   supports: z.array(z.string()).optional(),
 });
 
+const askSourceSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  excerpt: z.string(),
+  score: z.number().optional(),
+  kind: z.enum(['source', 'graph', 'memory', 'calendar', 'web']),
+  supports: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+  url: z.string().url().optional(),
+  retrievedAt: z.string().optional(),
+  groundingMetadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 const contextPackResponseSchema = z.object({
   contextPack: z.object({
     relevantEvidence: z.array(evidenceSchema).default([]),
@@ -63,6 +74,7 @@ const contextPackResponseSchema = z.object({
     recentlyResolvedGaps: z.array(graphNodeSchema).default([]),
     recentDecisions: z.array(graphNodeSchema).default([]),
     contradictions: z.array(graphNodeSchema).default([]),
+    recentImportantEvents: z.array(z.string()).default([]),
     userPreferences: z.array(z.object({
       id: z.string(),
       category: z.string(),
@@ -76,9 +88,39 @@ const contextPackResponseSchema = z.object({
         why_it_matters: z.array(z.string()).optional(),
       })
     ).default([]),
+    relevantConversationExcerpts: z.array(z.object({
+      chatId: z.string(),
+      messageId: z.string(),
+      role: z.enum(['user', 'assistant']),
+      text: z.string(),
+      scopeType: z.enum(['general', 'project']),
+      projectId: z.string().optional(),
+      timestamp: z.string(),
+    })).default([]),
+    researchEvidence: z.array(z.object({
+      id: z.string(),
+      text: z.string(),
+      retrievedAt: z.string(),
+      sources: z.array(askSourceSchema),
+      provenance: z.enum(['assistant_web_research_confirmed_by_user', 'user_confirmed_ai_response']).optional(),
+      action: z.enum(['save', 'use_as_answer', 'save_as_context']).optional(),
+      targetQuestionId: z.string().optional(),
+      answerFingerprint: z.string().optional(),
+      status: z.enum(['pending', 'confirmed']).optional(),
+    })).default([]),
   }),
 });
 type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
+
+const askRouteResponseSchema = z.object({
+  route: z.enum(['web_research', 'internal_context', 'ask_clarification']),
+  reason: z.string().default(''),
+});
+
+const webResearchResponseSchema = z.object({
+  sessionId: z.string(),
+  events: z.array(z.unknown()).default([]),
+});
 
 function agentBaseUrl(): string {
   return (process.env.GAPSWISE_AGENT_URL ?? process.env.AGENT_SERVICE_URL ?? 'http://127.0.0.1:8080').replace(/\/$/, '');
@@ -117,8 +159,12 @@ async function agentRequestHeaders(): Promise<Record<string, string>> {
   return agentIdentityHeadersPromise;
 }
 
-async function createSession(userId: string, projectId?: string): Promise<string> {
-  const identityHeaders = await agentRequestHeaders();
+async function agentServiceHeaders(): Promise<Record<string, string>> {
+  return { ...await agentRequestHeaders(), ...internalApiHeaders() };
+}
+
+async function createSession(userId: string, projectId?: string, chatId?: string): Promise<string> {
+  const identityHeaders = await agentServiceHeaders();
   let response: Response;
   try {
     response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
@@ -129,6 +175,7 @@ async function createSession(userId: string, projectId?: string): Promise<string
           product: 'Gapwise',
           gapswise_user_id: userId,
           ...(projectId ? { gapswise_project_id: projectId } : {}),
+          ...(chatId ? { gapswise_chat_id: chatId } : {}),
         },
       }),
     });
@@ -168,8 +215,118 @@ function textFromAdkEvent(event: unknown): string[] {
     .filter(Boolean);
 }
 
-async function runAdkTurn(userId: string, sessionId: string, message: string): Promise<string> {
-  const identityHeaders = await agentRequestHeaders();
+interface AdkTurnResult {
+  answer: string;
+  sources: AskSource[];
+  searchSuggestions?: AskSearchSuggestions;
+}
+
+function objectValue(value: unknown, ...keys: string[]): unknown {
+  if (!value || typeof value !== 'object') return undefined;
+  for (const key of keys) {
+    if (key in value) return (value as Record<string, unknown>)[key];
+  }
+  return undefined;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function webSourceId(url: string): string {
+  let hash = 0;
+  for (let index = 0; index < url.length; index += 1) hash = ((hash << 5) - hash + url.charCodeAt(index)) | 0;
+  return `web_${Math.abs(hash)}`;
+}
+
+function webSourcesFromAdkEvents(events: unknown[]): { sources: AskSource[]; searchSuggestions?: AskSearchSuggestions } {
+  const retrievedAt = new Date().toISOString();
+  const sourcesByUrl = new Map<string, AskSource>();
+  const suggestions: AskSearchSuggestions = { webSearchQueries: [] };
+
+  events.forEach((event) => {
+    const grounding = objectRecord(objectValue(event, 'groundingMetadata', 'grounding_metadata'));
+    if (!grounding) return;
+    const chunks = objectValue(grounding, 'groundingChunks', 'grounding_chunks');
+    const chunkUrls: string[] = [];
+    if (Array.isArray(chunks)) {
+      chunks.forEach((chunk, index) => {
+        const web = objectRecord(objectValue(chunk, 'web'));
+        const url = stringValue(objectValue(web, 'uri', 'url'));
+        if (!url) return;
+        chunkUrls[index] = url;
+        const title = stringValue(objectValue(web, 'title'))
+          ?? stringValue(objectValue(web, 'domain'))
+          ?? url;
+        const existing = sourcesByUrl.get(url);
+        if (!existing) {
+          sourcesByUrl.set(url, {
+            id: webSourceId(url),
+            title,
+            excerpt: stringValue(objectValue(web, 'snippet')) ?? `Google Search result from ${title}.`,
+            kind: 'web',
+            url,
+            retrievedAt,
+            groundingMetadata: grounding,
+            reason: 'Retrieved from Google Search for this answer.',
+          });
+        } else if (existing.excerpt.startsWith('Google Search result from ') && stringValue(objectValue(web, 'snippet'))) {
+          existing.excerpt = stringValue(objectValue(web, 'snippet')) as string;
+        }
+      });
+    }
+
+    const supports = objectValue(grounding, 'groundingSupports', 'grounding_supports');
+    if (Array.isArray(supports)) {
+      supports.forEach((support) => {
+        const supportRecord = objectRecord(support);
+        const segment = objectRecord(objectValue(supportRecord, 'segment'));
+        const excerpt = stringValue(objectValue(segment, 'text'));
+        const indices = objectValue(supportRecord, 'groundingChunkIndices', 'grounding_chunk_indices');
+        const scores = objectValue(supportRecord, 'confidenceScores', 'confidence_scores');
+        if (!excerpt || !Array.isArray(indices)) return;
+        indices.forEach((chunkIndex, index) => {
+          if (typeof chunkIndex !== 'number') return;
+          const url = chunkUrls[chunkIndex];
+          const source = url ? sourcesByUrl.get(url) : undefined;
+          if (!source) return;
+          source.excerpt = source.excerpt.startsWith('Google Search result from ')
+            ? excerpt
+            : `${source.excerpt} ${excerpt}`.replace(/\s+/g, ' ').trim().slice(0, 800);
+          if (Array.isArray(scores) && typeof scores[index] === 'number') source.score = Math.max(source.score ?? 0, scores[index]);
+          source.supports = Array.from(new Set([...(source.supports ?? []), excerpt])).slice(0, 4);
+        });
+      });
+    }
+
+    const searchEntryPoint = objectRecord(objectValue(grounding, 'searchEntryPoint', 'search_entry_point'));
+    const renderedContent = stringValue(objectValue(searchEntryPoint, 'renderedContent', 'rendered_content'));
+    if (renderedContent) suggestions.renderedContent = suggestions.renderedContent
+      ? `${suggestions.renderedContent}\n${renderedContent}`
+      : renderedContent;
+    const webSearchQueries = objectValue(grounding, 'webSearchQueries', 'web_search_queries');
+    if (Array.isArray(webSearchQueries)) {
+      suggestions.webSearchQueries = Array.from(new Set([
+        ...(suggestions.webSearchQueries ?? []),
+        ...webSearchQueries.filter((query): query is string => typeof query === 'string'),
+      ]));
+    }
+  });
+
+  const searchSuggestions = suggestions.renderedContent || suggestions.webSearchQueries?.length
+    ? suggestions
+    : undefined;
+  return { sources: Array.from(sourcesByUrl.values()), searchSuggestions };
+}
+
+async function runAdkTurn(userId: string, sessionId: string, message: string): Promise<AdkTurnResult> {
+  const identityHeaders = await agentServiceHeaders();
   let response: Response;
   try {
     response = await fetch(`${agentBaseUrl()}/run_sse`, {
@@ -196,19 +353,131 @@ async function runAdkTurn(userId: string, sessionId: string, message: string): P
   }
 
   const raw = await response.text();
-  const textChunks = raw
+  const events = raw
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data: '))
     .flatMap((line) => {
       try {
-        return textFromAdkEvent(JSON.parse(line.slice(6)));
+        return [JSON.parse(line.slice(6))];
       } catch {
         return [];
       }
     });
+  const textChunks = events.flatMap(textFromAdkEvent);
   const answer = compactAdkTextChunks(textChunks);
   if (!answer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
-  return answer;
+  return { answer, ...webSourcesFromAdkEvents(events) };
+}
+
+function trustedRoutingContext(contextPack: AskContextPack | null, sources: AskSource[]) {
+  const trustedKinds = new Set<AskSource['kind']>(['source', 'graph', 'memory', 'calendar']);
+  const graphNodes = contextPack
+    ? [
+        ...contextPack.activeGoals,
+        ...contextPack.unresolvedGaps,
+        ...contextPack.recentlyResolvedGaps,
+        ...contextPack.recentDecisions,
+      ]
+    : [];
+  const userConfirmedContext = contextPack?.researchEvidence
+    .filter((research) => (
+      (research.provenance === 'user_confirmed_ai_response' && research.status !== 'pending')
+      || (research.action === 'use_as_answer' && research.status === 'confirmed')
+    ))
+    .map((research) => ({
+      id: research.id,
+      text: compactContextText(research.text),
+      provenance: research.provenance,
+      ...(research.targetQuestionId ? { targetQuestionId: research.targetQuestionId } : {}),
+      sources: research.sources.map((source) => ({
+        title: source.title,
+        excerpt: compactContextText(source.excerpt),
+        ...(source.url ? { url: source.url } : {}),
+      })).slice(0, 6),
+    })) ?? [];
+  return {
+    sources: sources
+      .filter((source) => trustedKinds.has(source.kind))
+      .map((source) => ({ kind: source.kind, title: source.title, excerpt: compactContextText(source.excerpt) }))
+      .slice(0, 12),
+    graph: graphNodes.map((node) => ({
+      type: node.type,
+      text: compactContextText(node.text),
+      ...(node.why_it_matters?.length
+        ? { details: compactContextText(node.why_it_matters.join(' ')) }
+        : {}),
+    })).slice(0, 12),
+    resolvedAnswers: contextPack?.recentImportantEvents.map((event) => compactContextText(event)).slice(0, 6) ?? [],
+    researchEvidence: userConfirmedContext.slice(0, 8),
+  };
+}
+
+export async function determineAskRoute(
+  userId: string,
+  message: string,
+  contextPack: AskContextPack | null,
+  sources: AskSource[] = [],
+): Promise<{ route: AskRoutingDecision; reason: string }> {
+  let headers: Record<string, string>;
+  try {
+    headers = await agentServiceHeaders();
+  } catch {
+    throw new AskAgentError('The deployed ADK routing agent could not be authenticated.', { stage: 'routing' });
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${agentBaseUrl()}/internal/ask-route`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        user_id: userId,
+        message,
+        trusted_context: trustedRoutingContext(contextPack, sources),
+      }),
+    });
+  } catch {
+    throw new AskAgentError('The deployed ADK routing agent could not be reached.', { stage: 'routing' });
+  }
+  if (!response.ok) {
+    throw new AskAgentError(`ADK routing failed with status ${response.status}.`, {
+      stage: 'routing',
+      status: response.status,
+    });
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new AskAgentError('ADK routing returned an unreadable decision.', { stage: 'routing' });
+  }
+  const parsed = askRouteResponseSchema.safeParse(body);
+  if (!parsed.success) throw new AskAgentError('ADK routing returned an invalid decision.', { stage: 'routing' });
+  return parsed.data;
+}
+
+async function runWebResearchTurn(userId: string, message: string): Promise<AdkTurnResult> {
+  const headers = await agentServiceHeaders();
+  let response: Response;
+  try {
+    response = await fetch(`${agentBaseUrl()}/internal/web-research`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ user_id: userId, message }),
+    });
+  } catch {
+    throw new AskAgentError('The deployed web-research agent could not be reached.', { stage: 'agent-unavailable' });
+  }
+  if (!response.ok) {
+    throw new AskAgentError(`Web research failed with status ${response.status}.`, {
+      stage: 'agent-unavailable',
+      status: response.status,
+    });
+  }
+  const parsed = webResearchResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new AskAgentError('Web research returned an invalid response.', { stage: 'gemini' });
+  const events = parsed.data.events;
+  const answer = compactAdkTextChunks(events.flatMap(textFromAdkEvent));
+  return { answer, ...webSourcesFromAdkEvents(events) };
 }
 
 function compactAdkTextChunks(chunks: string[]): string {
@@ -233,8 +502,7 @@ function compactAdkTextChunks(chunks: string[]): string {
 }
 
 function removeRepeatedContent(text: string): string {
-  const withoutCumulativeDraft = keepLastRepeatedOpening(text);
-  const withoutRepeatedBlocks = removeRepeatedMarkdownBlocks(withoutCumulativeDraft);
+  const withoutRepeatedBlocks = removeRepeatedMarkdownBlocks(text);
   const paragraphs = withoutRepeatedBlocks
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.trim())
@@ -242,81 +510,52 @@ function removeRepeatedContent(text: string): string {
   if (paragraphs.length < 2) return removeRepeatedSentenceRun(withoutRepeatedBlocks);
 
   const seen = new Set<string>();
-  const unique = paragraphs.filter((paragraph) => {
-    const signature = paragraph.replace(/\s+/g, ' ').trim().toLowerCase();
-    if (seen.has(signature)) return false;
-    seen.add(signature);
-    return true;
+  const deduped: string[] = [];
+  paragraphs.forEach((paragraph) => {
+    const key = paragraph.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    deduped.push(paragraph);
   });
-  return removeRepeatedSentenceRun(unique.join('\n\n').trim());
-}
-
-function keepLastRepeatedOpening(text: string): string {
-  if (text.length < 160) return text;
-  const openingWords = text.match(/[a-zA-Z0-9'-]+/g)?.slice(0, 8) ?? [];
-  if (openingWords.length < 8) return text;
-  const openingPattern = openingWords
-    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('[^a-zA-Z0-9]+');
-  const matches = Array.from(text.matchAll(new RegExp(openingPattern, 'gi')));
-  const last = matches[matches.length - 1];
-  if (matches.length < 2 || last.index === undefined || last.index < 80) return text;
-  const repeatedBlockStart = text.lastIndexOf('\n', last.index - 1) + 1;
-  return text.slice(repeatedBlockStart).trim();
-}
-
-function removeRepeatedMarkdownBlocks(text: string): string {
-  const lines = text.split('\n');
-  if (lines.length < 4) return text;
-  const normalizeLine = (line: string) => line.replace(/\s+/g, ' ').trim().toLowerCase();
-
-  for (let run = Math.floor(lines.length / 2); run >= 2; run -= 1) {
-    for (let start = 0; start + run * 2 <= lines.length; start += 1) {
-      const first = lines.slice(start, start + run).map(normalizeLine);
-      const second = lines.slice(start + run, start + run * 2).map(normalizeLine);
-      if (first.every((line, index) => line && line === second[index])) {
-        return [
-          ...lines.slice(0, start + run),
-          ...lines.slice(start + run * 2),
-        ].join('\n').replace(/\n{3,}/g, '\n\n').trim();
-      }
-    }
-  }
-  return text;
+  return removeRepeatedSentenceRun(deduped.join('\n\n').trim());
 }
 
 function removeRepeatedSentenceRun(text: string): string {
-  // Line-oriented Markdown has already been handled above. Avoid flattening
-  // lists/tables/code blocks while removing prose-only repeated fragments.
-  if (text.includes('\n') || text.includes('```')) return text;
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
   if (sentences.length < 2) return text;
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  sentences.forEach((sentence) => {
+    const key = sentence.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (key.length > 24 && seen.has(key)) return;
+    if (key.length > 24) seen.add(key);
+    deduped.push(sentence);
+  });
+  return deduped.join(' ').trim();
+}
 
-  const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
-  for (let start = 0; start < sentences.length - 1; start += 1) {
-    const maxRun = Math.floor((sentences.length - start) / 2);
-    for (let run = maxRun; run >= 1; run -= 1) {
-      const first = sentences.slice(start, start + run).map(normalized).join(' ');
-      const second = sentences.slice(start + run, start + run * 2).map(normalized).join(' ');
-      if (first === second) {
-        return [
-          ...sentences.slice(0, start + run),
-          ...sentences.slice(start + run * 2),
-        ].join(' ').trim();
-      }
-    }
+function removeRepeatedMarkdownBlocks(text: string): string {
+  const headingMatches = Array.from(text.matchAll(/^###\s+What changed\b/gim));
+  if (headingMatches.length < 2) return text;
+  const lastMatch = headingMatches[headingMatches.length - 1];
+  if (lastMatch.index === undefined) return text;
+  const preamble = text.slice(0, lastMatch.index).trim();
+  const openingLine = preamble.split(/\r?\n/).filter(Boolean).at(-1)?.trim();
+  if (openingLine && openingLine.length > 20 && text.slice(lastMatch.index).includes(openingLine)) {
+    return text.slice(lastMatch.index).trim();
   }
   return text;
 }
 
 function removeRepeatedTrailingLine(text: string): string {
-  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length < 2) return text;
-  const last = lines[lines.length - 1];
-  const previous = lines.slice(0, -1).join('\n');
-  if (last.length > 8 && !lines.slice(0, -1).includes(last) && previous.includes(last)) {
-    return lines.slice(0, -1).join('\n').trim();
-  }
+  const lastLine = lines[lines.length - 1];
+  const body = lines.slice(0, -1).join('\n');
+  if (lastLine.length >= 10 && body.endsWith(lastLine)) return body.trim();
   return text;
 }
 
@@ -356,26 +595,61 @@ function contextPromptForAgent(message: string, contextPack: AskContextPack | nu
   addSection('Recently answered questions', contextPack.recentlyResolvedGaps.map((node) => compactContextText(
     `${node.text}${node.why_it_matters?.length ? ` — ${node.why_it_matters.join(' ')}` : ''}`
   )));
+  addSection('Recent resolved answers', contextPack.recentImportantEvents.map((event) => compactContextText(event)));
   addSection('Recent decisions', contextPack.recentDecisions.map((node) => compactContextText(node.text)));
   addSection('Relevant project documents and evidence', mergedContextEvidence(contextPack).map((source) => `${source.filename}: ${compactContextText(source.excerpt)}`));
+  addSection('Relevant prior conversation excerpts', contextPack.relevantConversationExcerpts.map((excerpt) => {
+    const label = excerpt.role === 'assistant'
+      ? 'AI-generated historical discussion (not verified evidence)'
+      : 'Earlier user-authored message';
+    return `${label} [chat ${excerpt.chatId}, message ${excerpt.messageId}, ${excerpt.timestamp}]: ${compactContextText(excerpt.text)}`;
+  }));
+
+  const userConfirmedConclusions = contextPack.researchEvidence.filter((r) => r.provenance === 'user_confirmed_ai_response');
+  if (userConfirmedConclusions.length) {
+    addSection('User-confirmed context and conclusions', userConfirmedConclusions.map((item) => compactContextText(item.text)));
+  }
+
+  const webResearch = contextPack.researchEvidence.filter((r) => r.provenance !== 'user_confirmed_ai_response');
+  if (webResearch.length) {
+    addSection('Saved web research (research evidence, not a user-confirmed answer)', webResearch.map((research) => {
+      const citations = research.sources.filter((source) => source.url).map((source) => `${source.title} (${source.url})`).join(' · ');
+      return `${compactContextText(research.text)} — retrieved ${research.retrievedAt}${citations ? ` — ${citations}` : ''}`;
+    }));
+  }
+
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
   if (!sections.length) return message;
   return [
     'PRELOADED GAPWISE CONTEXT PACK',
-    'This Context Pack was retrieved for the exact user question below. Use it directly; do not retrieve a second Context Pack for this turn.',
-    'Use the selected project context below as the source of truth. Do not invent facts outside it.',
+    'This Context Pack was retrieved for the exact user question below. Use the trusted Gapwise context directly; do not retrieve a second Context Pack for this turn.',
+    'The structured graph, user preferences, project documents and evidence, recent decisions, user-confirmed context, and upcoming commitments are trusted context. Historical assistant discussion and saved web research are non-authoritative reference material: do not treat them as verified facts or let them override trusted context. Verify them against current evidence or Google Search when they matter.',
     projectId ? `Project scope: ${projectId}` : 'Scope: all available context',
     sections.join('\n\n'),
     `User question:\n${message}`,
   ].join('\n\n');
 }
 
-async function loadSafeSources(userId: string, query: string, projectId?: string): Promise<{ sources: AskSource[]; contextPack: AskContextPack | null }> {
+async function loadSafeSources(
+  userId: string,
+  query: string,
+  projectId?: string,
+  chatId?: string,
+  excludeMessageId?: string,
+  excludeSourceId?: string,
+): Promise<{ sources: AskSource[]; contextPack: AskContextPack | null }> {
   try {
     const response = await fetch(`${gapswiseAppUrl()}/api/internal/context-pack`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...internalApiHeaders() },
-      body: JSON.stringify({ userId, query, ...(projectId ? { projectId } : {}) }),
+      body: JSON.stringify({
+        userId,
+        query,
+        ...(projectId ? { projectId } : {}),
+        ...(chatId ? { chatId } : {}),
+        ...(excludeMessageId ? { excludeMessageId } : {}),
+        ...(excludeSourceId ? { excludeSourceId } : {}),
+      }),
     });
     if (!response.ok) {
       console.error('[Gapwise Ask]', {
@@ -443,13 +717,19 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
         supports: [commitment.text],
         reason: commitment.why_it_matters?.filter((item) => item !== 'Source: Google Calendar').join(' · '),
       }));
+    const researchSources: AskSource[] = parsed.data.contextPack.researchEvidence.flatMap((research) =>
+      research.sources.filter((source) => source.kind === 'web' && source.url).map((source) => ({
+        ...source,
+        reason: source.reason ?? `Saved research retrieved ${research.retrievedAt}.`,
+      }))
+    );
 
     return {
       sources: Array.from(
-      new Map(
-        [...evidenceSources, ...graphSources, ...memorySources, ...calendarSources]
-          .map((source) => [source.id, source])
-      ).values()
+        new Map(
+          [...evidenceSources, ...graphSources, ...memorySources, ...calendarSources, ...researchSources]
+            .map((source) => [source.id, source])
+        ).values()
       ).slice(0, 8),
       contextPack: parsed.data.contextPack,
     };
@@ -464,12 +744,14 @@ async function loadSafeSources(userId: string, query: string, projectId?: string
   }
 }
 
+export type AskRoutingDecision = AskRoute;
+
 function isRefusal(answer: string): boolean {
   return /\b(?:i\s+(?:cannot|can't|can not|am unable to|am not able to|do not have access|don't have access|do not have a|don't have a)|as an ai|i am an ai|i'm an ai|i can only help with|i'm limited to|i am limited to)\b/i.test(answer);
 }
 
 function directEvidenceAnswer(question: string, answer: string, sources: AskSource[]): string | null {
-  if (!isRefusal(answer)) return null;
+  if (answer && !isRefusal(answer)) return null;
 
   const questionTerms = question
     .toLowerCase()
@@ -502,22 +784,83 @@ export async function askGapswise(params: {
   message: string;
   sessionId?: string;
   projectId?: string;
+  chatId?: string;
+  excludeMessageId?: string;
+  excludeSourceId?: string;
 }): Promise<AskResult> {
   assertExternalServicesAllowed('Google ADK / Gemini');
-  const [sessionId, { sources, contextPack }] = await Promise.all([
-    params.sessionId?.trim() || createSession(params.userId, params.projectId),
-    loadSafeSources(params.userId, params.message, params.projectId),
-  ]);
+  const existingSessionId = params.sessionId?.trim() || undefined;
+  const { sources, contextPack } = await loadSafeSources(
+    params.userId,
+    params.message,
+    params.projectId,
+    params.chatId,
+    params.excludeMessageId,
+    params.excludeSourceId,
+  );
+
+  const routing = await determineAskRoute(params.userId, params.message, contextPack, sources);
+
+  if (routing.route === 'ask_clarification') {
+    return {
+      answer: 'I do not have enough context in your saved project notes to answer this. Could you share more details or clarify the specific information you need?',
+      ...(existingSessionId ? { sessionId: existingSessionId } : {}),
+      sources: [],
+      promptUsed: params.message,
+      execution: { route: routing.route, agent: 'Ask Routing Agent', toolCalls: [] },
+    };
+  }
+
+  if (routing.route === 'web_research') {
+    let webTurn: AdkTurnResult;
+    try {
+      webTurn = await runWebResearchTurn(params.userId, params.message);
+    } catch {
+      return {
+        answer: 'External verification failed: the web-research agent could not complete the search.',
+        ...(existingSessionId ? { sessionId: existingSessionId } : {}),
+        sources: [],
+        promptUsed: params.message,
+        execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: [] },
+      };
+    }
+    const groundedWebSources = webTurn.sources.filter((s) => s.kind === 'web' && s.url);
+    if (!webTurn.answer || !groundedWebSources.length) {
+      return {
+        answer: 'External verification failed: no reliable grounded web sources were found for this request.',
+        ...(existingSessionId ? { sessionId: existingSessionId } : {}),
+        sources: [],
+        promptUsed: params.message,
+        searchSuggestions: webTurn.searchSuggestions,
+        execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
+      };
+    }
+    return {
+      answer: webTurn.answer,
+      ...(existingSessionId ? { sessionId: existingSessionId } : {}),
+      sources: groundedWebSources,
+      promptUsed: params.message,
+      searchSuggestions: webTurn.searchSuggestions,
+      execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
+    };
+  }
+
+  // internal_context
+  const sessionId = existingSessionId ?? await createSession(params.userId, params.projectId, params.chatId);
   const promptUsed = contextPromptForAgent(params.message, contextPack, params.projectId);
-  const contextualAnswer = await runAdkTurn(
+  const adkTurn = await runAdkTurn(
     params.userId,
     sessionId,
     promptUsed,
   );
+  const internalSources = sources.filter((s) => s.kind !== 'web');
   return {
-    answer: directEvidenceAnswer(params.message, contextualAnswer, sources) ?? contextualAnswer,
+    answer: directEvidenceAnswer(params.message, adkTurn.answer, internalSources) ?? adkTurn.answer,
     sessionId,
-    sources,
+    sources: internalSources,
     promptUsed,
+    searchSuggestions: adkTurn.searchSuggestions,
+    execution: { route: routing.route, agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
   };
 }
+

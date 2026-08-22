@@ -149,7 +149,7 @@ export async function analyzePdfFromGcs(input: AnalyzePdfInput): Promise<{
             text:
               'Extract Gapwise graph context from this PDF. Return only JSON with this shape: ' +
               '{"summary":"short summary","nodes":[{"type":"KNOWN | GOAL | CONSTRAINT | ASSUMPTION | DECISION | UNKNOWN | EVIDENCE | RISK | NEXT_ACTION","text":"node text","confidence":0.0}],"reconciliation":[{"candidate_index":0,"classification":"NEW_UNCERTAINTY | PARAPHRASE | SUBQUESTION | SUPPORTING_EVIDENCE | ASSUMPTION | RELATED_BUT_DISTINCT","canonical_question_id":"existing id when applicable","canonical_candidate_index":0,"confidence":0.0,"reason":"short reason"}]}. ' +
-              'Keep nodes concise, source-grounded, and useful for goals, gaps, decisions, risks, evidence, constraints, and next actions. Preserve every explicit unresolved question in the PDF as an UNKNOWN node, including questions in lists or sections titled unresolved, pending, open questions, or blocking inputs. If the PDF says that legal approval, ownership, a vendor demonstration, or another prerequisite is missing, retain that statement as evidence and also create the natural UNKNOWN question it leaves open. Merge repeated questions by meaning instead of creating duplicates. ' +
+              'Keep nodes concise, source-grounded, and useful for goals, gaps, decisions, risks, evidence, constraints, and next actions. Preserve every explicit unresolved question in the PDF as an UNKNOWN node, including questions in lists or sections titled unresolved, pending, open questions, or blocking inputs. If the PDF says that an approval, owner, demonstration, or another prerequisite is missing, retain that statement as evidence and also create the natural UNKNOWN question it leaves open. Phrase factual and status uncertainties as requests for what the responsible source has confirmed, approved, required, or recorded; preserve genuine user choices. Merge repeated questions by meaning instead of creating duplicates. ' +
               `Canonical questions already in this project: ${canonicalQuestionSnapshot(input.project)}. Compare answer shape and downstream action, including among candidates returned from this PDF; use canonical_candidate_index for an earlier candidate in this response when appropriate. Do not merge questions merely because they share nouns. Never include private reasoning.`,
           },
         ],
@@ -287,8 +287,9 @@ export async function processPdfSource(
         || modelReconciliation?.classification === 'ASSUMPTION';
       const useModelReconciliation = Boolean(modelReconciliation)
         && (!modelNeedsTarget || Boolean(validModelExistingTarget || validModelCandidateTarget !== undefined))
-        && !(modelReconciliation?.classification === 'NEW_UNCERTAINTY' && deterministic?.canonicalQuestionId)
-        && !(modelReconciliation?.classification === 'NEW_UNCERTAINTY' && deterministic?.canonicalCandidateIndex !== undefined);
+        // A valid model classification is authoritative even when deterministic
+        // wording happens to resemble an existing question. In particular,
+        // NEW_UNCERTAINTY and RELATED_BUT_DISTINCT are explicit boundaries.
       const reconciliation = useModelReconciliation ? modelReconciliation : deterministic;
       const canonicalQuestionId = reconciliation === modelReconciliation
         ? validModelExistingTarget

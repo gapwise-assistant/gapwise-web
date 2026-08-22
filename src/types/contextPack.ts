@@ -1,5 +1,6 @@
 import { ClarityNode, ContextSource, Project, UserMemoryProfile } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
+import { AskChatMessage, AskResearchEvidence, RelevantConversationExcerpt } from '@/types/ask';
 
 export type MemoryCategory = 'career' | 'communication' | 'learning' | 'current_priorities' | 'custom';
 
@@ -48,6 +49,8 @@ export interface ContextPack {
   recentDecisions: ClarityNode[];
   contradictions: ClarityNode[];
   includedContextIds: string[];
+  relevantConversationExcerpts?: RelevantConversationExcerpt[];
+  researchEvidence?: AskResearchEvidence[];
 }
 
 export interface ContextPackInput {
@@ -57,9 +60,13 @@ export interface ContextPackInput {
   profile: UserMemoryProfile;
   durableMemories?: DurableMemory[];
   calendarCommitments?: ClarityNode[];
+  conversationMessages?: AskChatMessage[];
+  researchEvidence?: AskResearchEvidence[];
   /** Include recent scope sources even when a broad exploratory query has no term match. */
   includeBroadContext?: boolean;
   scope?: AppScope;
+  excludeMessageId?: string;
+  excludeSourceId?: string;
   limits?: Partial<Record<keyof Omit<ContextPack, 'id' | 'query' | 'built_at' | 'includedContextIds' | 'provenanceSources'>, number>>;
 }
 

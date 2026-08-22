@@ -4,6 +4,7 @@ import { calculateClarityScore } from '@/lib/prioritization';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { analyzeContextItem, processContextSource } from '@/lib/context/contextAnalysis';
 import { ingestContextSource } from '@/lib/context/ingestion';
+import { rankGaps } from '@/lib/tools/graphTools';
 import { Project } from '@/types/clarity';
 
 function projectWithGoal(goal = 'Plan a 10 day Japan trip for October'): Project {
@@ -145,7 +146,7 @@ describe('AI context graph analysis', () => {
     expect(wifi?.source_refs).toContain('src_wifi_notes');
   });
 
-  it('collapses paraphrases returned by the same Context Agent response', async () => {
+  it('preserves model-declared new uncertainties returned by the same Context Agent response', async () => {
     const genAI = mockGenAI({
       summary: 'The operating-system choice is still open.',
       nodes: [
@@ -167,10 +168,14 @@ describe('AI context graph analysis', () => {
     }), DEFAULT_USER_PROFILE, { genAI });
 
     const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('src_os_notes'));
-    expect(questions).toHaveLength(1);
-    expect(questions[0]?.question_aliases).toContain('Is Windows Home sufficient for the project, or are Windows Pro features like Hyper-V and Remote Desktop required?');
+    expect(questions).toHaveLength(2);
+    expect(questions.map((question) => question.text)).toEqual(expect.arrayContaining([
+      'Do I need Windows Pro for Hyper-V and Remote Desktop, or is Windows Home sufficient?',
+      'Is Windows Home sufficient for the project, or are Windows Pro features like Hyper-V and Remote Desktop required?',
+    ]));
     expect(result.project.sources.find((source) => source.id === 'src_os_notes')?.reconciliation_summary).toMatchObject({
-      canonical_merge_count: 1,
+      canonical_merge_count: 0,
+      new_question_count: 2,
       validation_status: 'passed',
     });
   });
@@ -395,6 +400,58 @@ describe('AI context graph analysis', () => {
     expect(genAI.models.generateContent).not.toHaveBeenCalled();
     expect(result.project.sources).toHaveLength(1);
     expect(result.project.nodes.some((node) => node.source_refs.includes('src_japan_notes'))).toBe(true);
+  });
+
+  it('consolidates surgery status candidates into one canonical insurance question', async () => {
+    const modelQuestion = 'Has the insurance company approved the procedure authorization, or what was the outcome of the review expected by October 9?';
+    const genAI = mockGenAI({
+      summary: 'The surgery preparation note leaves authorization and preparation details to confirm.',
+      nodes: [
+        { type: 'UNKNOWN', text: modelQuestion, confidence: 0.98, impact: 0.96 },
+        { type: 'UNKNOWN', text: 'What does the user need to know before the surgery?', confidence: 0.86, impact: 0.72 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Complete my surgery preparation by October 9.'), input({
+      sourceId: 'src_surgery_context',
+      filename: 'surgery-preparation.txt',
+      content: [
+        'I am preparing for surgery on October 9.',
+        'My insurance company told me the procedure authorization is still being reviewed.',
+        'What should I confirm before the surgery?',
+        'The surgical center has not confirmed the arrival instructions.',
+      ].join('\n'),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const sourceNodeIds = new Set(result.project.sources.find((source) => source.id === 'src_surgery_context')?.derived_node_ids ?? []);
+    const sourceQuestions = result.project.nodes.filter((node) => sourceNodeIds.has(node.id) && node.type === 'UNKNOWN');
+    const insuranceQuestions = sourceQuestions.filter((node) => /insurance|authorization/i.test(node.text) && node.status === 'OPEN');
+    expect(insuranceQuestions).toHaveLength(1);
+    expect(insuranceQuestions[0]?.text).toBe(modelQuestion);
+    expect(sourceQuestions.some((node) => /insurance company told me/i.test(node.text))).toBe(false);
+    expect(sourceQuestions.some((node) => /the user/i.test(node.text))).toBe(false);
+    expect(sourceQuestions.map((node) => node.text)).toContain('What should I confirm before the surgery?');
+    expect(rankGaps(result.project).some((gap) => /insurance company told me/i.test(gap.question))).toBe(false);
+    expect(result.project.active_question?.question).not.toMatch(/insurance company told me/i);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a usable status question when the model is unavailable', async () => {
+    const genAI = {
+      models: {
+        generateContent: vi.fn().mockRejectedValue(new Error('Vertex unavailable')),
+      },
+    } as any;
+    const result = await processContextSource(projectWithGoal('Complete my surgery preparation.'), input({
+      sourceId: 'src_unavailable_status',
+      content: 'My insurance company told me the procedure authorization is still being reviewed.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.error).toBe('Vertex unavailable');
+    expect(result.project.nodes.some((node) =>
+      node.type === 'UNKNOWN'
+      && node.source_refs.includes('src_unavailable_status')
+      && node.text === 'What current status is recorded for procedure authorization?'
+    )).toBe(true);
   });
 
   it('keeps context analysis isolated to the project supplied to it', async () => {

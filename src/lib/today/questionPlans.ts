@@ -39,15 +39,6 @@ function sentence(value: string, maxLength = 220): string {
   return `${shortened}.`;
 }
 
-function titleValue(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = compact(value).replace(/[.!?]+$/g, '');
-  if (normalized.length < 8 || normalized.length > 90) return null;
-  if (normalized.split(/\s+/).length > 10) return null;
-  if (!/^(decide|confirm|clarify|find out|verify|check)\b/i.test(normalized)) return null;
-  return normalized;
-}
-
 function summaryValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = compact(value)
@@ -61,112 +52,7 @@ function summaryValue(value: unknown): string | null {
   return sentence(firstSentence, 150);
 }
 
-function questionWithoutPunctuation(question: string): string {
-  const normalized = compact(question).replace(/[?!.]+$/g, '').trim();
-  return normalized.replace(/^what should we do about:\s*/i, '').trim();
-}
-
-function lowerFirst(value: string): string {
-  return value.charAt(0).toLowerCase() + value.slice(1);
-}
-
-const ACTION_VERBS = '(?:stay|run|fit|handle|support|remain|use|avoid|occur|work|meet|keep|need|include|require|operate|pass|reach|provide|allow|change|continue|be|have)';
-const HAS_VERBS = '(?:approved|accepted|agreed|checked|confirmed|completed|demonstrated|provided|received|reviewed|selected|supported|verified|run|passed|resolved|changed|met|shown|supplied)';
-
-function deterministicYesNoTitle(raw: string): string | null {
-  const canOrWill = raw.match(new RegExp(`^(Can|Will)\\s+(.+?)\\s+(safely\\s+)?(${ACTION_VERBS})\\b(.*)$`, 'i'));
-  if (canOrWill) {
-    const auxiliary = canOrWill[1].toLowerCase();
-    const subject = canOrWill[2];
-    const adverb = canOrWill[3] ?? '';
-    const verb = canOrWill[4];
-    const remainder = canOrWill[5] ?? '';
-    return `Confirm whether ${subject} ${auxiliary} ${adverb}${verb}${remainder}`;
-  }
-
-  const does = raw.match(new RegExp(`^Does\\s+(.+?)\\s+(${ACTION_VERBS})\\b(.*)$`, 'i'));
-  if (does) {
-    const inflections: Record<string, string> = {
-      be: 'is',
-      have: 'has',
-      include: 'includes',
-      keep: 'keeps',
-      need: 'needs',
-      operate: 'operates',
-      pass: 'passes',
-      provide: 'provides',
-      reach: 'reaches',
-      remain: 'remains',
-      require: 'requires',
-      support: 'supports',
-      use: 'uses',
-      work: 'works',
-    };
-    const verb = does[2].toLowerCase();
-    return `Confirm whether ${does[1]} ${inflections[verb] ?? `${verb}s`}${does[3] ?? ''}`;
-  }
-
-  const has = raw.match(new RegExp(`^Has\\s+(.+?)\\s+(${HAS_VERBS})\\b(.*)$`, 'i'));
-  if (has) return `Confirm whether ${has[1]} has ${has[2]}${has[3] ?? ''}`;
-  return null;
-}
-
-function namedCompany(facts: string[]): string | undefined {
-  for (const fact of facts) {
-    const match = fact.match(/\b(?:at|for)\s+([A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,3})/);
-    if (match?.[1]) return match[1].replace(/[,.]$/, '');
-  }
-  return undefined;
-}
-
-function roleFitFallback(question: TodayQuestionLike): TodayQuestionPresentation | null {
-  const raw = questionWithoutPunctuation(question.question);
-  const match = raw.match(/^Does\s+(.+?)\s+remain acceptable\b/i);
-  if (!match) return null;
-  const facts = question.presentationContext ?? [];
-  const company = namedCompany(facts);
-  const subject = company ? `the ${company} role` : 'the role';
-  const roleFact = facts.find((fact) => /\bfrontend\b/i.test(fact));
-  const preferenceFact = facts.find((fact) => /avoid|preference|preferred direction|dominated by frontend/i.test(fact));
-  let summary = 'The role may conflict with your preferred direction.';
-  if (roleFact && preferenceFact) {
-    const roleMatch = roleFact.match(/(\d+\s*[–-]\s*\d+%\s+frontend(?:\s+(?:during|in)\s+[^,.]+)?)/i);
-    const role = roleMatch?.[1] ?? 'primarily frontend';
-    summary = `The role may be ${role}, which conflicts with your preferred direction.`;
-  } else if (roleFact) {
-    summary = 'The available role details still need a steady-state work split.';
-  }
-  return {
-    questionId: question.id,
-    title: `Decide if ${subject} is worth pursuing`,
-    summary: sentence(summary),
-  };
-}
-
 function deterministicPresentation(question: TodayQuestionLike): TodayQuestionPresentation {
-  const roleFit = roleFitFallback(question);
-  if (roleFit) return roleFit;
-
-  const wrappedQuestion = /^what should we do about:/i.test(question.question);
-  const raw = questionWithoutPunctuation(question.question);
-  const lower = lowerFirst(raw);
-  let title: string;
-  const canQuestion = raw.match(/^can\s+(one coordinator|the offline queue)\s+(.+)$/i);
-  const hasQuestion = raw.match(/^has\s+(.+)$/i);
-  const doesQuestion = raw.match(/^does\s+(.+)$/i);
-  const yesNoTitle = deterministicYesNoTitle(raw);
-  if (yesNoTitle) title = yesNoTitle;
-  else if (canQuestion) title = `Verify whether ${canQuestion[1]} can ${canQuestion[2]}`;
-  else if (hasQuestion) title = `Confirm whether ${lower.replace(/^has\s+/i, '')}`;
-  else if (doesQuestion) title = `Confirm whether ${lower.replace(/^does\s+/i, '')}`;
-  else if (wrappedQuestion || /^what percentage\b/i.test(raw)) title = `Find out ${lower}`;
-  else if (/^what\b/i.test(raw)) title = `Find out ${lower}`;
-  else if (/^which\b/i.test(raw)) title = `Clarify ${lower}`;
-  else if (/^is there\b/i.test(raw)) title = `Confirm there is ${lower.replace(/^is there\s+/i, '')}`;
-  else if (/^is\b/i.test(raw)) title = `Confirm whether ${lower.replace(/^is\s+/i, '')}`;
-  else if (/^(are|does|do|can|will|should)\b/i.test(raw)) title = `Confirm ${lower.replace(/^(are|does|do|can|will|should)\s+/i, 'that ')}`;
-  else title = `Clarify ${lower}`;
-
   const context = question.presentationContext?.find(Boolean);
   const reason = question.reason.trim();
   const genericReason = /^(blocks?|affects?|this unresolved item|a decision depends|resolve these)/i.test(reason);
@@ -179,7 +65,7 @@ function deterministicPresentation(question: TodayQuestionLike): TodayQuestionPr
 
   return {
     questionId: question.id,
-    title: sentence(title, 90).replace(/\.$/, ''),
+    title: question.question,
     summary: sentence(summary),
   };
 }
@@ -201,34 +87,6 @@ export function localQuestionSuggestion(question: TodayQuestionLike): TodayQuest
     return {
       questionId: question.id,
       suggestedAnswer: 'I cannot confirm that you are prepared yet. Review the event details and identify the one preparation task still outstanding.',
-      whyItMatters: question.reason,
-    };
-  }
-
-  const roleFit = roleFitFallback(question);
-  if (roleFit && question.presentationContext?.length) {
-    const roleFact = question.presentationContext.find((fact) => /\bfrontend\b/i.test(fact));
-    const roleMatch = roleFact?.match(/(\d+\s*[–-]\s*\d+%\s+frontend(?:\s+(?:during|in)\s+[^,.]+)?)/i);
-    const role = roleMatch?.[1] ?? 'primarily frontend';
-    return {
-      questionId: question.id,
-      suggestedAnswer: `The role is ${role} in the documented period. Decide whether financial stability makes that tradeoff acceptable despite the preference to avoid frontend-heavy work.`,
-      whyItMatters: question.reason,
-    };
-  }
-
-  if (/what percentage.*normal week|steady-state.*frontend/i.test(question.question) && question.presentationContext?.length) {
-    return {
-      questionId: question.id,
-      suggestedAnswer: 'Find out the normal-week frontend percentage after the dashboard launch before deciding whether the role fits.',
-      whyItMatters: question.reason,
-    };
-  }
-
-  if (/funded.*manager-supported|path into backend|path into applied ai/i.test(question.question)) {
-    return {
-      questionId: question.id,
-      suggestedAnswer: 'Confirm whether the path beyond frontend work is funded, manager-supported, and tied to a real team need.',
       whyItMatters: question.reason,
     };
   }
@@ -322,12 +180,17 @@ export function parseQuestionPresentations(answer: string, questions: TodayQuest
         ? byQuestion.get(questionKey(rawQuestion))
         : undefined;
     if (!id) return;
-    const title = titleValue(entry.title);
     const summary = summaryValue(entry.summary);
-    if (title && summary) byId.set(id, { questionId: id, title, summary });
+    if (summary) {
+      const question = questions.find((item) => item.id === id);
+      if (question) byId.set(id, { questionId: id, title: question.question, summary });
+    }
   });
 
-  return questions.map((question) => byId.get(question.id) ?? localQuestionPresentation(question));
+  return questions.map((question) => ({
+    ...(byId.get(question.id) ?? localQuestionPresentation(question)),
+    title: question.question,
+  }));
 }
 
 export function questionSuggestionRequestMessage(
@@ -342,8 +205,7 @@ export function questionSuggestionRequestMessage(
     `The current scope is: ${scopeLabel}.`,
     'Call get_context_pack first using the current user and the current scope before answering.',
     `Create an evidence-aware presentation and suggested answer for each of these questions: ${questionList}`,
-    'For each question, create presentation copy with only a short action-oriented title and one-sentence summary.',
-    'Prefer title verbs Decide, Confirm, Clarify, or Find out. Do not repeat the raw graph question, expose graph/system wording, or use generic text such as “Blocks interview decision.”',
+    'For each question, keep the canonical question text as the title and provide only a one-sentence summary. The title is immutable: do not rewrite, shorten, or replace it.',
     'Use concrete names and details only when they are supported by the current Context Pack. Never invent facts.',
     'For each question, provide a concise suggested answer or draft answer based only on the current Context Pack.',
     'Also provide one sentence explaining exactly why answering this question matters for the current project goal.',

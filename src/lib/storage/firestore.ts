@@ -2,6 +2,7 @@ import { FieldValue, Firestore } from 'firebase-admin/firestore';
 import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { getFirestoreClient } from '@/lib/firebase-admin';
 import { collectionsToProject, collectionsToProjects, projectToCollections, ProjectCollections } from '@/lib/storage/projectMapper';
@@ -17,7 +18,7 @@ import {
   StorageProvider,
 } from '@/lib/storage/types';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -190,6 +191,48 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'conversations', conversation);
   }
 
+  async getAskChats(userId: string): Promise<AskChatSession[]> {
+    return this.list<AskChatSession>(userId, 'askChats');
+  }
+
+  async saveAskChat(userId: string, chat: AskChatSession): Promise<void> {
+    await this.save(userId, 'askChats', chat);
+  }
+
+  async deleteAskChat(userId: string, chatId: string): Promise<void> {
+    try {
+      const messages = await this.getAskMessages(userId);
+      const research = await this.getAskResearch(userId);
+      const batch = this.db.batch();
+      batch.delete(this.collection(userId, 'askChats').doc(chatId));
+      messages
+        .filter((message) => message.chatId === chatId)
+        .forEach((message) => batch.delete(this.collection(userId, 'askMessages').doc(message.id)));
+      research
+        .filter((item) => item.chatId === chatId)
+        .forEach((item) => batch.delete(this.collection(userId, 'askResearch').doc(item.id)));
+      await batch.commit();
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async getAskMessages(userId: string): Promise<AskChatMessage[]> {
+    return this.list<AskChatMessage>(userId, 'askMessages');
+  }
+
+  async saveAskMessage(userId: string, message: AskChatMessage): Promise<void> {
+    await this.save(userId, 'askMessages', message);
+  }
+
+  async getAskResearch(userId: string): Promise<AskResearchEvidence[]> {
+    return this.list<AskResearchEvidence>(userId, 'askResearch');
+  }
+
+  async saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void> {
+    await this.save(userId, 'askResearch', research);
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return this.list<FirestoreFeedback>(userId, 'feedback');
   }
@@ -237,6 +280,9 @@ export class FirestoreStorageProvider implements StorageProvider {
       'feedback',
       'events',
       'memories',
+      'askChats',
+      'askMessages',
+      'askResearch',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();

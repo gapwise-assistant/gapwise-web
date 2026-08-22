@@ -224,7 +224,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     const presentation = questionPresentations[sourceQuestion.id];
     const suggestion = questionSuggestions[sourceQuestion.id];
     const question = presentation
-      ? { ...sourceQuestion, presentationTitle: presentation.title, presentationSummary: presentation.summary }
+      ? { ...sourceQuestion, presentationTitle: sourceQuestion.question, presentationSummary: presentation.summary }
       : sourceQuestion;
     return {
       id: item?.recommendation.id ?? `question:${question.id}`,
@@ -243,7 +243,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       ...item,
       question: {
         ...item.question,
-        presentationTitle: presentation.title,
+        presentationTitle: item.question.question,
         presentationSummary: presentation.summary,
       },
     } satisfies OpenQuestionRowItem;
@@ -507,7 +507,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       })),
       ...Object.values(hiddenQuestions).map((question) => ({
         key: question.id,
-        title: question.presentationTitle || question.question,
+        title: question.question,
         description: question.presentationSummary || question.reason,
         question,
         restore: () => handleRestoreQuestion(question),
@@ -567,7 +567,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-slate-300">
                   <Check className="mr-1 inline h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-                  {item.question.presentationTitle || item.question.question}
+                  {item.question.question}
                 </p>
                 <p className="mt-0.5 truncate text-xs text-slate-500" title={item.answer}>{item.answer}</p>
               </div>

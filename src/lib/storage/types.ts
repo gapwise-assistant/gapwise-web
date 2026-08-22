@@ -1,6 +1,7 @@
 import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
+import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 
 export interface BaseEntity {
   id: string;
@@ -124,6 +125,14 @@ export interface StorageProvider {
 
   getConversations(userId: string): Promise<FirestoreConversation[]>;
   saveConversation(userId: string, conversation: FirestoreConversation): Promise<void>;
+
+  getAskChats(userId: string): Promise<AskChatSession[]>;
+  saveAskChat(userId: string, chat: AskChatSession): Promise<void>;
+  deleteAskChat(userId: string, chatId: string): Promise<void>;
+  getAskMessages(userId: string): Promise<AskChatMessage[]>;
+  saveAskMessage(userId: string, message: AskChatMessage): Promise<void>;
+  getAskResearch(userId: string): Promise<AskResearchEvidence[]>;
+  saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void>;
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;

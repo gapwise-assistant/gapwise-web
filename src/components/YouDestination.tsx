@@ -8,10 +8,9 @@ import { groupProjectSummaries } from '@/lib/projects/projectSummaries';
 import type { ProjectCardSummary } from '@/lib/projects/projectSummaries';
 import { ClarityGraphCanvas } from '@/components/ClarityGraphCanvas';
 import { currentPriorities, userLevelUnresolvedQuestions } from '@/lib/you/sections';
-import { relationshipReasons } from '@/lib/graph/relationshipContext';
-import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 import { answeredQuestionHistory } from '@/lib/questions/history';
 import type { AnsweredQuestion } from '@/lib/questions/history';
+import { ProjectQuestionsList } from '@/components/ProjectQuestionsList';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
@@ -176,43 +175,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     setOpenProjectMenuId(null);
   };
 
-  const sourceNamesForNode = (node: ClarityNode) => {
-    const names = node.source_refs
-      .map((sourceId) => project.sources.find((source) => source.id === sourceId)?.filename)
-      .map((name) => name ? humanizeSourceTitle(name) : undefined)
-      .filter((name): name is string => Boolean(name));
-    return names.length ? names.join(', ') : 'No named source attached yet.';
-  };
-
-  const questionEffectText = (node: ClarityNode) => {
-    const connected = reasoningProject.edges
-      .filter((edge) => edge.source === node.id || edge.target === node.id)
-      .map((edge) => {
-        const outgoing = edge.source === node.id;
-        const other = reasoningProject.nodes.find((candidate) => candidate.id === (outgoing ? edge.target : edge.source));
-        if (!other || !['GOAL', 'DECISION', 'NEXT_ACTION', 'CONSTRAINT'].includes(other.type)) return null;
-        const relationship = edge.type === 'blocks'
-          ? outgoing ? 'Blocks' : 'Blocked by'
-          : edge.type === 'affects'
-            ? outgoing ? 'Affects' : 'Affected by'
-            : edge.type === 'depends_on'
-              ? outgoing ? 'Depends on' : 'Needed by'
-              : edge.type === 'resolves'
-                ? outgoing ? 'Resolves' : 'Resolved by'
-                : 'Connected to';
-        return `${relationship}: ${other.text}`;
-      })
-      .filter((value): value is string => Boolean(value));
-    if (connected.length) return connected[0];
-    const reasons = relationshipReasons(reasoningProject, node.id);
-    if (reasons.length) return reasons[0];
-    if (node.type === 'ASSUMPTION') return 'Project direction and decision confidence';
-    return 'Project direction';
-  };
-
-  const answeredDateLabel = (timestamp: string) => {
-    const date = new Date(timestamp);
-    return Number.isNaN(date.getTime()) ? 'Previously answered' : `Answered ${date.toLocaleDateString()}`;
+  const questionDisplayText = (node: ClarityNode) => {
+    return node.text;
   };
 
   const renderProjectCard = (summary: ProjectCardSummary) => {
@@ -325,7 +289,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
 
             return (
               <article key={node.id} className="space-y-3 rounded-xl border border-slate-800 bg-slate-900 p-4">
-                <h3 className="text-sm font-bold text-slate-100">{node.text}</h3>
+                <h3 className="text-sm font-bold text-slate-100">{questionDisplayText(node)}</h3>
                 {relatedProject && (
                   <p className="text-xs font-semibold text-cyan-300">Related to: {relatedProject.title}</p>
                 )}
@@ -425,100 +389,13 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   );
 
   const renderProjectQuestions = () => (
-    <section className="space-y-4">
-      <h3 className="text-lg font-extrabold text-slate-100">Open questions</h3>
-      {projectQuestions.length ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {projectQuestions.map((node) => (
-            <article key={node.id} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-400">
-                {node.type === 'ASSUMPTION' ? 'Important assumption' : 'Open question'}
-              </p>
-              <h4 className="mt-3 text-base font-extrabold text-slate-100">{node.text}</h4>
-              <div className="mt-4 space-y-3 text-sm">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Why it matters</p>
-                  <p className="mt-1 text-slate-300">{node.why_it_matters?.[0] ?? 'This may affect the project direction.'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">What it affects</p>
-                  <p className="mt-1 text-slate-300">{questionEffectText(node)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Evidence checked</p>
-                  <p className="mt-1 text-slate-300">{sourceNamesForNode(node)}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => onAnswerQuestion(node, node.type === 'ASSUMPTION' ? 'confirm' : undefined)}
-                className="mt-4 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950"
-              >
-                Resolve
-              </button>
-              {node.type === 'ASSUMPTION' && (
-                <button
-                  type="button"
-                  onClick={() => onAnswerQuestion(node, 'correct')}
-                  className="mt-4 ml-2 rounded-lg border border-amber-700/80 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200"
-                >
-                  Correct
-                </button>
-              )}
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-sm text-slate-500">
-          No open project questions right now.
-        </div>
-      )}
-      <section className="space-y-4 border-t border-slate-800 pt-6">
-        <div>
-          <h3 className="text-lg font-extrabold text-slate-100">Previously answered</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Questions you answered and the understanding Gapwise recorded afterward.
-          </p>
-        </div>
-        {answeredQuestions.length ? (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {answeredQuestions.map((item) => (
-              <article key={`${item.timestamp}-${item.question}`} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-400">Answered</p>
-                  <p className="text-xs text-slate-500">{answeredDateLabel(item.timestamp)}</p>
-                </div>
-                <h4 className="mt-3 text-base font-extrabold text-slate-100">{item.question}</h4>
-                <div className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Your answer</p>
-                    <p className="mt-1 whitespace-pre-wrap text-slate-300">{item.answer}</p>
-                  </div>
-                  {item.graph_diff_summary && (
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">What changed</p>
-                      <p className="mt-1 text-slate-400">{item.graph_diff_summary}</p>
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onEditAnsweredQuestion(item, project.id)}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300"
-                >
-                  <Edit3 className="h-3.5 w-3.5" />
-                  Edit answer
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-sm text-slate-500">
-            No answered questions yet.
-          </div>
-        )}
-      </section>
-    </section>
+    <ProjectQuestionsList
+      openQuestions={projectQuestions}
+      answeredQuestions={answeredQuestions}
+      projectId={project.id}
+      onAnswerQuestion={onAnswerQuestion}
+      onEditAnsweredQuestion={onEditAnsweredQuestion}
+    />
   );
 
   const renderProjects = () => (

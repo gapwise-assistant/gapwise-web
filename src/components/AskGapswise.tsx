@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
-import { AskSource } from '@/lib/ask/adkClient';
+import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Globe, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { AskOpenQuestion, AskResearchEvidence, AskResult, AskSearchSuggestions, AskSource } from '@/types/ask';
 import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
+import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
@@ -27,6 +28,9 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   sources?: AskSource[];
+  openQuestionIds?: string[];
+  openQuestions?: AskOpenQuestion[];
+  searchSuggestions?: AskSearchSuggestions;
   responseDetails?: {
     promptUsed?: string;
     systemPrompt?: string;
@@ -54,6 +58,26 @@ export interface ChatSession {
   firstQuestion: string;
   sessionId: string | null;
   messages: ChatMessage[];
+}
+
+interface PersistedAskChat {
+  id: string;
+  title: string;
+  adkSessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PersistedAskMessage extends ChatMessage {
+  chatId: string;
+  createdAt: string;
+}
+
+interface ResearchActionState {
+  message: ChatMessage;
+  mode: 'save' | 'use_as_answer' | 'save_as_context';
+  text: string;
+  targetQuestionId: string;
 }
 
 function sessionStorageKey(userId: string, scope: AppScope): string {
@@ -114,236 +138,326 @@ function chatHoverLabel(chat: ChatSession): string {
 }
 
 export function chatPickerOptions(chats: ChatSession[], draftChat: ChatSession | null): Array<{ id: string; label: string; title?: string }> {
-  return [
-    ...(draftChat ? [{ id: draftChat.id, label: 'New chat (unsent)', title: chatHoverLabel(draftChat) }] : []),
-    ...chats.map((chat) => ({ id: chat.id, label: chatLabel(chat), title: chatHoverLabel(chat) })),
-  ];
+  const options: Array<{ id: string; label: string; title?: string }> = [];
+  if (draftChat) {
+    options.push({
+      id: draftChat.id,
+      label: draftChat.messages.length ? chatLabel(draftChat) : 'New chat (unsent)',
+      title: draftChat.messages.length ? chatHoverLabel(draftChat) : 'Unsent new chat draft',
+    });
+  }
+  chats.forEach((candidate) => {
+    if (draftChat && candidate.id === draftChat.id) return;
+    options.push({
+      id: candidate.id,
+      label: chatLabel(candidate),
+      title: chatHoverLabel(candidate),
+    });
+  });
+  return options;
 }
 
-function normalizeChat(chat: ChatSession): ChatSession {
-  const messages = Array.isArray(chat.messages) ? chat.messages : [];
-  const firstQuestion = typeof chat.firstQuestion === 'string' && chat.firstQuestion
-    ? chat.firstQuestion
-    : messages.find((message) => message?.role === 'user')?.text ?? '';
-  return {
-    ...chat,
-    title: firstQuestion ? titleForMessage(firstQuestion) : chat.title || 'New chat',
-    createdAt: typeof chat.createdAt === 'string' && !Number.isNaN(new Date(chat.createdAt).getTime())
-      ? chat.createdAt
-      : new Date().toISOString(),
-    firstQuestion,
-    messages,
-  };
+export function restoreChatSessions(
+  persistedChats: PersistedAskChat[],
+  persistedMessages: PersistedAskMessage[],
+): ChatSession[] {
+  const messagesByChat = new Map<string, ChatMessage[]>();
+  persistedMessages.forEach((message) => {
+    const messages = messagesByChat.get(message.chatId) ?? [];
+    messages.push({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      sources: message.sources,
+      openQuestionIds: message.openQuestionIds,
+      openQuestions: message.openQuestions,
+      searchSuggestions: message.searchSuggestions,
+    });
+    messagesByChat.set(message.chatId, messages);
+  });
+
+  return persistedChats.map((chat) => {
+    const messages = messagesByChat.get(chat.id) ?? [];
+    const firstQuestion = messages.find((message) => message.role === 'user')?.text ?? '';
+    return {
+      id: chat.id,
+      title: chat.title,
+      createdAt: chat.createdAt,
+      firstQuestion,
+      sessionId: chat.adkSessionId ?? null,
+      messages,
+    };
+  });
 }
 
-export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLabel, initialPrompt, autoSendInitialPrompt, onInitialPromptSent, newChatPrompt, onNewChatPromptOpened, onViewSource }) => {
+export function researchStatusFromRecords(records: Array<Partial<AskResearchEvidence>>): {
+  savedMessageIds: Set<string>;
+  savedContextMessageIds: Set<string>;
+  confirmedAnswerMessageIds: Set<string>;
+} {
+  const savedMessageIds = new Set<string>();
+  const savedContextMessageIds = new Set<string>();
+  const confirmedAnswerMessageIds = new Set<string>();
+
+  records.forEach((record) => {
+    if (!record.assistantMessageId) return;
+    if (record.action === 'save_as_context' || record.provenance === 'user_confirmed_ai_response') {
+      savedContextMessageIds.add(record.assistantMessageId);
+    }
+    if (record.action === 'save' || record.provenance === 'assistant_web_research_confirmed_by_user') {
+      savedMessageIds.add(record.assistantMessageId);
+    }
+    if (record.action === 'use_as_answer' && record.status === 'confirmed') {
+      confirmedAnswerMessageIds.add(record.assistantMessageId);
+    }
+    if (!record.action && !record.provenance) {
+      savedMessageIds.add(record.assistantMessageId);
+    }
+  });
+
+  return { savedMessageIds, savedContextMessageIds, confirmedAnswerMessageIds };
+}
+
+function conclusionFromAnswer(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith('#'));
+  return lines[0] ?? text.trim();
+}
+
+function safeSearchSuggestionText(suggestions?: AskSearchSuggestions): string {
+  if (!suggestions) return '';
+  const text = (suggestions.renderedContent ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text;
+}
+
+export function AskGapswise({
+  userId,
+  scope,
+  scopeLabel,
+  initialPrompt,
+  autoSendInitialPrompt,
+  onInitialPromptSent,
+  newChatPrompt,
+  onNewChatPromptOpened,
+  onViewSource,
+}: AskGapswiseProps) {
   const [chats, setChats] = useState<ChatSession[]>([]);
-  const [draftChat, setDraftChat] = useState<ChatSession | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [showWorkspaceQuestions, setShowWorkspaceQuestions] = useState(true);
+  const [draftChat, setDraftChat] = useState<ChatSession | null>(null);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedQuestionGroups>({ top: [], other: [] });
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
-  const [suggestionsError, setSuggestionsError] = useState('');
-  const [suggestionsWarning, setSuggestionsWarning] = useState('');
   const [error, setError] = useState('');
   const [selectedSources, setSelectedSources] = useState<AskSource[] | null>(null);
-  const initialPromptSentRef = useRef('');
-  const newChatPromptHandledRef = useRef('');
-  const sourcesPanelRef = useRef<HTMLElement | null>(null);
-  useDismissibleModal(() => setSelectedSources(null), sourcesPanelRef, Boolean(selectedSources));
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const [hydratedScope, setHydratedScope] = useState('');
-  const activeChat = chats.find((chat) => chat.id === activeChatId)
-    ?? (draftChat?.id === activeChatId ? draftChat : null)
-    ?? chats[0]
-    ?? null;
-  const messages = activeChat?.messages ?? [];
-  const sessionId = activeChat?.sessionId ?? null;
-  const openSource = (message: ChatMessage, sourceId: string) => {
-    const source = message.sources?.find((item) => item.id === sourceId);
-    if (source) setSelectedSources([source]);
-  };
-  const topPrompts = useMemo(() => suggestedPrompts.top.slice(0, 3), [suggestedPrompts.top]);
-  const otherPrompts = useMemo(() => suggestedPrompts.other.slice(0, 3), [suggestedPrompts.other]);
+  const [isWorkspaceHidden, setIsWorkspaceHidden] = useState(false);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<SuggestedQuestionGroups | null>(null);
+  const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState('');
+  const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
+  const [hydratedScope, setHydratedScope] = useState<string | null>(null);
+  const [researchAction, setResearchAction] = useState<ResearchActionState | null>(null);
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchError, setResearchError] = useState('');
+  const [savedResearchMessageIds, setSavedResearchMessageIds] = useState<Set<string>>(new Set());
+  const [savedContextMessageIds, setSavedContextMessageIds] = useState<Set<string>>(new Set());
+  const [confirmedAnswerMessageIds, setConfirmedAnswerMessageIds] = useState<Set<string>>(new Set());
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sourcesPanelRef = useRef<HTMLElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const initialPromptSentRef = useRef<string | null>(null);
+
+  useDismissibleModal(
+    () => setSelectedSources(null),
+    sourcesPanelRef,
+    Boolean(selectedSources),
+  );
+
+  const activeChat = useMemo(() => {
+    if (draftChat && draftChat.id === activeChatId) return draftChat;
+    return chats.find((chat) => chat.id === activeChatId) ?? chats[0] ?? draftChat ?? null;
+  }, [activeChatId, chats, draftChat]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
-    const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
-    const legacySessionId = localStorage.getItem(sessionStorageKey(userId, scope));
-    const legacyMessages = localStorage.getItem(messagesStorageKey(userId, scope));
-    let loadedChats: ChatSession[] = [];
+    setHydratedScope(`${userId}:${scopeStorageKey(scope)}`);
     try {
-      if (storedChats) loadedChats = JSON.parse(storedChats) as ChatSession[];
+      const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
+      const parsedChats: ChatSession[] = storedChats ? JSON.parse(storedChats) : [];
+      setChats(parsedChats);
+      const storedActiveId = localStorage.getItem(sessionStorageKey(userId, scope));
+      const nextActiveId = parsedChats.some((candidate) => candidate.id === storedActiveId)
+        ? storedActiveId
+        : parsedChats[0]?.id ?? null;
+      setActiveChatId(nextActiveId);
+      setIsWorkspaceHidden(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) === 'true');
     } catch {
-      loadedChats = [];
+      setChats([]);
+      setActiveChatId(null);
     }
-    if (!Array.isArray(loadedChats) || loadedChats.length === 0) {
-      let messages: ChatMessage[] = [];
-      try { messages = legacyMessages ? JSON.parse(legacyMessages) as ChatMessage[] : []; } catch { messages = []; }
-      const firstQuestion = messages.find((message) => message?.role === 'user')?.text ?? '';
-      loadedChats = firstQuestion || legacySessionId
-        ? [{ id: `chat_legacy_${Date.now()}`, title: firstQuestion ? titleForMessage(firstQuestion) : 'New chat', createdAt: new Date().toISOString(), firstQuestion, sessionId: legacySessionId, messages: Array.isArray(messages) ? messages : [] }]
-        : [];
+    setHasLoadedPersistedState(true);
+  }, [scope, userId]);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState || !activeChatId) return;
+    try {
+      localStorage.setItem(sessionStorageKey(userId, scope), activeChatId);
+    } catch {
+      // Ignore storage write issues
     }
-    loadedChats = loadedChats.map(normalizeChat).filter((chat) => Boolean(chat.firstQuestion.trim() || chat.messages.some((message) => message.role === 'user')));
-    setChats(loadedChats);
-    setDraftChat(null);
-    setActiveChatId(loadedChats[0]?.id ?? null);
-    setShowWorkspaceQuestions(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) !== 'true');
-    setHydratedScope(storageScope);
-    setInput('');
-    setError('');
-  }, [userId, scope]);
+  }, [activeChatId, hasLoadedPersistedState, scope, userId]);
 
   useEffect(() => {
-    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
-    if (typeof window === 'undefined' || hydratedScope !== storageScope || chats.length === 0) return;
-    localStorage.setItem(chatsStorageKey(userId, scope), JSON.stringify(chats.map((chat) => ({ ...chat, messages: chat.messages.slice(-20) }))));
-  }, [chats, hydratedScope, userId, scope]);
+    if (!hasLoadedPersistedState) return;
+    try {
+      localStorage.setItem(chatsStorageKey(userId, scope), JSON.stringify(chats));
+    } catch {
+      // Ignore storage write issues
+    }
+  }, [chats, hasLoadedPersistedState, scope, userId]);
 
   useEffect(() => {
-    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
-    if (typeof window === 'undefined' || hydratedScope !== storageScope) return;
-    localStorage.setItem(hiddenWorkspaceKey(userId, scope), showWorkspaceQuestions ? 'false' : 'true');
-  }, [hydratedScope, showWorkspaceQuestions, userId, scope]);
-
-  useEffect(() => {
-    if (typeof initialPrompt === 'string' && initialPrompt.trim()) setInput(initialPrompt);
-  }, [initialPrompt]);
-
-  useEffect(() => {
-    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
-    if (!newChatPrompt || hydratedScope !== storageScope || newChatPromptHandledRef.current === newChatPrompt.id) return;
-    newChatPromptHandledRef.current = newChatPrompt.id;
-    const chat = newChat();
-    setDraftChat(chat);
-    setActiveChatId(chat.id);
-    setInput(newChatPrompt.text);
-    setError('');
-    onNewChatPromptOpened?.();
-  }, [hydratedScope, newChatPrompt, onNewChatPromptOpened, scope, userId]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setIsLoadingSuggestions(true);
-    setSuggestionsError('');
-    setSuggestionsWarning('');
-    setSuggestedPrompts({ top: [], other: [] });
-
-    authFetch('/api/ask/suggestions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        scopeLabel,
-        ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
-      }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error ?? 'Contextual suggestions are unavailable right now.');
-        const top = Array.isArray(body.topQuestions)
-          ? body.topQuestions
-          : Array.isArray(body.suggestions)
-            ? body.suggestions
-            : [];
-        const other = Array.isArray(body.otherQuestions) ? body.otherQuestions : [];
-        if (top.length === 0 && other.length === 0) {
-          throw new Error('No contextual suggestions were returned.');
-        }
-        setSuggestedPrompts({
-          top: top.filter((item: unknown): item is string => typeof item === 'string').slice(0, 3),
-          other: other.filter((item: unknown): item is string => typeof item === 'string').slice(0, 3),
-        });
-        setSuggestionsWarning(typeof body.warning === 'string' ? body.warning : '');
-      })
-      .catch((caught: unknown) => {
-        if (caught instanceof DOMException && caught.name === 'AbortError') return;
-        setSuggestionsError(caught instanceof Error ? caught.message : 'Contextual suggestions are unavailable right now.');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsLoadingSuggestions(false);
-      });
-
-    return () => controller.abort();
-  }, [scope, scopeLabel, userId]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, activeChatId]);
-
-  const updateChat = (chatId: string, update: (chat: ChatSession) => ChatSession) => {
-    setChats((current) => current.map((chat) => chat.id === chatId ? update(chat) : chat));
-  };
+    if (!hasLoadedPersistedState) return;
+    let isMounted = true;
+    const fetchChatState = async () => {
+      try {
+        const searchParams = new URLSearchParams();
+        if (scope.type === 'project') searchParams.set('projectId', scope.projectId);
+        const query = searchParams.toString();
+        const response = await authFetch(`/api/ask/chats${query ? `?${query}` : ''}`);
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          chats?: PersistedAskChat[];
+          messages?: PersistedAskMessage[];
+          research?: AskResearchEvidence[];
+        };
+        if (!isMounted) return;
+        const restoredChats = restoreChatSessions(data.chats ?? [], data.messages ?? []);
+        setChats(restoredChats);
+        setActiveChatId((current) => restoredChats.some((chat) => chat.id === current)
+          ? current
+          : restoredChats[0]?.id ?? null);
+        const researchStatus = researchStatusFromRecords(data.research ?? []);
+        setSavedResearchMessageIds(researchStatus.savedMessageIds);
+        setSavedContextMessageIds(researchStatus.savedContextMessageIds);
+        setConfirmedAnswerMessageIds(researchStatus.confirmedAnswerMessageIds);
+      } catch {
+        // Keep the local cache visible when the database is temporarily unavailable.
+      }
+    };
+    void fetchChatState();
+    return () => {
+      isMounted = false;
+    };
+  }, [hasLoadedPersistedState, scope, userId]);
 
   const handleNewChat = () => {
-    const chat = newChat();
-    setDraftChat(chat);
-    setActiveChatId(chat.id);
+    const fresh = newChat();
+    setDraftChat(fresh);
+    setActiveChatId(fresh.id);
     setInput('');
     setError('');
+    setSelectedSources(null);
+    setTimeout(() => inputRef.current?.focus(), 10);
   };
 
-  const handleDeleteChat = () => {
-    if (!activeChatId || typeof window === 'undefined' || !window.confirm('Delete this chat?')) return;
-    if (draftChat?.id === activeChatId) {
-      setDraftChat(null);
-      setActiveChatId(chats[0]?.id ?? null);
-      setInput('');
-      setError('');
+  const openSource = (message: ChatMessage, sourceId: string) => {
+    const found = message.sources?.find((candidate) => candidate.id === sourceId);
+    if (found) {
+      setSelectedSources([found]);
+      onViewSource?.(found);
+    }
+  };
+
+  const conclusionFromAnswer = (text: string): string => {
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !line.startsWith('#'));
+    return lines[0] ?? text.trim();
+  };
+
+  const openResearchAction = (message: ChatMessage, mode: ResearchActionState['mode']) => {
+    const questions = message.openQuestions ?? [];
+    setResearchError('');
+    setResearchAction({
+      message,
+      mode,
+      text: conclusionFromAnswer(message.text),
+      targetQuestionId: questions.length === 1 ? questions[0].id : '',
+    });
+  };
+
+  const submitResearchAction = async () => {
+    if (!researchAction || !activeChat) return;
+    if (researchAction.mode === 'use_as_answer' && !researchAction.targetQuestionId) {
+      setResearchError('Select the open question this answer should resolve.');
       return;
     }
-    const activeIndex = chats.findIndex((chat) => chat.id === activeChatId);
-    if (activeIndex < 0) return;
-    const remaining = chats.filter((chat) => chat.id !== activeChatId);
-    const nextActive = remaining.length > 0 ? remaining[Math.min(activeIndex, remaining.length - 1)] : null;
-    setChats(remaining);
-    setDraftChat(null);
-    setActiveChatId(nextActive?.id ?? null);
-    setInput('');
-    setError('');
+    setResearchBusy(true);
+    setResearchError('');
+    try {
+      const researchResponse = await authFetch('/api/ask/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          action: researchAction.mode,
+          chatId: activeChat.id,
+          assistantMessageId: researchAction.message.id,
+          text: researchAction.text,
+          ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+          ...(researchAction.mode === 'use_as_answer' ? { targetQuestionId: researchAction.targetQuestionId } : {}),
+        }),
+      });
+      const researchBody = await researchResponse.json();
+      if (!researchResponse.ok) throw new Error(researchBody.error ?? 'Action could not be completed.');
+      if (researchAction.mode === 'save_as_context') {
+        setSavedContextMessageIds((current) => new Set(current).add(researchAction.message.id));
+      } else if (researchAction.mode === 'use_as_answer') {
+        setConfirmedAnswerMessageIds((current) => new Set(current).add(researchAction.message.id));
+      } else {
+        setSavedResearchMessageIds((current) => new Set(current).add(researchAction.message.id));
+      }
+      setResearchAction(null);
+    } catch (caught) {
+      setResearchError(caught instanceof Error ? caught.message : 'Action failed.');
+    } finally {
+      setResearchBusy(false);
+    }
   };
 
-  const sendMessage = async (text: string) => {
-    const message = text.trim();
-    if (!message || isLoading) return;
-    let chatId = activeChatId;
-    let baseChat = activeChat;
-    if (!chatId) {
-      const chat = newChat();
-      chatId = chat.id;
-      baseChat = chat;
-      setDraftChat(chat);
-      setActiveChatId(chat.id);
-    }
-    if (!baseChat) return;
-    setError('');
-    setInput('');
-    const userMessage: ChatMessage = {
-      id: `user_${Date.now()}`,
-      role: 'user',
-      text: message,
-    };
+  const sendMessage = async (promptText: string) => {
+    const text = promptText.trim();
+    if (!text || isLoading) return;
+    const userMsgId = `user_${Date.now()}`;
+    const userMsg: ChatMessage = { id: userMsgId, role: 'user', text };
+    const chatToUse = activeChat ?? newChat();
+    const updatedMessages = [...chatToUse.messages, userMsg];
+    const isNewFirstQuestion = !chatToUse.firstQuestion;
     const updatedChat: ChatSession = {
-      ...baseChat,
-      title: baseChat.messages.length === 0 ? titleForMessage(message) : baseChat.title,
-      firstQuestion: baseChat.messages.length === 0 ? message : baseChat.firstQuestion,
-      messages: [...baseChat.messages, userMessage],
+      ...chatToUse,
+      firstQuestion: isNewFirstQuestion ? text : chatToUse.firstQuestion,
+      title: isNewFirstQuestion ? titleForMessage(text) : chatToUse.title,
+      messages: updatedMessages,
     };
-    const isDraft = draftChat?.id === chatId || !chats.some((chat) => chat.id === chatId);
-    if (isDraft) {
-      setChats((current) => current.some((chat) => chat.id === chatId)
-        ? current.map((chat) => chat.id === chatId ? updatedChat : chat)
-        : [...current, updatedChat]);
-      setDraftChat((current) => current?.id === chatId ? null : current);
-    } else {
-      updateChat(chatId, () => updatedChat);
-    }
+
+    setChats((current) => {
+      const index = current.findIndex((c) => c.id === updatedChat.id);
+      if (index >= 0) {
+        const next = [...current];
+        next[index] = updatedChat;
+        return next;
+      }
+      return [updatedChat, ...current];
+    });
+    setDraftChat(null);
+    setActiveChatId(updatedChat.id);
+    setInput('');
     setIsLoading(true);
+    setError('');
 
     try {
       const response = await authFetch('/api/ask', {
@@ -351,71 +465,46 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          message,
-          ...(baseChat.sessionId ? { sessionId: baseChat.sessionId } : {}),
+          message: text,
+          chatId: updatedChat.id,
+          userMessageId: userMsgId,
+          ...(chatToUse.sessionId ? { sessionId: chatToUse.sessionId } : {}),
           ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
         }),
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? 'Gapwise agent is unavailable right now.');
-      if (body.sessionId && typeof body.sessionId === 'string') {
-        updateChat(chatId, (chat) => ({ ...chat, sessionId: body.sessionId }));
-      }
-      const promptUsed = typeof body.promptUsed === 'string'
-        ? body.promptUsed
-        : typeof body.fallbackPrompt === 'string'
-          ? body.fallbackPrompt
-          : undefined;
-      const responseDetails = promptUsed || body.modelConfig
-        ? {
-            ...(promptUsed ? { promptUsed } : {}),
-            systemPrompt: typeof body.fallbackSystemPrompt === 'string' ? body.fallbackSystemPrompt : undefined,
-            modelConfig: body.modelConfig && typeof body.modelConfig === 'object'
-              && typeof body.modelConfig.provider === 'string'
-              && typeof body.modelConfig.agent === 'string'
-              && typeof body.modelConfig.model === 'string'
-              && typeof body.modelConfig.thinkingLevel === 'string'
-              && typeof body.modelConfig.maxOutputTokens === 'number'
-              && typeof body.modelConfig.retryAttempts === 'number'
-              && typeof body.modelConfig.profile === 'string'
-              && typeof body.modelConfig.execution === 'string'
-              ? body.modelConfig
-              : undefined,
-            contextUsed: body.contextUsed && typeof body.contextUsed === 'object'
-              && typeof body.contextUsed.projectTitle === 'string'
-              && Array.isArray(body.contextUsed.items)
-              ? {
-                  projectTitle: body.contextUsed.projectTitle,
-                  items: body.contextUsed.items.filter((item: unknown): item is string => typeof item === 'string'),
-                }
-              : undefined,
-          }
-        : undefined;
-      updateChat(chatId, (chat) => ({
-        ...chat,
-        messages: [...chat.messages, {
-          id: `assistant_${Date.now()}`,
-          role: 'assistant',
-          text: body.answer,
-          sources: Array.isArray(body.sources) ? body.sources : [],
-          ...(responseDetails ? { responseDetails } : {}),
-        }],
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Ask failed.');
+
+      const assistantMsg: ChatMessage = {
+        id: data.assistantMessageId ?? `assistant_${Date.now()}`,
+        role: 'assistant',
+        text: data.answer,
+        sources: data.sources,
+        openQuestionIds: data.openQuestionIds,
+        openQuestions: data.openQuestions,
+        searchSuggestions: data.searchSuggestions,
+        responseDetails: {
+          promptUsed: data.promptUsed,
+          systemPrompt: data.fallbackSystemPrompt,
+          modelConfig: data.modelConfig,
+          contextUsed: data.contextUsed,
+        },
+      };
+
+      setChats((current) => current.map((chat) => {
+        if (chat.id !== updatedChat.id) return chat;
+        return {
+          ...chat,
+          sessionId: data.sessionId ?? chat.sessionId,
+          messages: [...chat.messages, assistantMsg],
+        };
       }));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Gapwise agent is unavailable right now.');
+      setError(caught instanceof Error ? caught.message : 'Ask failed.');
     } finally {
       setIsLoading(false);
     }
   };
-
-  useEffect(() => {
-    const prompt = initialPrompt?.trim() ?? '';
-    const storageScope = `${userId}:${scopeStorageKey(scope)}`;
-    if (!autoSendInitialPrompt || !prompt || hydratedScope !== storageScope || initialPromptSentRef.current === prompt) return;
-    initialPromptSentRef.current = prompt;
-    void sendMessage(prompt);
-    onInitialPromptSent?.();
-  }, [autoSendInitialPrompt, hydratedScope, initialPrompt, onInitialPromptSent, scope, userId]);
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -456,97 +545,21 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
               ))}
             </select>
           )}
-          <button type="button" onClick={handleDeleteChat} aria-label="Delete chat" title="Delete chat" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 text-slate-500 hover:border-rose-900 hover:bg-rose-950/30 hover:text-rose-300">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
         </div>
       </div>
 
-      <div className="flex-1 space-y-5 py-5">
-        {showWorkspaceQuestions && (
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 sm:p-5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-bold text-slate-100">
-                <Sparkles className="h-4 w-4 text-cyan-400" />
-                Suggestions
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowWorkspaceQuestions(false)}
-                aria-label="Hide suggestions"
-                title="Hide suggestions"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-800 hover:text-cyan-300"
-              >
-                <EyeOff className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {isLoadingSuggestions && (
-              <div className="mt-4 inline-flex items-center gap-2 text-sm text-slate-400">
-                <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
-                Finding useful questions from {scopeLabel}...
-              </div>
-            )}
-            {!isLoadingSuggestions && (topPrompts.length > 0 || otherPrompts.length > 0) && (
-              <div className="mt-4 space-y-4">
-                {topPrompts.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-400">Top questions</p>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {topPrompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => sendMessage(prompt)}
-                          className="min-h-11 rounded-lg border border-cyan-900/70 bg-slate-950 px-3 py-3 text-left text-sm font-semibold text-slate-200 hover:border-cyan-700 hover:text-cyan-300 sm:min-h-0"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {otherPrompts.length > 0 && (
-                  <div className="border-t border-slate-800 pt-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Other ideas</p>
-                    <div className="flex flex-wrap gap-2">
-                      {otherPrompts.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => sendMessage(prompt)}
-                          className="min-h-11 rounded-full border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-300 sm:min-h-0"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {!isLoadingSuggestions && suggestionsError && (
-              <p className="mt-4 text-xs text-slate-500">{suggestionsError} You can still ask Gapwise anything below.</p>
-            )}
-            {!isLoadingSuggestions && suggestionsWarning && (
-              <p className="mt-4 text-[11px] text-slate-500" role="status">{suggestionsWarning}</p>
-            )}
-          </div>
-        )}
+      <div className="flex-1 space-y-4 overflow-y-auto py-6">
+        {activeChat?.messages.map((message) => {
+          const hasWebSources = Boolean(message.sources?.some((s) => s.kind === 'web' && s.url));
+          const hasOpenQuestions = Boolean(message.openQuestions && message.openQuestions.length > 0);
 
-        {!showWorkspaceQuestions && (
-          <div className="rounded-xl border border-slate-800/80 bg-slate-950/50 px-4 py-3 text-xs text-slate-500">
-            Suggestions are hidden for this project. <button type="button" onClick={() => setShowWorkspaceQuestions(true)} aria-label="See suggestions" title="See suggestions" className="ml-1 inline-flex h-7 w-7 translate-y-1 items-center justify-center rounded-md text-cyan-300 hover:bg-slate-800 hover:text-cyan-200"><Eye className="h-3.5 w-3.5" /></button>
-          </div>
-        )}
-
-        <div className="space-y-4">
-          {messages.map((message) => (
-            <article
+          return (
+            <div
               key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`max-w-[94%] rounded-2xl px-4 py-3 text-sm shadow-lg sm:max-w-[74%] ${
+                className={`max-w-3xl rounded-2xl p-4 sm:p-5 ${
                   message.role === 'user'
                     ? 'bg-cyan-500 text-slate-950'
                     : 'border border-slate-800 bg-slate-900 text-slate-200'
@@ -554,64 +567,98 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
               >
                 {message.role === 'assistant' ? (
                   <div className="min-w-0 break-words">
+                    {/* Status Badge */}
+                    <div className="mb-3 flex items-center gap-2">
+                      {hasWebSources ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-cyan-800 bg-cyan-950/60 px-2.5 py-0.5 text-[10px] font-bold text-cyan-300">
+                          <Globe className="h-3 w-3" /> Web-grounded response
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/80 px-2.5 py-0.5 text-[10px] font-medium text-slate-300">
+                          AI suggestion — not externally verified.
+                        </span>
+                      )}
+                    </div>
+
                     <AssistantMarkdown onSourceOpen={(sourceId) => openSource(message, sourceId)}>
                       {addSourceCitations(message.text, message.sources ?? [])}
                     </AssistantMarkdown>
+
                     {message.sources && message.sources.length > 0 && (
                       <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-slate-800 pt-3">
                         <span className="mr-1 text-[10px] font-bold uppercase text-slate-500">Sources</span>
-                        {message.sources.map((source, index) => (
-                          <button
-                            key={source.id}
-                            type="button"
-                            onClick={() => setSelectedSources([source])}
-                            title={source.title}
-                            className="min-h-9 max-w-full truncate rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-left text-[10px] font-semibold text-cyan-300 hover:border-cyan-700"
-                          >
-                            {index + 1}. {source.title}
-                          </button>
-                        ))}
+                        {message.sources.map((source, index) => {
+                          const displayTitle = humanizeSourceTitle(source.title);
+                          return (
+                            <button
+                              key={source.id}
+                              type="button"
+                              onClick={() => setSelectedSources([source])}
+                              title={displayTitle}
+                              className="min-h-9 max-w-full truncate rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-left text-[10px] font-semibold text-cyan-300 hover:border-cyan-700"
+                            >
+                              {index + 1}. {displayTitle}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
-                    {message.responseDetails && (
+
+                    {/* Distinct Actions */}
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
+                      {/* Action 1: Save as context (Always available) */}
+                      {savedContextMessageIds.has(message.id) ? (
+                        <span className="text-xs font-semibold text-emerald-300">Saved as context.</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openResearchAction(message, 'save_as_context')}
+                          className="min-h-10 rounded-lg border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs font-bold text-slate-200 hover:border-cyan-700"
+                        >
+                          Save as context
+                        </button>
+                      )}
+
+                      {/* Action 2: Use as my answer (Available when open questions exist) */}
+                      {confirmedAnswerMessageIds.has(message.id) ? (
+                        <span className="text-xs font-semibold text-emerald-300">Answer confirmed.</span>
+                      ) : hasOpenQuestions ? (
+                        <button
+                          type="button"
+                          onClick={() => openResearchAction(message, 'use_as_answer')}
+                          className="min-h-10 rounded-lg border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-600"
+                        >
+                          Use as my answer
+                        </button>
+                      ) : null}
+
+                      {/* Action 3: Save research (Available only when genuine web sources exist) */}
+                      {hasWebSources && (
+                        savedResearchMessageIds.has(message.id) ? (
+                          <span className="text-xs font-semibold text-emerald-300">Research saved for this conversation.</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openResearchAction(message, 'save')}
+                            className="min-h-10 rounded-lg border border-cyan-800 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600"
+                          >
+                            Save research
+                          </button>
+                        )
+                      )}
+                    </div>
+
+                    {message.searchSuggestions && (
                       <details className="mt-3 border-t border-slate-800 pt-3">
                         <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 hover:text-cyan-300">
-                          Response details
+                          Google Search suggestions
                         </summary>
-                        <div className="mt-3 space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs">
-                          {message.responseDetails.modelConfig && (
-                            <div>
-                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Model configuration</p>
-                              <dl className="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-slate-400">
-                                <dt className="text-slate-600">Provider</dt><dd>{message.responseDetails.modelConfig.provider}</dd>
-                                <dt className="text-slate-600">Agent</dt><dd>{message.responseDetails.modelConfig.agent}</dd>
-                                <dt className="text-slate-600">Model</dt><dd className="font-mono text-cyan-300">{message.responseDetails.modelConfig.model}</dd>
-                                <dt className="text-slate-600">Thinking</dt><dd>{message.responseDetails.modelConfig.thinkingLevel}</dd>
-                                <dt className="text-slate-600">Output limit</dt><dd>{message.responseDetails.modelConfig.maxOutputTokens.toLocaleString()} tokens</dd>
-                                <dt className="text-slate-600">Retries</dt><dd>{message.responseDetails.modelConfig.retryAttempts}</dd>
-                                <dt className="text-slate-600">Profile</dt><dd>{message.responseDetails.modelConfig.profile}</dd>
-                                <dt className="text-slate-600">Execution</dt><dd>{message.responseDetails.modelConfig.execution}</dd>
-                              </dl>
-                            </div>
+                        <div className="mt-2 space-y-2 text-xs text-slate-400">
+                          {safeSearchSuggestionText(message.searchSuggestions) && (
+                            <p className="whitespace-pre-wrap leading-relaxed">{safeSearchSuggestionText(message.searchSuggestions)}</p>
                           )}
-                          {message.responseDetails.promptUsed && <div>
-                            <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Exact prompt sent to the AI</p>
-                            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-300">{message.responseDetails.promptUsed}</pre>
-                          </div>}
-                          {message.responseDetails.systemPrompt && (
-                            <div>
-                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Fallback system instruction</p>
-                              <p className="mt-1 whitespace-pre-wrap leading-relaxed text-slate-400">{message.responseDetails.systemPrompt}</p>
-                            </div>
-                          )}
-                          {message.responseDetails.contextUsed && (
-                            <div>
-                              <p className="font-bold uppercase tracking-[0.1em] text-slate-500">Project context used</p>
-                              <p className="mt-1 text-cyan-300">{message.responseDetails.contextUsed.projectTitle}</p>
-                              <ul className="mt-2 space-y-1 text-slate-400">
-                                {message.responseDetails.contextUsed.items.map((item) => <li key={item}>• {item}</li>)}
-                              </ul>
-                            </div>
+                          {message.searchSuggestions.webSearchQueries && message.searchSuggestions.webSearchQueries.length > 0 && (
+                            <p>Queries: {message.searchSuggestions.webSearchQueries.join(' · ')}</p>
                           )}
                         </div>
                       </details>
@@ -620,54 +667,34 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
                 ) : (
                   <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
                 )}
-                {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSources(message.sources ?? [])}
-                    className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-cyan-300 sm:min-h-0"
-                  >
-                    <BookOpen className="h-3.5 w-3.5" />
-                    Why / Sources
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="inline-flex max-w-full items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
-                <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />
-                        Gapwise is checking your context...
               </div>
             </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {error && (
-          <div className="rounded-xl border border-amber-800 bg-amber-950/40 p-4 text-sm text-amber-200">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <p>{error}</p>
-            </div>
-          </div>
-        )}
+          );
+        })}
+        <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="sticky bottom-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] z-20 pb-1 md:bottom-4 md:pb-0">
-        <div className="flex gap-2 rounded-2xl border border-slate-800 bg-slate-950/95 p-2 shadow-2xl backdrop-blur">
+      {error && (
+        <div className="mb-4 rounded-xl border border-rose-900/50 bg-rose-950/40 p-3 text-xs font-semibold text-rose-200" role="alert">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="border-t border-slate-800 pt-4">
+        <div className="flex gap-2">
           <textarea
-            rows={1}
+            ref={inputRef}
+            rows={2}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask Gapwise anything about your projects, goals, or external knowledge..."
+            className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-500"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
                 void sendMessage(input);
               }
             }}
-            placeholder="Ask Gapwise..."
-            className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
           />
           <button
             type="submit"
@@ -675,59 +702,111 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
             title="Send message"
             className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-cyan-500 text-slate-950 disabled:opacity-40"
           >
-            <Send className="h-4 w-4" />
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
       </form>
+
+      {/* Confirmation Modal */}
+      {researchAction && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/75 p-3 backdrop-blur-sm sm:items-center">
+          <section role="dialog" aria-modal="true" aria-labelledby="ask-action-title" className="max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-950 p-4 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+              <div>
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">
+                  {researchAction.mode === 'save_as_context' ? 'User Context' : researchAction.mode === 'use_as_answer' ? 'Answer Question' : 'Cited Web Research'}
+                </p>
+                <h2 id="ask-action-title" className="mt-1 text-lg font-bold text-slate-100">
+                  {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_answer' ? 'Use as my answer' : 'Save research'}
+                </h2>
+                <p className="mt-1 text-xs text-slate-400">
+                  {researchAction.mode === 'save_as_context'
+                    ? 'Save this conclusion as user-confirmed context for this conversation and future reasoning.'
+                    : researchAction.mode === 'use_as_answer'
+                      ? 'Select which open question this conclusion resolves.'
+                      : 'Review the proposed text and cited web sources.'}
+                </p>
+              </div>
+              <button type="button" onClick={() => setResearchAction(null)} title="Close" className="h-10 w-10 rounded-lg border border-slate-800 text-slate-400 hover:text-slate-100">
+                <X className="mx-auto h-4 w-4" />
+              </button>
+            </div>
+
+            {researchAction.mode === 'use_as_answer' && (
+              <label className="mt-5 block text-xs font-bold text-slate-300">
+                Question to answer
+                <select
+                  value={researchAction.targetQuestionId}
+                  onChange={(event) => setResearchAction((current) => current ? { ...current, targetQuestionId: event.target.value } : current)}
+                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal text-slate-200 outline-none focus:border-cyan-700"
+                >
+                  <option value="">Select an open question</option>
+                  {(researchAction.message.openQuestions ?? []).map((question) => (
+                    <option key={question.id} value={question.id}>{question.text}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <label className="mt-5 block text-xs font-bold text-slate-300">
+              {researchAction.mode === 'save_as_context' ? 'Confirmed context statement' : researchAction.mode === 'use_as_answer' ? 'Your confirmed conclusion' : 'Research statement'}
+              <textarea
+                value={researchAction.text}
+                onChange={(event) => setResearchAction((current) => current ? { ...current, text: event.target.value } : current)}
+                rows={5}
+                className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal leading-relaxed text-slate-200 outline-none focus:border-cyan-700"
+              />
+            </label>
+
+            {researchAction.mode === 'save' && (
+              <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Citations kept separately</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(researchAction.message.sources ?? []).filter((source) => source.kind === 'web' && source.url).map((source) => (
+                    <a key={source.id} href={source.url} target="_blank" rel="noreferrer noopener" className="max-w-full truncate text-xs font-semibold text-cyan-300 underline decoration-cyan-800 underline-offset-2">
+                      {source.title}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {researchError && <p className="mt-4 text-sm text-rose-300" role="alert">{researchError}</p>}
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setResearchAction(null)} disabled={researchBusy} className="min-h-11 rounded-lg border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 hover:border-slate-500">
+                Cancel
+              </button>
+              <button type="button" onClick={() => void submitResearchAction()} disabled={researchBusy || !researchAction.text.trim()} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-extrabold text-slate-950 disabled:opacity-50">
+                {researchBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {selectedSources && (
         <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">
           <aside ref={sourcesPanelRef} className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <h2 className="text-lg font-bold text-slate-100">Why / Sources</h2>
-              <button
-                type="button"
-                onClick={() => setSelectedSources(null)}
-                title="Close sources"
-                className="h-11 w-11 rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100 sm:h-auto sm:w-auto"
-              >
-                <X className="h-4 w-4" />
+              <button type="button" onClick={() => setSelectedSources(null)} className="h-9 w-9 rounded-lg border border-slate-800 text-slate-400 hover:text-slate-100">
+                <X className="mx-auto h-4 w-4" />
               </button>
             </div>
-            <div className="mt-5 space-y-3">
+            <div className="mt-4 space-y-4">
               {selectedSources.map((source) => (
-                <article key={source.id} className="rounded-xl border border-slate-800 bg-slate-900 p-3">
-                  <div className="flex justify-between gap-3 text-[10px]">
-                    <span className="font-bold text-slate-300">{source.title}</span>
-                    {source.score !== undefined && (
-                      <span className="text-cyan-400">{Math.round(source.score * 100)}% match</span>
-                    )}
-                  </div>
-                  <p className="mt-2 text-xs text-slate-400">{source.excerpt}</p>
-                  {source.reason && (
-                    <div className="mt-3 rounded-lg border border-cyan-900 bg-cyan-950/40 p-3">
-                      <p className="text-[10px] font-bold uppercase text-cyan-400">Why this supports the answer</p>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-300">{source.reason}</p>
-                    </div>
+                <div key={source.id} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <h3 className="text-sm font-bold text-cyan-300">{humanizeSourceTitle(source.title)}</h3>
+                  {source.url && (
+                    <a href={source.url} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-xs text-slate-400 underline">
+                      {source.url}
+                    </a>
                   )}
-                  {onViewSource && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onViewSource(source);
-                        setSelectedSources(null);
-                      }}
-                      className="mt-3 inline-flex min-h-11 items-center text-xs font-bold text-cyan-300 hover:text-cyan-200 sm:min-h-0"
-                    >
-                      {source.kind === 'source'
-                        ? 'View in Context'
-                        : source.kind === 'calendar'
-                          ? 'View connection'
-                          : 'View in context'}
-                      <ChevronRight className="ml-1 inline h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </article>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-300">{source.excerpt}</p>
+                  {source.reason && <p className="mt-2 text-[11px] text-slate-500">{source.reason}</p>}
+                </div>
               ))}
             </div>
           </aside>
@@ -735,4 +814,4 @@ export const AskGapswise: React.FC<AskGapswiseProps> = ({ userId, scope, scopeLa
       )}
     </div>
   );
-};
+}

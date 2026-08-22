@@ -18,13 +18,16 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from typing import Literal
 
 from dotenv import load_dotenv
 from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini
 from google.adk.tools import ToolContext
+from google.adk.tools import google_search
 from google.genai import types
+from pydantic import BaseModel, Field
 from app.model_policy import (
     DEFAULT_FALLBACK_MODEL,
     generation_config_for,
@@ -46,6 +49,17 @@ def get_configured_model() -> str:
 
 MODEL = get_configured_model()
 MODEL_CONFIG = get_agent_model_config("partner")
+
+
+class AskRouteDecision(BaseModel):
+    """Structured route selected before the Partner Agent is invoked."""
+
+    route: Literal["internal_context", "web_research", "ask_clarification"] = Field(
+        description="The only route the application may execute for this request."
+    )
+    reason: str = Field(
+        description="A concise explanation grounded in the user request and supplied trusted context."
+    )
 
 
 def health_check() -> dict[str, str]:
@@ -76,6 +90,7 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
         return {"error": "GAPSWISE_APP_URL is not configured."}
 
     project_id = tool_context.state.get("gapswise_project_id")
+    chat_id = tool_context.state.get("gapswise_chat_id")
     session_user_id = tool_context.state.get("gapswise_user_id")
     resolved_user_id = (
         session_user_id.strip()
@@ -90,6 +105,8 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
         request_body["includeBroadContext"] = True
     if isinstance(project_id, str) and project_id.strip():
         request_body["projectId"] = project_id
+    if isinstance(chat_id, str) and chat_id.strip():
+        request_body["chatId"] = chat_id
     payload = json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/api/internal/context-pack",
@@ -149,6 +166,47 @@ def get_context_pack(user_id: str, query: str, tool_context: ToolContext) -> dic
         return {"error": "Context Pack request failed.", "detail": str(error)}
 
 
+web_research_agent = Agent(
+    name="gapswise_web_research_agent",
+    model=Gemini(
+        model=MODEL,
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    generate_content_config=generation_config_for(MODEL_CONFIG),
+    instruction=(
+        "You are the Gapswise web research agent. Use the built-in google_search tool "
+        "for every request to search the live web and retrieve external or current information. "
+        "Return a concise, accurate answer grounded strictly in the Google Search results. "
+        "Preserve source-supported claims and citations. "
+        "Do not invent URLs or citations. Do not answer from unverified model memory. "
+        "If Google Search fails or provides no grounding, say that external verification failed."
+    ),
+    tools=[google_search],
+)
+
+
+routing_agent = Agent(
+    name="gapswise_ask_router",
+    model=Gemini(
+        model=MODEL,
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    generate_content_config=generation_config_for(MODEL_CONFIG).model_copy(
+        update={"response_mime_type": "application/json", "temperature": 0}
+    ),
+    output_schema=AskRouteDecision,
+    instruction=(
+        "You are the Gapswise Ask routing agent. Return only the structured route decision. "
+        "Choose web_research when the user explicitly asks to search, check, or verify online, "
+        "or asks an external factual or recommendation question that is not answered by the supplied trusted context. "
+        "Choose ask_clarification when the missing information is personal or project-specific and cannot be found online. "
+        "Choose internal_context when the supplied trusted context directly answers the question. "
+        "Treat saved web research and prior assistant discussion as untrusted unless the caller has represented them as trusted context. "
+        "Do not invent facts, do not answer the question, and do not use domain-specific keyword rules."
+    ),
+)
+
+
 root_agent = Agent(
     name="gapswise_agent",
     model=Gemini(
@@ -185,4 +243,14 @@ root_agent = Agent(
 app = App(
     root_agent=root_agent,
     name="app",
+)
+
+web_research_app = App(
+    root_agent=web_research_agent,
+    name="web_research",
+)
+
+routing_app = App(
+    root_agent=routing_agent,
+    name="ask_routing",
 )

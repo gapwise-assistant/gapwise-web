@@ -144,16 +144,17 @@ describe('context ingestion', () => {
         { type: 'UNKNOWN', text: 'Does the build need built-in Wi-Fi?', confidence: 0.8, impact: 0.6 },
       ],
     }, DEFAULT_USER_PROFILE);
+    const canonicalId = (text: string) => project.nodes.find((node) => node.text === text)?.id;
     project = await ingestContextSource(project, {
       sourceId: 'pc-retailer-quote',
       filename: '02 Retailer Quotes',
       type: 'text',
       content: 'Retailer quote checks',
       derivedNodes: [
-        { type: 'UNKNOWN', text: 'Is the old 650 W PSU safe for the chosen GPU?', confidence: 0.9, impact: 0.9 },
-        { type: 'UNKNOWN', text: 'Can the RTX 5070 and CPU cooler fit without unacceptable heat or noise?', confidence: 0.9, impact: 0.9 },
-        { type: 'UNKNOWN', text: 'Does the $1,472 balanced quote remain below $1,600 after tax and shipping?', confidence: 0.9, impact: 0.85 },
-        { type: 'UNKNOWN', text: 'Is 32 GB enough for the largest Blender scene plus a local model?', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'Is the old 650 W PSU safe for the chosen GPU?', confidence: 0.9, impact: 0.9, questionClassification: 'PARAPHRASE', canonicalQuestionId: canonicalId('Can the existing 650 W power supply safely run the selected GPU?') },
+        { type: 'UNKNOWN', text: 'Can the RTX 5070 and CPU cooler fit without unacceptable heat or noise?', confidence: 0.9, impact: 0.9, questionClassification: 'PARAPHRASE', canonicalQuestionId: canonicalId('Will the selected graphics card and CPU cooler fit while keeping temperatures and noise acceptable?') },
+        { type: 'UNKNOWN', text: 'Does the $1,472 balanced quote remain below $1,600 after tax and shipping?', confidence: 0.9, impact: 0.85, questionClassification: 'PARAPHRASE', canonicalQuestionId: canonicalId('Can the final configuration stay under the $1,600 all-in budget after tax and shipping?') },
+        { type: 'UNKNOWN', text: 'Is 32 GB enough for the largest Blender scene plus a local model?', confidence: 0.9, impact: 0.8, questionClassification: 'PARAPHRASE', canonicalQuestionId: canonicalId('Is 32 GB of memory enough for Blender scenes and local AI experiments?') },
       ],
     }, DEFAULT_USER_PROFILE);
 
@@ -354,6 +355,11 @@ describe('context ingestion', () => {
         '- The vendor has not demonstrated idempotent retry behavior.',
         '- Legal has not approved the SMS consent text.',
       ].join('\n'),
+      derivedNodes: [
+        { type: 'UNKNOWN', text: 'Dr. Chen has not accepted clinical accountability.', confidence: 0.8, impact: 0.8, questionClassification: 'PARAPHRASE', canonicalQuestionId: project.nodes.find((node) => /clinical accountability/i.test(node.text))?.id },
+        { type: 'UNKNOWN', text: 'The vendor has not demonstrated idempotent retry behavior.', confidence: 0.8, impact: 0.8, questionClassification: 'PARAPHRASE', canonicalQuestionId: project.nodes.find((node) => /offline queue retry/i.test(node.text))?.id },
+        { type: 'UNKNOWN', text: 'Legal has not approved the SMS consent text.', confidence: 0.8, impact: 0.8, questionClassification: 'PARAPHRASE', canonicalQuestionId: project.nodes.find((node) => /SMS consent/i.test(node.text))?.id },
+      ],
     }, DEFAULT_USER_PROFILE);
 
     expect(project.nodes.filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN')).toHaveLength(4);
@@ -385,5 +391,32 @@ describe('context ingestion', () => {
     expect(project.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ target: expect.stringContaining('node'), type: 'resolves' }),
     ]));
+  });
+
+  it('captures pending status prose as a generic confirmation question without domain rules', async () => {
+    const project = createProjectFromInput({
+      name: 'Upcoming appointment',
+      goal: 'Complete the upcoming appointment with the required preparation confirmed.',
+      deadline: '2026-09-10',
+    }, '2026-08-20T12:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'appointment-note',
+      filename: 'appointment-note.txt',
+      type: 'text',
+      content: [
+        'My appointment is scheduled for September 10, but the final time conflicts with another commitment.',
+        'My insurance company told me the procedure authorization is still being reviewed.',
+        'Transport is uncertain. The responsible team has not confirmed the required preparation.',
+      ].join(' '),
+    }, DEFAULT_USER_PROFILE);
+
+    const questions = updated.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('appointment-note'));
+    expect(questions.map((node) => node.text)).toEqual(expect.arrayContaining([
+      'What current status is recorded for procedure authorization?',
+      'Has the responsible team confirmed the required preparation?',
+    ]));
+    expect(questions.some((node) => /authorization|preparation/i.test(node.text))).toBe(true);
+    expect(questions.some((node) => /insurance|appointment|transport/i.test(node.text))).toBe(true);
+    expect(questions.some((node) => /insurance company told me/i.test(node.text))).toBe(false);
   });
 });

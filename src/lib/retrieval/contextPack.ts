@@ -1,4 +1,5 @@
 import { ContextPack, ContextPackInput, DurableMemory } from '@/types/contextPack';
+import { AskResearchEvidence, RelevantConversationExcerpt } from '@/types/ask';
 import { ClarityNode } from '@/types/clarity';
 import { SafeCalendarEvent } from '@/types/google';
 import { rankNodes, rankSources, relevanceScore, tokenize } from '@/lib/retrieval/relevance';
@@ -15,6 +16,8 @@ const DEFAULT_LIMITS = {
   upcomingCommitments: 10,
   recentDecisions: 4,
   contradictions: 3,
+  relevantConversationExcerpts: 6,
+  researchEvidence: 4,
 };
 
 function newestFirst(a: ClarityNode, b: ClarityNode): number {
@@ -96,8 +99,55 @@ function rankMemories(
     .map((item) => item.memory);
 }
 
-function sourceTimestamp(source: ContextPackInput['project']['sources'][number]): number {
-  const time = new Date(source.processed_at ?? source.extracted_at).getTime();
+function rankConversationExcerpts(
+  query: string,
+  messages: ContextPackInput['conversationMessages'] = [],
+  limit: number,
+  excludeMessageId?: string,
+): RelevantConversationExcerpt[] {
+  const deduped = new Map<string, NonNullable<ContextPackInput['conversationMessages']>[number]>();
+  messages.forEach((message) => {
+    if (!message?.id || !message.text?.trim() || (excludeMessageId && message.id === excludeMessageId)) return;
+    deduped.set(message.id, message);
+  });
+  return Array.from(deduped.values())
+    .map((message) => ({
+      message,
+      relevance: relevanceScore(query, message.text),
+      recency: eventTimestamp(message.createdAt),
+    }))
+    .filter((item) => item.relevance >= 0.12)
+    .sort((a, b) => b.relevance - a.relevance || b.recency - a.recency)
+    .slice(0, limit)
+    .map(({ message }) => ({
+      chatId: message.chatId,
+      messageId: message.id,
+      role: message.role,
+      text: message.text,
+      scopeType: message.projectId ? 'project' : 'general',
+      ...(message.projectId ? { projectId: message.projectId } : {}),
+      timestamp: message.createdAt,
+    }));
+}
+
+function rankResearchEvidence(
+  query: string,
+  evidence: AskResearchEvidence[] = [],
+  limit: number,
+  excludeMessageId?: string,
+): AskResearchEvidence[] {
+  return [...evidence]
+    .filter((item) => item.status !== 'pending' && (!excludeMessageId || item.assistantMessageId !== excludeMessageId))
+    .map((item) => ({ item, relevance: relevanceScore(query, `${item.text} ${item.sources.map((source) => `${source.title} ${source.excerpt}`).join(' ')}`) }))
+    .filter((item) => item.relevance >= 0.1)
+    .sort((a, b) => b.relevance - a.relevance || eventTimestamp(b.item.createdAt) - eventTimestamp(a.item.createdAt))
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
+function sourceTimestamp(source: ContextPackInput['project']['sources'][number] | undefined): number {
+  if (!source) return 0;
+  const time = new Date(source.processed_at || source.extracted_at).getTime();
   return Number.isFinite(time) ? time : 0;
 }
 
@@ -180,7 +230,21 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
   const limits = { ...DEFAULT_LIMITS, ...input.limits };
   const profileMemories = memoriesFromProfile(input.profile);
   const memories = input.durableMemories ?? profileMemories;
-  const reasoningProject = projectForReasoning(input.project);
+  const baseReasoningProject = projectForReasoning(input.project);
+  const reasoningProject = input.excludeSourceId
+    ? (() => {
+        const nodes = baseReasoningProject.nodes.filter((node) =>
+          node.source_refs.length === 0 || node.source_refs.some((sourceId) => sourceId !== input.excludeSourceId)
+        );
+        const nodeIds = new Set(nodes.map((node) => node.id));
+        return {
+          ...baseReasoningProject,
+          sources: baseReasoningProject.sources.filter((source) => source.id !== input.excludeSourceId),
+          nodes,
+          edges: baseReasoningProject.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)),
+        };
+      })()
+    : baseReasoningProject;
 
   const activeGoals = rankNodes(
     input.query,
@@ -218,9 +282,12 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     reasoningProject.nodes.filter((node) => node.type === 'RISK' || node.type === 'ASSUMPTION'),
     limits.contradictions
   );
+  const eligibleSources = reasoningProject.sources.filter(
+    (source) => !input.excludeSourceId || source.id !== input.excludeSourceId
+  );
   const sourceCandidates = input.includeBroadContext
-    ? reasoningProject.sources.filter((source) => source.origin !== 'connector')
-    : reasoningProject.sources;
+    ? eligibleSources.filter((source) => source.origin !== 'connector')
+    : eligibleSources;
   const relevantEvidence = rankSources(
     input.query,
     sourceCandidates,
@@ -237,6 +304,18 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     memories,
     limits.userPreferences,
     input.scope?.type === 'project' ? reasoningProject : undefined
+  );
+  const relevantConversationExcerpts = rankConversationExcerpts(
+    input.query,
+    input.conversationMessages,
+    limits.relevantConversationExcerpts,
+    input.excludeMessageId,
+  );
+  const researchEvidence = rankResearchEvidence(
+    input.query,
+    input.researchEvidence,
+    limits.researchEvidence,
+    input.excludeMessageId,
   );
   const recentImportantEvents = input.project.history
     .slice(-limits.recentImportantEvents)
@@ -260,7 +339,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     });
   });
   const relevantSourceIds = new Set(relevantEvidence.map((source) => source.source_id));
-  const provenanceSources = reasoningProject.sources
+  const provenanceSources = eligibleSources
     .filter((source) => supportBySourceId.has(source.id))
     .filter((source) => relevantSourceIds.size === 0 || relevantSourceIds.has(source.id))
     .map((source) => ({
@@ -292,6 +371,8 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
   relevantEvidence.forEach((evidence) => includedContextIds.add(evidence.source_id));
   provenanceSources.forEach((evidence) => includedContextIds.add(evidence.source_id));
   userPreferences.forEach((memory) => includedContextIds.add(memory.id));
+  relevantConversationExcerpts.forEach((excerpt) => includedContextIds.add(excerpt.messageId));
+  researchEvidence.forEach((research) => includedContextIds.add(research.id));
 
   return {
     id: `ctx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -307,6 +388,8 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     upcomingCommitments,
     recentDecisions,
     contradictions,
+    relevantConversationExcerpts,
+    researchEvidence,
     includedContextIds: Array.from(includedContextIds),
   };
 }
