@@ -530,21 +530,40 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     return normalizedText(left) === normalizedText(right)
       || (leftKey.length > 0 && leftKey === rightKey);
   };
+  const failureSignal = /\b(?:fail(?:ed|ing|ure)?|error|invalid|mismatch(?:ed)?|inconsistent|blocked|broken|unavailable|unauthorized|denied|unable|cannot|can['’]?t|not working)\b/i;
   const unresolvedOutcomeStatement = (text: string) =>
     !/\?\s*$/.test(text)
-    && /\b(?:not|n't|mismatch|inconsistent|failing|failure|error|invalid|unverified|missing|untested|unconfirmed|unresolved|pending|under review|not recorded|not confirmed)\b/i.test(text);
-  const modelLinkedActionText = deterministicActions
-    .find((action) => {
-      const actionTokens = questionIdentityKey(action.text).split(' ').filter(Boolean);
-      if (actionTokens.length < 2) return false;
-      return analysis.nodes
-        .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && unresolvedOutcomeStatement(node.text))
-        .some((node) => {
-          const statementTokens = new Set(questionIdentityKey(node.text).split(' ').filter(Boolean));
-          const shared = actionTokens.filter((token) => statementTokens.has(token)).length;
-          return shared >= Math.min(3, actionTokens.length) && shared / actionTokens.length >= 0.6;
-        });
-    })?.text;
+    && failureSignal.test(text)
+    && /\b(?:not|n't|unverified|missing|untested|unconfirmed|unresolved|pending|under review|not recorded|not confirmed)\b/i.test(text);
+  const actionConnectionTokens = (text: string) => new Set(
+    questionIdentityKey(text)
+      .split(' ')
+      .filter(Boolean)
+      .map((token) => token.endsWith('ing') && token.length > 6
+        ? token.slice(0, -3)
+        : token.endsWith('ed') && token.length > 5
+          ? token.slice(0, -2)
+          : token)
+  );
+  const modelLinkedActions = deterministicActions.filter((action) => {
+    const actionTokens = actionConnectionTokens(action.text);
+    if (actionTokens.size < 2) return false;
+    return analysis.nodes
+      .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && unresolvedOutcomeStatement(node.text))
+      .some((node) => {
+        const statementTokens = actionConnectionTokens(node.text);
+        const shared = [...actionTokens].filter((token) => statementTokens.has(token)).length;
+        // Two shared, inflected-normalized subject/action tokens are enough
+        // to recognize an explicit model link, while unrelated actions with
+        // no shared subject remain unpaired.
+        return shared >= 2 && shared / actionTokens.size >= 0.4;
+      });
+  });
+  // If more than one action could explain the model's statement, leave the
+  // fallback out rather than making the source order decide causality.
+  const modelLinkedActionText = modelLinkedActions.length === 1
+    ? modelLinkedActions[0]?.text
+    : undefined;
   const deterministicOutcomes = extractDeterministicFailureOutcomeQuestionNodes(input.content, modelLinkedActionText)
     .filter((outcome) => !explicitQuestions.some((question) =>
       exactTextMatch(outcome.text, question.text) || semanticallyEquivalentQuestion(outcome.text, question.text)

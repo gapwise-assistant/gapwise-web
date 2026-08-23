@@ -289,6 +289,31 @@ describe('AI context graph analysis', () => {
     expect(sourceNodes.find((node) => node.type === 'UNKNOWN')?.text).toMatch(/resolve|endpoint|failure/i);
   });
 
+  it('does not infer an outcome when the model statement could link multiple actions', async () => {
+    const genAI = mockGenAI({
+      summary: 'The endpoint failure has not been checked through either corrective action.',
+      nodes: [{
+        type: 'UNKNOWN',
+        text: 'The endpoint is failing and the corrected configuration has not been tested or reviewed.',
+        confidence: 0.9,
+        impact: 0.9,
+      }],
+    });
+
+    const result = await processContextSource(projectWithGoal('Ship a reliable service.'), input({
+      sourceId: 'src_ambiguous_outcome',
+      filename: 'ambiguous-status.txt',
+      content: 'The endpoint is failing. I have not tested the corrected configuration. I have not reviewed the corrected configuration.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const sourceNodes = result.project.nodes.filter((node) => node.source_refs.includes('src_ambiguous_outcome'));
+    expect(sourceNodes.filter((node) => node.type === 'UNKNOWN')).toHaveLength(0);
+    expect(sourceNodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test the corrected configuration.' }),
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Review the corrected configuration.' }),
+    ]));
+  });
+
   it('does not manufacture a vague action when a negative pronoun has no safe antecedent', async () => {
     const genAI = mockGenAI({
       summary: 'A data replacement has not been completed.',
