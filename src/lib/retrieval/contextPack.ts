@@ -5,6 +5,7 @@ import { SafeCalendarEvent } from '@/types/google';
 import { rankNodes, rankSources, relevanceScore, tokenize } from '@/lib/retrieval/relevance';
 import { memoriesFromProfile } from '@/lib/memory/store';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { canonicalOpenQuestions, canonicalResolvedQuestions } from '@/lib/questions/canonical';
 
 const DEFAULT_LIMITS = {
   activeGoals: 3,
@@ -253,11 +254,11 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
   );
   const unresolvedGaps = rankNodes(
     input.query,
-    reasoningProject.nodes.filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN'),
+    canonicalOpenQuestions(reasoningProject).filter((node) => node.type === 'UNKNOWN'),
     limits.unresolvedGaps
   );
-  const recentlyResolvedGaps = reasoningProject.nodes
-    .filter((node) => node.type === 'UNKNOWN' && node.status === 'RESOLVED')
+  const recentlyResolvedGaps = canonicalResolvedQuestions(reasoningProject)
+    .filter((node) => node.type === 'UNKNOWN')
     .map((node) => ({
       node,
       relevance: relevanceScore(input.query, `${node.text} ${node.why_it_matters?.join(' ') ?? ''}`),

@@ -1,5 +1,6 @@
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import type { ClarityEdge, ClarityNode, EdgeType, Project, UserMemoryProfile } from '@/types/clarity';
+import { canonicalOpenQuestions } from '@/lib/questions/canonical';
 
 export interface DecisionAnchorSuggestion {
   title: string;
@@ -90,8 +91,8 @@ export function openDecisions(project: Project): ClarityNode[] {
 }
 
 export function openQuestions(project: Project): ClarityNode[] {
-  return project.nodes
-    .filter((node) => OPEN_QUESTION_TYPES.has(node.type) && node.status === 'OPEN')
+  return canonicalOpenQuestions(project)
+    .filter((node) => OPEN_QUESTION_TYPES.has(node.type))
     .sort((left, right) => (right.impact * right.confidence) - (left.impact * left.confidence));
 }
 

@@ -92,6 +92,40 @@ describe('/api/projects', () => {
     ]);
   });
 
+  it('persists the optional initial context and leaves an empty deadline unset', async () => {
+    const previousDemoMode = process.env.GAPSWISE_DEMO_MODE;
+    process.env.GAPSWISE_DEMO_MODE = 'true';
+    try {
+      vi.mocked(saveProject).mockImplementation(async (_userId, project) => project);
+      vi.mocked(setAppScope).mockResolvedValue(undefined);
+      vi.mocked(listProjects).mockImplementation(async () => [createGoldenDemoProject()]);
+
+      const response = await POST(
+        jsonRequest({
+          userId: 'demo-user',
+          name: 'Reunite demo',
+          goal: 'Present a reliable working demo.',
+          description: 'The upload path is failing and the demo needs a fallback.',
+          deadline: '',
+        })
+      );
+
+      expect(response.status).toBe(201);
+      const savedProject = vi.mocked(saveProject).mock.calls[0]?.[1];
+      expect(savedProject?.deadline).toBeUndefined();
+      expect(savedProject?.sources).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          filename: 'Initial context',
+          content: 'The upload path is failing and the demo needs a fallback.',
+          origin: 'user',
+        }),
+      ]));
+    } finally {
+      if (previousDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
+      else process.env.GAPSWISE_DEMO_MODE = previousDemoMode;
+    }
+  });
+
   it('rejects missing required project fields', async () => {
     const response = await POST(jsonRequest({ userId: 'demo-user', name: '' }));
 

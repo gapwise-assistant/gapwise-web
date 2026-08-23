@@ -65,18 +65,19 @@ export function selectTopGap(project: Project, profile: UserMemoryProfile): Cand
 
 /** Overall project Clarity Score 0–100 */
 export function calculateClarityScore(project: Project): number {
-  if (project.nodes.length === 0) return 0;
-  const totalNodes = project.nodes.length;
-  const resolvedNodes = project.nodes.filter(
+  const reasoningProject = projectForReasoning(project);
+  if (reasoningProject.nodes.length === 0) return 0;
+  const totalNodes = reasoningProject.nodes.length;
+  const resolvedNodes = reasoningProject.nodes.filter(
     (node) =>
       node.status === 'RESOLVED' ||
       (node.type === 'DECISION' && node.status !== 'OPEN' && node.status !== 'DEFERRED') ||
       node.type === 'KNOWN',
   ).length;
-  const highConfAssumptions = project.nodes.filter(
+  const highConfAssumptions = reasoningProject.nodes.filter(
     (node) => node.type === 'ASSUMPTION' && node.confidence >= 0.7,
   ).length;
-  const evidenceCount = project.nodes.filter((node) => node.type === 'EVIDENCE').length;
+  const evidenceCount = reasoningProject.nodes.filter((node) => node.type === 'EVIDENCE').length;
   const score =
     (resolvedNodes / totalNodes) * 50 +
     (highConfAssumptions / Math.max(1, totalNodes)) * 25 +

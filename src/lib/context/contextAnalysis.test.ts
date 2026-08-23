@@ -180,6 +180,133 @@ describe('AI context graph analysis', () => {
     });
   });
 
+  it('adds a missing-contingency question when the model returns only the risk', async () => {
+    const genAI = mockGenAI({
+      summary: 'The demo has no fallback for slow matching.',
+      nodes: [
+        { type: 'RISK', text: 'If matching takes longer than five seconds, there is no fallback screen.', confidence: 0.9, impact: 0.9 },
+        { type: 'NEXT_ACTION', text: 'Test matching latency before the demo.', confidence: 0.9, impact: 0.8 },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Present a reliable working demo.'), input({
+      sourceId: 'src_demo_risk',
+      filename: 'demo-risk.txt',
+      content: 'If matching takes longer than five seconds, we do not have a fallback screen.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.map((node) => node.text)).toContain(
+      'What fallback is available if matching takes longer than five seconds?'
+    );
+  });
+
+  it('keeps an upload prerequisite actionable when the model returns it as a statement', async () => {
+    const genAI = mockGenAI({
+      summary: 'The upload credentials have not been verified together.',
+      nodes: [
+        {
+          type: 'UNKNOWN',
+          text: 'NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are mismatched because they were copied from different Supabase projects and have not been tested together.',
+          confidence: 0.9,
+          impact: 0.95,
+        },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Present a reliable working demo of a lost-and-found app.'), input({
+      sourceId: 'src_upload_status',
+      filename: 'current-hackathon-status.txt',
+      content: [
+        'The upload endpoint is failing with 401 Unauthorized.',
+        'In .env.local, NEXT_PUBLIC_SUPABASE_URL points to the new project, but SUPABASE_SERVICE_ROLE_KEY was copied from an older project.',
+        'I have not tested both values from the same project.',
+        'Our demo seed file contains a real phone number. I have not replaced it with fake data.',
+      ].join('\n'),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const sourceNodes = result.project.nodes.filter((node) => node.source_refs.includes('src_upload_status'));
+    const questions = sourceNodes.filter((node) => node.type === 'UNKNOWN');
+    expect(questions).toHaveLength(1);
+    expect(sourceNodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test both values from the same project.' }),
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Replace a real phone number with fake data.' }),
+      expect.objectContaining({ type: 'EVIDENCE', text: 'I have not tested both values from the same project.' }),
+      expect.objectContaining({ type: 'EVIDENCE', text: 'I have not replaced it with fake data.' }),
+    ]));
+    expect(questions[0]?.text).toMatch(/resolve|failure|endpoint|401/i);
+  });
+
+  it('keeps an outcome question while representing the known prerequisite as work', async () => {
+    const genAI = mockGenAI({
+      summary: 'A prerequisite action has not been tested.',
+      nodes: [{
+        type: 'UNKNOWN',
+        text: 'What error occurs when both values from the same project are tested together?',
+        confidence: 0.9,
+        impact: 0.9,
+      }],
+    });
+
+    const result = await processContextSource(projectWithGoal('Complete the project reliably.'), input({
+      sourceId: 'src_unresolved_action',
+      filename: 'status.txt',
+      content: 'I have not tested both values from the same project.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const questions = result.project.nodes.filter((node) =>
+      node.type === 'UNKNOWN' && node.source_refs.includes('src_unresolved_action')
+    );
+    expect(questions).toHaveLength(1);
+    expect(questions[0]?.text).toBe('What error occurs when both values from the same project are tested together?');
+    expect(result.project.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test both values from the same project.' }),
+    ]));
+  });
+
+  it('keeps a generic unresolved outcome alongside evidence and unfinished work', async () => {
+    const genAI = mockGenAI({
+      summary: 'The configuration has not been verified after the failure.',
+      nodes: [{
+        type: 'UNKNOWN',
+        text: 'The two configuration values are inconsistent and the endpoint has not been tested after correction.',
+        confidence: 0.9,
+        impact: 0.9,
+      }],
+    });
+
+    const result = await processContextSource(projectWithGoal('Ship a reliable service.'), input({
+      sourceId: 'src_generic_outcome',
+      filename: 'service-status.txt',
+      content: 'The endpoint is failing. I have not tested the two configuration values together after correction.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const sourceNodes = result.project.nodes.filter((node) => node.source_refs.includes('src_generic_outcome'));
+    expect(sourceNodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'EVIDENCE', text: 'I have not tested the two configuration values together after correction.' }),
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test the two configuration values together after correction.' }),
+    ]));
+    expect(sourceNodes.filter((node) => node.type === 'UNKNOWN')).toHaveLength(1);
+    expect(sourceNodes.find((node) => node.type === 'UNKNOWN')?.text).toMatch(/resolve|endpoint|failure/i);
+  });
+
+  it('does not manufacture a vague action when a negative pronoun has no safe antecedent', async () => {
+    const genAI = mockGenAI({
+      summary: 'A data replacement has not been completed.',
+      nodes: [{ type: 'EVIDENCE', text: 'I have not replaced it with fictional data.', confidence: 0.9, impact: 0.8 }],
+    });
+
+    const result = await processContextSource(projectWithGoal('Prepare a safe demo.'), input({
+      sourceId: 'src_unresolved_pronoun',
+      filename: 'privacy-note.txt',
+      content: 'I have not replaced it with fictional data.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const sourceNodes = result.project.nodes.filter((node) => node.source_refs.includes('src_unresolved_pronoun'));
+    expect(sourceNodes.some((node) => /referenced item|the user/i.test(node.text))).toBe(false);
+    expect(sourceNodes.some((node) => node.type === 'NEXT_ACTION')).toBe(false);
+    expect(sourceNodes.some((node) => node.type === 'EVIDENCE')).toBe(true);
+  });
+
   it('keeps every explicit unresolved question even when the model returns only surrounding evidence', async () => {
     const genAI = mockGenAI({
       summary: 'The ClinicFlow brief has several launch gates.',
@@ -254,7 +381,7 @@ describe('AI context graph analysis', () => {
     const genAI = mockGenAI({
       summary: 'New hotel research challenges the old area assumption and answers the budget question.',
       nodes: [
-        { type: 'EVIDENCE', text: 'Comparable Kyoto hotels fit the available trip budget better.', confidence: 0.95, impact: 0.85 },
+        { type: 'EVIDENCE', text: 'Comparable Kyoto hotels were recorded as fitting the available trip budget better.', confidence: 0.95, impact: 0.85 },
       ],
       relationships: [
         { source_node_index: 0, target_node_id: 'assumption_hotel_area', type: 'contradicts', confidence: 0.95 },
@@ -289,6 +416,7 @@ describe('AI context graph analysis', () => {
       ],
       relationships: [
         { source_node_index: 0, target_node_id: 'new:1', type: 'blocks', confidence: 0.93 },
+        { source_node_index: 0, target_node_id: 'new:1', type: 'supports', confidence: 0.99 },
         { source_node_index: 1, target_node_id: goalId, type: 'affects', confidence: 0.9 },
         { source_node_index: 0, target_node_id: 'missing_node', type: 'supports', confidence: 0.99 },
       ],
@@ -304,6 +432,7 @@ describe('AI context graph analysis', () => {
       expect.objectContaining({ source: budget?.id, target: decision?.id, type: 'blocks' }),
       expect.objectContaining({ source: decision?.id, target: goalId, type: 'affects' }),
     ]));
+    expect(result.project.edges.some((edge) => edge.source === budget?.id && edge.target === decision?.id && edge.type === 'supports')).toBe(false);
     expect(result.project.edges.some((edge) => edge.target === 'missing_node')).toBe(false);
   });
 
@@ -323,12 +452,12 @@ describe('AI context graph analysis', () => {
     });
     const genAI = mockGenAI({
       summary: 'The note answers the existing budget question.',
-      nodes: [{ type: 'UNKNOWN', text: 'What is the trip budget?', confidence: 0.9, impact: 0.9 }],
+      nodes: [{ type: 'EVIDENCE', text: 'The trip budget is recorded as 3000 USD.', confidence: 0.9, impact: 0.9 }],
       relationships: [{ source_node_index: 0, target_node_id: 'unknown_existing_budget', type: 'resolves', confidence: 0.95 }],
     });
 
     const result = await processContextSource(project, input({
-      content: 'The trip budget is 3000 USD.',
+      content: 'The trip budget is recorded as 3000 USD.',
     }), DEFAULT_USER_PROFILE, { genAI });
 
     expect(result.project.nodes.filter((node) => node.text === 'What is the trip budget?')).toHaveLength(1);
@@ -407,7 +536,7 @@ describe('AI context graph analysis', () => {
     const genAI = mockGenAI({
       summary: 'The surgery preparation note leaves authorization and preparation details to confirm.',
       nodes: [
-        { type: 'UNKNOWN', text: modelQuestion, confidence: 0.98, impact: 0.96 },
+        { type: 'UNKNOWN', text: modelQuestion, confidence: 0.4, impact: 0.96 },
         { type: 'UNKNOWN', text: 'What does the user need to know before the surgery?', confidence: 0.86, impact: 0.72 },
       ],
     });

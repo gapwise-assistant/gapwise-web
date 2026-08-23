@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
-import { buildComingUp, buildTodayQuestions } from '@/lib/today/sections';
+import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions } from '@/lib/today/sections';
 import { AttentionCandidate, DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
 import { formatCalendarSchedule } from '@/lib/google/calendarFormatting';
@@ -40,6 +40,32 @@ function briefWithContextPack(contextPack: ContextPack): DailyBrief {
 }
 
 describe('Today sections', () => {
+  it('counts all canonical open questions, including the recommended focus', () => {
+    const project = createProjectFromInput({ name: 'Release plan', goal: 'Ship a reliable release.' }, '2026-08-11T10:00:00Z');
+    project.nodes.push(
+      ...[
+        ['first', 'What is the authentication check?'],
+        ['second', 'What is the data retention choice?'],
+        ['third', 'What is the fallback behavior?'],
+        ['fourth', 'What is the release timing?'],
+      ].map(([id, text]) => ({
+        id,
+        type: 'UNKNOWN' as const,
+        text,
+        status: 'OPEN' as const,
+        confidence: 0.8,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'agent' as const,
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+      })),
+    );
+
+    expect(countTodayOpenQuestions(project)).toBe(4);
+    expect(countTodayOpenQuestions(project, ['first'])).toBe(3);
+  });
+
   it('surfaces at most four deterministic questions with provenance', () => {
     const project = createGoldenDemoProject();
     project.nodes.push({

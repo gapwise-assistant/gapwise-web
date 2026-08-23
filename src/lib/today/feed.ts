@@ -2,7 +2,8 @@ import type { AttentionCandidate } from '@/types/attention';
 import type { Project, ClarityNode } from '@/types/clarity';
 import { todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
-import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
+import { canonicalQuestionGroups } from '@/lib/questions/canonical';
+import { projectForReasoning } from '@/lib/context/sourceState';
 
 export type TodayItemType = 'QUESTION' | 'ACTION' | 'DECISION' | 'REMINDER';
 
@@ -96,8 +97,7 @@ function calendarCommitmentFor(recommendation: AttentionCandidate): ClarityNode 
 
 function matchingQuestion(recommendation: AttentionCandidate, questions: TodayQuestion[], project: Project): TodayQuestion | undefined {
   const sourceQuestion = questionNode(sourceNodes(recommendation, project));
-  const existing = questions.find((question) => question.sourceNodeIds.some((nodeId) => recommendation.source_node_ids.includes(nodeId))
-    || (sourceQuestion && semanticallyEquivalentQuestion(question.question, sourceQuestion.text)));
+  const existing = questions.find((question) => question.sourceNodeIds.some((nodeId) => recommendation.source_node_ids.includes(nodeId)));
   if (existing) return existing;
   return sourceQuestion ? todayQuestionFromNode(project, sourceQuestion) : undefined;
 }
@@ -138,20 +138,21 @@ export function buildTodayFeed(
   project: Project,
   limit = 5,
 ): TodayFeedItem[] {
+  const reasoningProject = projectForReasoning(project);
   const seen = new Set<string>();
   const items: TodayFeedItem[] = [];
 
   recommendations.forEach((recommendation) => {
-    const itemType = todayItemType(recommendation, project);
+    const itemType = todayItemType(recommendation, reasoningProject);
     // A risk node is retained in the graph and retrieval context, but it is
     // not a standalone Today action. Its actionable UNKNOWN (if any) is what
     // the user should resolve.
     if (itemType === 'DECISION' && recommendation.kind === 'risk') return;
-    const key = underlyingKey(itemType, recommendation, project);
+    const key = underlyingKey(itemType, recommendation, reasoningProject);
     if (seen.has(key)) return;
     seen.add(key);
     const calendarCommitment = itemType === 'REMINDER' ? calendarCommitmentFor(recommendation) : undefined;
-    const title = displayTitle(recommendation, itemType, project);
+    const title = displayTitle(recommendation, itemType, reasoningProject);
     items.push({
       recommendation,
       itemType,
@@ -161,8 +162,8 @@ export function buildTodayFeed(
       calendarEnd: calendarCommitment ? calendarTimestampFromText(calendarCommitment.text, 'Ends') : undefined,
       calendarSource: calendarCommitment ? 'Google Calendar' : undefined,
       calendarCommitmentId: calendarCommitment?.id,
-      question: itemType === 'QUESTION' ? matchingQuestion(recommendation, questions, project) : undefined,
-      decisionNodeId: linkedDecisionNodeId(recommendation, project),
+      question: itemType === 'QUESTION' ? matchingQuestion(recommendation, questions, reasoningProject) : undefined,
+      decisionNodeId: linkedDecisionNodeId(recommendation, reasoningProject),
     });
   });
 

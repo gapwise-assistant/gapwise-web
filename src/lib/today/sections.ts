@@ -3,6 +3,7 @@ import { DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
+import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import {
   calendarTimestampFromText,
   formatCalendarDateTime,
@@ -108,6 +109,14 @@ export function todayQuestionFromNode(project: Project, node: ClarityNode): Toda
   const context = presentationContextForNode(project, node);
   if (context.length) question.presentationContext = context;
   return question;
+}
+
+export function countTodayOpenQuestions(project: Project, hiddenQuestionNodeIds: Iterable<string> = []): number {
+  const hidden = new Set(hiddenQuestionNodeIds);
+  return canonicalQuestionGroups(project)
+    .filter((group) => ['UNKNOWN', 'ASSUMPTION'].includes(group.canonical.type) && group.canonical.status === 'OPEN')
+    .filter((group) => !group.nodeIds.some((nodeId) => hidden.has(nodeId)))
+    .length;
 }
 
 function calendarQuestion(node: ClarityNode, now: Date): TodayQuestion | null {

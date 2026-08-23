@@ -8,7 +8,13 @@ import { StorageError } from '@/lib/storage/types';
 import { assertExternalServicesAllowed, isDemoMode } from '@/lib/runtime/demoMode';
 import {
   hashText,
-  extractDeterministicQuestionNodes,
+  extractDeterministicActionNodes,
+  extractDeterministicDecisionNode,
+  extractDeterministicFallbackNodes,
+  extractDeterministicEvidenceNodes,
+  extractDeterministicFailureOutcomeQuestionNodes,
+  extractInferredStatusQuestionNodes,
+  extractMissingContingencyQuestionNodes,
   extractLiteralQuestionNodes,
   ingestContextSource,
   IngestSourceInput,
@@ -19,7 +25,7 @@ import { projectForReasoning } from '@/lib/context/sourceState';
 import {
   canonicalOpenQuestions,
   canonicalQuestionGroups,
-  questionsShareSubject,
+  questionIdentityKey,
   reconcileQuestionCandidates,
   semanticallyEquivalentQuestion,
 } from '@/lib/questions/canonical';
@@ -29,6 +35,8 @@ const reconciliationClassificationSchema = z.enum([
   'PARAPHRASE',
   'SUBQUESTION',
   'SUPPORTING_EVIDENCE',
+  'NEXT_ACTION',
+  'ALREADY_ANSWERED',
   'ASSUMPTION',
   'RELATED_BUT_DISTINCT',
 ]);
@@ -180,11 +188,12 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     `Current compact project state: ${projectSnapshot(project)}`,
     'Return only structured JSON. Extract explicit facts, goals, constraints, decisions, preferences, evidence, risks, experiments, and next actions when materially useful.',
     'For DECISION nodes, return status OPEN only when the source explicitly describes a pending, unresolved, conditional, or not-yet-chosen decision. Return RESOLVED only when a choice is already recorded. Never infer an open decision from a generic task or plan.',
-    'Create an UNKNOWN node for every explicit unresolved question in the source, including bullets under headings such as "unresolved", "pending", "open questions", or "blocking inputs". Do not drop an explicit question just because nearby facts are more detailed. Also turn a negative prerequisite statement such as "the required approval has not been recorded" or "the prerequisite demonstration is still missing" into an UNKNOWN question and retain the negative statement as evidence. Only add a small number of additional inferred questions when answering them could materially improve a decision or advance the project goal. For example, separate "I do not know what option A is" from "I need to know whether option B is better than option A" into two useful unknowns.',
+    'Create an UNKNOWN node for every explicit unresolved question in the source, including bullets under headings such as "unresolved", "pending", "open questions", or "blocking inputs". Do not drop an explicit question just because nearby facts are more detailed. A negative statement about a user-controlled action (for example, "I have not tested it" or "I have not replaced the data") already has a known answer: classify it as EVIDENCE or KNOWN and, when materially useful, add a NEXT_ACTION. Do not create an UNKNOWN that merely asks whether the user performed that already-known action. If the result of that action is unknown and material, ask about the result or resolution instead. A missing external confirmation can remain an evidence-seeking UNKNOWN. Only add a small number of additional inferred questions when answering them could materially improve a decision or advance the project goal.',
     'Phrase factual, status, and requirement UNKNOWNs as evidence-seeking questions: ask what is confirmed, approved, required, current, or recorded by the source or authority named in the context. Do not turn an authority-dependent uncertainty into advice-seeking wording such as "Do I need to change X?" when the missing input is the authority\'s confirmation. Preserve genuine preference and choice questions when the user is the decision-maker. Keep wording concise, first-person-compatible, and grounded; never invent an answer, owner, deadline, or decision.',
     'Treat explicit pending prose (for example, "a prerequisite is still being reviewed", "approval is pending", or "the final schedule has not been confirmed") as unresolved UNKNOWNs when it is relevant to the project goal or deadline, even without a question mark. Retain the original sentence as evidence.',
+    'When the source says a capability has no fallback, backup, contingency, failover, or recovery path under a stated condition, create an UNKNOWN question asking what is available under that condition. Retain the risk or limitation as evidence; do not invent a solution.',
     'Do not generate generic checklists, trivia, or every possible missing detail. Merge semantically repeated questions with existing graph questions and preserve every source reference. Do not duplicate an existing node with the same meaning. Preserve useful new evidence even when it challenges an existing assumption; do not rewrite or delete existing nodes.',
-    'For every returned UNKNOWN or ASSUMPTION node, classify its relationship to the canonical_questions in the current project and to other question-like nodes returned in this same response. Use PARAPHRASE for the same underlying uncertainty, SUBQUESTION for a narrower option-specific check, ASSUMPTION for an unverified belief, SUPPORTING_EVIDENCE for a claim that helps answer an existing question, NEW_UNCERTAINTY for a new uncertainty, and RELATED_BUT_DISTINCT only when the answer and downstream action are independently different. Set canonical_question_id only to an id from canonical_questions. When the same response contains a paraphrase or subquestion of another newly returned question, set canonical_candidate_index to the earlier zero-based node index instead. Do not point forward to a later candidate. Do not merge questions merely because they share nouns; compare the answer needed and the decision/action that would change. Return one reconciliation object per returned question-like node.',
+    'For every returned UNKNOWN or ASSUMPTION node, classify its relationship to the canonical_questions in the current project and to other question-like nodes returned in this same response. Use PARAPHRASE for the same underlying uncertainty, SUBQUESTION for a narrower option-specific check, ASSUMPTION for an unverified belief, SUPPORTING_EVIDENCE for a claim that helps answer an existing question, NEXT_ACTION for required work that is not itself an unknown, ALREADY_ANSWERED when the supplied source already answers the candidate, NEW_UNCERTAINTY for a new uncertainty, and RELATED_BUT_DISTINCT only when the answer and downstream action are independently different. Set canonical_question_id only to an id from canonical_questions. When the same response contains a paraphrase or subquestion of another newly returned question, set canonical_candidate_index to the earlier zero-based node index instead. Do not point forward to a later candidate. Do not merge questions merely because they share nouns; compare the answer needed, the action/evidence that would resolve it, and the downstream change. Return one reconciliation object per returned question-like node.',
     'Classify whether this source appears relevant to the current project as relevant or possibly_not_relevant. This flag is advisory only. Never discard, delete, or suppress the source because of this classification.',
     'When a new node clearly relates to an existing node, include a relationship object. Its source_node_index is the zero-based index of a returned node, and target_node_id is an existing node id from the compact project state or new:<index> for another returned node.',
     'Allowed relationship types are supports, contradicts, supersedes, resolves, depends_on, blocks, affects, informs, and derived_from. Use supports for evidence that strengthens an existing understanding; contradicts when it challenges an assumption or known; supersedes when newer information replaces an old understanding; resolves when it answers an UNKNOWN; blocks when an unresolved question prevents a decision or next action; depends_on when one decision/action requires another; and affects when information materially changes a goal or decision. Only emit high-confidence, useful relationships; do not densify the graph speculatively.',
@@ -333,9 +342,12 @@ function analysisNodesToPrecomputedNodes(analysis: ContextAnalysis, project: Pro
     const canonicalCandidateIndex = reconciliation === modelReconciliation
       ? validModelCandidateTarget
       : reconciliation?.canonicalCandidateIndex;
-    const effectiveType = reconciliation?.classification === 'SUPPORTING_EVIDENCE'
+    const effectiveType = reconciliation && ['SUPPORTING_EVIDENCE', 'ALREADY_ANSWERED'].includes(reconciliation.classification)
       && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
       ? 'EVIDENCE'
+      : reconciliation?.classification === 'NEXT_ACTION'
+        && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
+        ? 'NEXT_ACTION'
       : node.type;
     return {
       type: effectiveType,
@@ -400,9 +412,10 @@ function normalizePersonalQuestion(text: string, sourceContent: string): string 
 }
 
 function questionCandidateMatches(left: string, right: string): boolean {
+  const leftKey = questionIdentityKey(left);
+  const rightKey = questionIdentityKey(right);
   return left.trim().toLowerCase() === right.trim().toLowerCase()
-    || semanticallyEquivalentQuestion(left, right)
-    || questionsShareSubject(left, right);
+    || (leftKey.length > 0 && leftKey === rightKey);
 }
 
 function remapAnalysisIndexes(
@@ -488,34 +501,138 @@ function remapFinalizedAnalysis(
 }
 
 /**
- * Finalizes all question candidates once before ingestion. Literal source
- * questions are preserved; model candidates are consolidated against each
- * other; inferred status extraction is reserved for model-unavailable mode.
+ * Finalizes all candidates once before ingestion. Literal questions and
+ * valid model questions are retained, while deterministic extraction only
+ * contributes explicit external-status questions plus evidence/actions for
+ * user-controlled unfinished work.
  */
 function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeContextInput): ContextAnalysis {
   type Candidate = {
     node: ContextAnalysis['nodes'][number];
     originalIndices: number[];
     literal: boolean;
+    fallback: boolean;
+  };
+
+  const inferredQuestions = extractInferredStatusQuestionNodes(input.content);
+  const deterministicEvidence = extractDeterministicEvidenceNodes(input.content);
+  const deterministicActions = extractDeterministicActionNodes(input.content);
+  const deterministicDecision = extractDeterministicDecisionNode(input.content);
+  const explicitQuestions = [
+    ...extractLiteralQuestionNodes(input.content),
+    ...analysis.nodes.filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && /\?\s*$/.test(node.text)),
+  ];
+  const directActionQuestion = (text: string) => /^(?:have|has|had|do|does|did|am|is|are|can|will|should)\s+(?:i|we)\b/i.test(text.trim());
+  const normalizedText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const exactTextMatch = (left: string, right: string) => {
+    const leftKey = questionIdentityKey(left);
+    const rightKey = questionIdentityKey(right);
+    return normalizedText(left) === normalizedText(right)
+      || (leftKey.length > 0 && leftKey === rightKey);
+  };
+  const unresolvedOutcomeStatement = (text: string) =>
+    !/\?\s*$/.test(text)
+    && /\b(?:not|n't|mismatch|inconsistent|failing|failure|error|invalid|unverified|missing|untested|unconfirmed|unresolved|pending|under review|not recorded|not confirmed)\b/i.test(text);
+  const modelLinkedActionText = deterministicActions
+    .find((action) => {
+      const actionTokens = questionIdentityKey(action.text).split(' ').filter(Boolean);
+      if (actionTokens.length < 2) return false;
+      return analysis.nodes
+        .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && unresolvedOutcomeStatement(node.text))
+        .some((node) => {
+          const statementTokens = new Set(questionIdentityKey(node.text).split(' ').filter(Boolean));
+          const shared = actionTokens.filter((token) => statementTokens.has(token)).length;
+          return shared >= Math.min(3, actionTokens.length) && shared / actionTokens.length >= 0.6;
+        });
+    })?.text;
+  const deterministicOutcomes = extractDeterministicFailureOutcomeQuestionNodes(input.content, modelLinkedActionText)
+    .filter((outcome) => !explicitQuestions.some((question) =>
+      exactTextMatch(outcome.text, question.text) || semanticallyEquivalentQuestion(outcome.text, question.text)
+    ));
+  const fallbackSubject = (text: string): string | undefined =>
+    text.match(/^what current status is recorded for (.+)\?$/i)?.[1]?.trim()
+    ?? text.match(/^what (.+) is currently confirmed\?$/i)?.[1]?.trim();
+  const fallbackMatchesQuestion = (fallback: string, candidate: string): boolean => {
+    const subject = fallbackSubject(fallback);
+    if (!subject) return exactTextMatch(fallback, candidate);
+    const subjectKey = questionIdentityKey(subject);
+    const candidateKey = questionIdentityKey(candidate);
+    if (!subjectKey || subjectKey.split(' ').length < 2) return false;
+    const subjectTokens = subjectKey.split(' ');
+    return subjectTokens.every((token) => candidateKey.split(' ').includes(token))
+      && /\b(?:status|record(?:ed)?|confirm(?:ed|ation)?|approv(?:ed|al)?|review(?:ed|ing)?|outcome|pending|unresolved|unconfirm(?:ed)?|verified?)\b/i.test(candidate);
+  };
+  const candidateTextMatch = (left: string, right: string) => exactTextMatch(left, right)
+    || fallbackMatchesQuestion(left, right)
+    || fallbackMatchesQuestion(right, left);
+  const actionForModel = () => deterministicActions.length === 1 ? deterministicActions[0] : undefined;
+  const explicitCandidateMerge = (left: Candidate, right: Candidate) => {
+    const leftIndexes = new Set(left.originalIndices);
+    const rightIndexes = new Set(right.originalIndices);
+    return analysis.reconciliation.some((item) => {
+      if (!['PARAPHRASE', 'SUBQUESTION'].includes(item.classification) || item.canonical_candidate_index === undefined) return false;
+      return (leftIndexes.has(item.candidate_index) && rightIndexes.has(item.canonical_candidate_index))
+        || (rightIndexes.has(item.candidate_index) && leftIndexes.has(item.canonical_candidate_index));
+    });
+  };
+
+  const normalizeModelNode = (node: ContextAnalysis['nodes'][number]): ContextAnalysis['nodes'][number] => {
+    if (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION') return node;
+    const normalized = normalizePersonalQuestion(node.text, input.content);
+    const normalizedAliases = node.question_aliases?.map((alias) => normalizePersonalQuestion(alias, input.content));
+    const inferredQuestion = inferredQuestions.find((question) => fallbackMatchesQuestion(question.text, normalized));
+    const action = actionForModel();
+    const describesUnfinishedWork = /\b(?:not|n't|mismatch|inconsistent|failing|failure|error|invalid|unverified|missing|untested|unconfirmed|unresolved|pending|under review|not recorded|not confirmed)\b/i.test(normalized);
+    const evidence = deterministicEvidence.find((candidate) => exactTextMatch(normalized, candidate.text));
+
+    // A direct question asking whether the user performed a known action is
+    // itself a misclassified action. Keep the action, not a duplicate UNKNOWN.
+    if (normalized.trim().endsWith('?') && directActionQuestion(normalized) && action) {
+      return {
+        ...node,
+        type: 'NEXT_ACTION',
+        text: action.text,
+        question_aliases: normalizedAliases,
+        status: 'OPEN',
+      };
+    }
+    // A non-question UNKNOWN is either a pending external status or supplied
+    // evidence. Use the generic status question when one is available;
+    // otherwise retain the supplied statement as evidence rather than asking
+    // the user for a fact the source already gives us.
+    if (!normalized.trim().endsWith('?')) {
+      if (inferredQuestion) return { ...node, text: inferredQuestion.text, question_aliases: normalizedAliases, status: 'OPEN' };
+      if (evidence || (action && describesUnfinishedWork) || describesUnfinishedWork) {
+        return { ...node, type: 'EVIDENCE', text: evidence?.text ?? normalized, question_aliases: normalizedAliases, status: 'RESOLVED' };
+      }
+    }
+    return { ...node, text: normalized, question_aliases: normalizedAliases };
   };
 
   const candidates: Candidate[] = analysis.nodes.map((node, index) => ({
-    node: node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'
-      ? {
-        ...node,
-        text: normalizePersonalQuestion(node.text, input.content),
-        question_aliases: node.question_aliases?.map((alias) => normalizePersonalQuestion(alias, input.content)),
-      }
-      : node,
+    node: normalizeModelNode(node),
     originalIndices: [index],
     literal: false,
+    fallback: false,
   }));
 
-  const literal = extractLiteralQuestionNodes(input.content);
-  literal.forEach((question) => {
-    // Attach a literal wording to a model candidate when possible. If another
-    // literal question has already claimed that candidate, retain this literal
-    // as its own protected question rather than dropping user-written text.
+  const addCandidate = (
+    node: ContextAnalysis['nodes'][number],
+    literal = false,
+    deduplicate = true,
+    fallback = false,
+  ) => {
+    const alreadyPresent = candidates.some((candidate) =>
+      candidate.node.type === node.type && exactTextMatch(candidate.node.text, node.text)
+    );
+    // Literal questions are user-authored answer targets. Similarity is only
+    // a guard for inferred/model candidates and must never discard the exact
+    // wording the user supplied.
+    if (alreadyPresent && !literal && deduplicate) return;
+    candidates.push({ node, originalIndices: [], literal, fallback });
+  };
+
+  extractLiteralQuestionNodes(input.content).forEach((question) => {
     const existingIndex = candidates.findIndex((candidate) =>
       !candidate.literal
       && (candidate.node.type === 'UNKNOWN' || candidate.node.type === 'ASSUMPTION')
@@ -540,26 +657,84 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
       };
       return;
     }
-    candidates.push({
-      node: {
-        type: question.type,
-        text: question.text,
-        confidence: question.confidence,
-        impact: question.impact ?? 0.82,
-        status: 'OPEN',
-        why_it_matters: question.whyItMatters ?? [],
-        question_aliases: [],
-        related_node_ids: [],
-        relationship: null,
-      },
-      originalIndices: [],
-      literal: true,
-    });
+    addCandidate({
+      type: question.type,
+      text: question.text,
+      confidence: question.confidence,
+      impact: question.impact ?? 0.82,
+      status: 'OPEN',
+      why_it_matters: question.whyItMatters ?? [],
+      question_aliases: [],
+      related_node_ids: [],
+      relationship: null,
+    }, true);
   });
+
+  extractMissingContingencyQuestionNodes(input.content).forEach((question) => addCandidate({
+    type: question.type,
+    text: question.text,
+    confidence: question.confidence,
+    impact: question.impact ?? 0.82,
+    status: 'OPEN',
+    why_it_matters: question.whyItMatters ?? [],
+    question_aliases: [],
+    related_node_ids: [],
+    relationship: null,
+  }, false, true, true));
+
+  // Inferred status questions are fallback candidates. They are added to the
+  // same candidate set so a model question can supply the canonical wording,
+  // while a model omission still leaves a usable generic question behind.
+  inferredQuestions.forEach((question) => addCandidate({
+    type: question.type,
+    text: question.text,
+    confidence: question.confidence,
+    impact: question.impact ?? question.confidence,
+    status: question.status === 'OPEN' || question.status === 'RESOLVED' ? question.status : undefined,
+    why_it_matters: question.whyItMatters ?? [],
+    question_aliases: [],
+    related_node_ids: [],
+    relationship: null,
+  }, false, false, true));
+
+  // A material failure can justify one grounded outcome question. Ordinary
+  // user-controlled actions remain evidence and work only.
+  deterministicOutcomes.forEach((question) => addCandidate({
+    type: question.type,
+    text: question.text,
+    confidence: question.confidence,
+    impact: question.impact ?? question.confidence,
+    status: question.status === 'OPEN' || question.status === 'RESOLVED' ? question.status : undefined,
+    why_it_matters: ['The source records a failure whose resolution is not yet confirmed.'],
+    question_aliases: [],
+    related_node_ids: [],
+    relationship: null,
+  }, false, true, true));
+
+  // These are known source facts and unfinished work, never additional open
+  // questions. Model output remains authoritative when it already supplied
+  // equivalent evidence or action nodes.
+  [...(deterministicDecision ? [deterministicDecision] : []), ...deterministicActions, ...deterministicEvidence].forEach((node) => addCandidate({
+    type: node.type,
+    text: node.text,
+    confidence: node.confidence,
+    impact: node.impact ?? node.confidence,
+    status: node.status === 'OPEN' || node.status === 'RESOLVED' ? node.status : undefined,
+    why_it_matters: node.whyItMatters ?? [],
+    question_aliases: [],
+    related_node_ids: [],
+    relationship: null,
+  }));
 
   const merged: Candidate[] = [];
   const consumed = new Set<number>();
-  candidates.forEach((candidate, index) => {
+  // Literal questions are the user's intended answer shape. Process them
+  // first so every generated subquestion they cover joins that one canonical
+  // candidate, regardless of the model's output order.
+  const candidateOrder = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((left, right) => Number(right.candidate.literal) - Number(left.candidate.literal));
+  candidateOrder.forEach(({ candidate, index }) => {
     if (consumed.has(index)) return;
     const memberIndices = candidates
       .map((other, otherIndex) => ({ other, otherIndex }))
@@ -568,7 +743,8 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
         if (candidate.literal && other.literal) return false;
         if (!((candidate.node.type === 'UNKNOWN' || candidate.node.type === 'ASSUMPTION')
           && (other.node.type === 'UNKNOWN' || other.node.type === 'ASSUMPTION'))) return false;
-        return questionCandidateMatches(candidate.node.text, other.node.text);
+        return candidateTextMatch(candidate.node.text, other.node.text)
+          || explicitCandidateMerge(candidate, other);
       })
       .map(({ otherIndex }) => otherIndex);
     const indices = [index, ...memberIndices];
@@ -576,6 +752,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     const members = indices.map((memberIndex) => candidates[memberIndex]);
     const selected = [...members].sort((left, right) =>
       Number(right.literal) - Number(left.literal)
+      || Number(left.fallback) - Number(right.fallback)
       || right.node.confidence - left.node.confidence
       || right.node.impact - left.node.impact
     )[0];
@@ -597,6 +774,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
           .filter((originalIndex) => !selected.originalIndices.includes(originalIndex)),
       ],
       literal: members.some((member) => member.literal),
+      fallback: selected.fallback,
     });
   });
 
@@ -767,7 +945,7 @@ export async function processContextSource(
       processingStatus: 'failed',
       errorMessage: message,
       extractionHash: undefined,
-      derivedNodes: extractDeterministicQuestionNodes(input.content),
+      derivedNodes: extractDeterministicFallbackNodes(input.content),
     }, profile);
     return { project: failed, skipped: false, error: message };
   }

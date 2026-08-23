@@ -184,12 +184,20 @@ export function clinicFlowRetryTestSource(): ClinicFlowRegressionSource {
     processingStatus: 'completed',
     relevance: 'relevant',
     derivedNodes: [
-      node(CLINICFLOW_NODE_IDS.retryTest, 'EXPERIMENT', 'The 20-record offline retry test produced three duplicate EHR records because the connector accepted an unacknowledged retry as a second write.', 0.98, [
-        'This is conclusive evidence that the current connector fails the duplicate-record stop condition.',
-      ]),
-      node(CLINICFLOW_NODE_IDS.retryResult, 'KNOWN', 'The current EHR connector has no stable idempotency key and cannot be safely used for offline retries before September 15.', 0.98, [
-        'The full-patient launch path must be delayed or replaced with read-only integration.',
-      ]),
+      {
+        ...node(CLINICFLOW_NODE_IDS.retryTest, 'EXPERIMENT', 'The 20-record offline retry test produced three duplicate EHR records because the connector accepted an unacknowledged retry as a second write.', 0.98, [
+          'This is conclusive evidence that the current connector fails the duplicate-record stop condition.',
+        ]),
+        relatedNodeIds: [CLINICFLOW_NODE_IDS.retry],
+        relationship: 'resolves',
+      },
+      {
+        ...node(CLINICFLOW_NODE_IDS.retryResult, 'KNOWN', 'The current EHR connector has no stable idempotency key and cannot be safely used for offline retries before September 15.', 0.98, [
+          'The full-patient launch path must be delayed or replaced with read-only integration.',
+        ]),
+        relatedNodeIds: [CLINICFLOW_NODE_IDS.decision],
+        relationship: 'informs',
+      },
     ],
     relationships: [
       { sourceNodeIndex: 0, targetNodeId: CLINICFLOW_NODE_IDS.retry, type: 'resolves', confidence: 0.99 },

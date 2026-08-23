@@ -17,6 +17,7 @@ import type { ContextEntry } from '@/components/ContextInbox';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { canonicalOpenQuestions } from '@/lib/questions/canonical';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -93,14 +94,9 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   const reasoningProject = useMemo(() => projectForReasoning(project), [project]);
   const projectQuestions = useMemo(
     () =>
-      reasoningProject.nodes
-        .filter(
-          (node) =>
-            node.status === 'OPEN' &&
-            (node.type === 'UNKNOWN' || (node.type === 'ASSUMPTION' && (node.priority ?? node.impact) >= 0.5))
-        )
-        .sort((a, b) => (b.priority ?? b.impact) - (a.priority ?? a.impact)),
-    [reasoningProject.nodes]
+      canonicalOpenQuestions(reasoningProject)
+        .filter((node) => node.type === 'UNKNOWN' || (node.type === 'ASSUMPTION' && (node.priority ?? node.impact) >= 0.5)),
+    [reasoningProject]
   );
   const answeredQuestions = useMemo(() => answeredQuestionHistory(project), [project]);
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);

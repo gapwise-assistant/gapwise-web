@@ -7,6 +7,8 @@ export type QuestionReconciliationClassification =
   | 'PARAPHRASE'
   | 'SUBQUESTION'
   | 'SUPPORTING_EVIDENCE'
+  | 'NEXT_ACTION'
+  | 'ALREADY_ANSWERED'
   | 'ASSUMPTION'
   | 'RELATED_BUT_DISTINCT';
 
@@ -22,6 +24,13 @@ function stemQuestionToken(token: string): string {
   if (token.endsWith('es') && token.length > 5) return token.slice(0, -2);
   if (token.endsWith('s') && token.length > 4) return token.slice(0, -1);
   return token;
+}
+
+function stemSubjectToken(token: string): string {
+  if (token.endsWith('ing') && token.length > 6) return stemSubjectToken(token.slice(0, -3));
+  if (token.endsWith('al') && token.length > 6) return stemSubjectToken(token.slice(0, -2));
+  if (token.endsWith('ed') && token.length > 5) return stemSubjectToken(token.slice(0, -2));
+  return stemQuestionToken(token);
 }
 
 export function questionIdentityKey(text: string): string {
@@ -52,9 +61,41 @@ const QUESTION_SUBJECT_STOP_WORDS = new Set([
 ]);
 
 function questionSubjectTokens(text: string): Set<string> {
-  return new Set(questionIdentityKey(text)
-    .split(' ')
-    .filter((token) => token && !QUESTION_SUBJECT_STOP_WORDS.has(token)));
+  return new Set(text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !QUESTION_KEY_STOP_WORDS.has(token) && !QUESTION_SUBJECT_STOP_WORDS.has(token))
+    .map(stemSubjectToken)
+    .filter((token) => token.length >= 3 && !QUESTION_KEY_STOP_WORDS.has(token) && !QUESTION_SUBJECT_STOP_WORDS.has(token)));
+}
+
+function compoundQuestionParts(text: string): Set<string>[] {
+  if (!/\b(?:and|or|plus|as well as|along with)\b/i.test(text)) return [];
+  return text
+    .split(/\b(?:and|or|plus|as well as|along with)\b/i)
+    .map((part) => questionSubjectTokens(part))
+    .filter((tokens) => tokens.size > 0);
+}
+
+function verificationQuestionsShareSubject(left: string, right: string, shared: number): boolean {
+  const verification = /\b(?:confirm(?:ed|s)?|approv(?:ed|es)?|verif(?:ied|y|ies)|record(?:ed|s)?|check(?:ed|s)?)\b/i;
+  return verification.test(left) && verification.test(right) && shared >= 3;
+}
+
+function statusFallbackSharesSubject(fallback: string, candidate: string): boolean {
+  if (!isStatusFallbackQuestion(fallback)) return false;
+  const fallbackTokens = questionSubjectTokens(fallback);
+  const candidateTokens = questionSubjectTokens(candidate);
+  if (fallbackTokens.size < 2 || fallbackTokens.size > candidateTokens.size) return false;
+  const shared = [...fallbackTokens].filter((token) => candidateTokens.has(token)).length;
+  if (shared !== fallbackTokens.size) return false;
+
+  // A fallback status question may be narrower than a professional question
+  // that names the same subject and asks for its confirmation or outcome.
+  // The signal is grammatical, not tied to a domain vocabulary.
+  return /\b(?:status|record(?:ed)?|confirm(?:ed|ation)?|approv(?:ed|al)?|review(?:ed|ing)?|outcome|pending|unresolved|unconfirm(?:ed)?|verified?)\b/i.test(candidate);
 }
 
 /**
@@ -67,11 +108,14 @@ export function questionsShareSubject(left: string, right: string): boolean {
   const rightTokens = questionSubjectTokens(right);
   if (!leftTokens.size || !rightTokens.size) return false;
   const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  if (shared < 2) return false;
-  const leftCoverage = shared / leftTokens.size;
-  const rightCoverage = shared / rightTokens.size;
-  const smallerSize = Math.min(leftTokens.size, rightTokens.size);
-  return (leftCoverage >= 0.75 && rightCoverage >= 0.75) || shared === smallerSize;
+  const statusFallbackMatch = statusFallbackSharesSubject(left, right)
+    || statusFallbackSharesSubject(right, left);
+  if (statusFallbackMatch) return true;
+  // Different ordinary phrasings are not merged here. The model's
+  // reconciliation metadata is the authority for paraphrases and
+  // subquestions. Only the two narrow, grammatical fallbacks below are safe
+  // enough for deterministic recovery.
+  return verificationQuestionsShareSubject(left, right, shared);
 }
 
 function isStatusFallbackQuestion(text: string): boolean {
@@ -243,6 +287,8 @@ function canonicalNode(nodes: ClarityNode[]): ClarityNode {
     || Number((right.question_role ?? 'canonical') === 'canonical') - Number((left.question_role ?? 'canonical') === 'canonical')
     || (Number(isStatusFallbackQuestion(left.text)) - Number(isStatusFallbackQuestion(right.text)))
     || (Number(right.reconciliation_status === 'reconciled') - Number(left.reconciliation_status === 'reconciled'))
+    || ((compoundQuestionParts(right.text).length ? questionSubjectTokens(right.text).size : -1)
+      - (compoundQuestionParts(left.text).length ? questionSubjectTokens(left.text).size : -1))
     || (right.confidence - left.confidence)
     || (right.source_refs.length - left.source_refs.length)
     || ((right.priority ?? right.impact) - (left.priority ?? left.impact))
@@ -298,18 +344,35 @@ export function canonicalQuestionGroups(project: Pick<Project, 'nodes'>): Canoni
   });
 
   candidates
-    .filter((node) => !assigned.has(node.id))
+    .filter((node) => !assigned.has(node.id) && node.question_role !== 'related')
     .forEach((node) => {
       // NEW_UNCERTAINTY and RELATED_BUT_DISTINCT are advisory classifications.
       // A genuinely different subject remains separate; matching substantive
       // subjects still resolve to one canonical question.
-      const group = groups.find((candidate) => candidate.some((item) =>
+      const matchingGroups = groups.filter((candidate) => candidate.some((item) =>
         [item.text, ...(item.question_aliases ?? [])].some((text) =>
           [node.text, ...(node.question_aliases ?? [])].some((candidateText) => questionTextsShouldMerge(text, candidateText))
         )
       ));
-      if (group) group.push(node);
-      else groups.push([node]);
+      if (matchingGroups.length) {
+        const group = matchingGroups[0];
+        matchingGroups.slice(1).forEach((duplicateGroup) => {
+          group.push(...duplicateGroup);
+          const duplicateIndex = groups.indexOf(duplicateGroup);
+          if (duplicateIndex >= 0) groups.splice(duplicateIndex, 1);
+        });
+        group.push(node);
+      } else groups.push([node]);
+      assigned.add(node.id);
+    });
+
+  // RELATED_BUT_DISTINCT is an explicit semantic boundary from the
+  // reconciliation pass. Keep those questions as their own groups even when
+  // they happen to share a couple of subject tokens with another question.
+  candidates
+    .filter((node) => !assigned.has(node.id) && node.question_role === 'related')
+    .forEach((node) => {
+      groups.push([node]);
       assigned.add(node.id);
     });
 

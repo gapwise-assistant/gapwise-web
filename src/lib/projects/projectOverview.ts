@@ -155,6 +155,7 @@ export function buildNeedsAttention(project: Project): NeedsAttentionItem | null
 
 /** Builds a compact deterministic briefing from the stored project graph. */
 export function buildCurrentPicture(project: Project, limit = 3): CurrentPictureItem[] {
+  const reasoningProject = projectForReasoning(project);
   const items: CurrentPictureItem[] = [];
   const seen = new Set<string>();
   const addNode = (node?: ClarityNode) => {
@@ -165,7 +166,7 @@ export function buildCurrentPicture(project: Project, limit = 3): CurrentPicture
     items.push({ id: `node:${node.id}`, text });
   };
 
-  const activeNodes = project.nodes.filter((node) => node.status !== 'DEPRECATED');
+  const activeNodes = reasoningProject.nodes.filter((node) => node.status !== 'DEPRECATED');
   const sortByPriority = (a: ClarityNode, b: ClarityNode) => nodePriority(b) - nodePriority(a);
   const requirements = activeNodes
     .filter((node) => ['KNOWN', 'EVIDENCE', 'CONSTRAINT'].includes(node.type) && isRequirement(node))

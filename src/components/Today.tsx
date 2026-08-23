@@ -8,7 +8,7 @@ import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/at
 import { FeedbackEvent, FeedbackRating } from '@/types/feedback';
 import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
 import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
-import { buildComingUp, buildTodayQuestions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
+import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import {
   hasUsefulSuggestedAnswer,
   localQuestionPresentation,
@@ -256,7 +256,12 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const reminderCount = nonQuestionItems.filter((item) => item.itemType === 'REMINDER').length;
   const reminderItems = nonQuestionItems.filter((item) => item.itemType === 'REMINDER');
   const otherNonQuestionItems = nonQuestionItems.filter((item) => item.itemType !== 'REMINDER');
-  const openQuestionCount = questionItems.filter((item) => !item.answered).length;
+  const hiddenCanonicalQuestionNodeIds = new Set([
+    ...hiddenQuestionNodeIds,
+    ...Object.values(hiddenQuestions).flatMap((question) => question.sourceNodeIds),
+    ...Object.values(hiddenRecommendations).flatMap((recommendation) => recommendation.source_node_ids),
+  ]);
+  const openQuestionCount = countTodayOpenQuestions(project, hiddenCanonicalQuestionNodeIds);
   const feedQuestions = questionItems.map(({ question, context }) => ({
     ...question,
     reason: question.reason || context,

@@ -5,9 +5,11 @@ import {
   anchorProjectDecision,
   extractOpenDecisionTitle,
   findDecisionAnchorSuggestion,
+  openDecisions,
 } from '@/lib/decisions/anchoring';
 import { ingestContextSource } from '@/lib/context/ingestion';
 import { calculateClarityScore } from '@/lib/prioritization';
+import { buildDecisionWorkspace } from '@/lib/decisions/workspace';
 
 describe('decision anchoring', () => {
   it('extracts an explicit pending decision and lets the user anchor it', async () => {
@@ -77,5 +79,22 @@ describe('decision anchoring', () => {
 
     expect(findDecisionAnchorSuggestion(updated)).toBeNull();
     expect(updated.nodes.some((node) => node.type === 'DECISION' && node.status === 'OPEN')).toBe(false);
+  });
+
+  it('keeps a pending decision visible to the decision map after ingestion', async () => {
+    const project = createProjectFromInput({
+      name: 'Demo launch',
+      goal: 'Prepare a safe public demo.',
+    });
+    const updated = await ingestContextSource(project, {
+      sourceId: 'retention-note',
+      filename: 'retention-note.txt',
+      type: 'text',
+      content: 'I still need to decide whether submitted files should be retained after the demo.',
+    }, DEFAULT_USER_PROFILE);
+    const decision = openDecisions(updated)[0];
+
+    expect(decision?.text).toContain('submitted files');
+    expect(buildDecisionWorkspace(updated, decision?.id ?? '')?.decision.id).toBe(decision?.id);
   });
 });

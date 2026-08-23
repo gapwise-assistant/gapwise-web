@@ -116,6 +116,9 @@ function sentenceLines(content: string): string[] {
 
 const STATUS_PREDICATE = /\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b/gi;
 const REPORTING_CLAUSE = /\b(?:told|said|informed|advised|reported|notified|emailed|messaged)\s+(?:me|us|him|her|them)\s+/i;
+const CONTINGENCY_TERM = /\b(?:fallback|backup|contingency|failover|recovery)\b/i;
+const ABSENCE_TERM = /\b(?:no|not|without|missing|lack(?:s|ing)?|doesn['’]?t|does not|don['’]?t|do not|isn['’]?t|is not|aren['’]?t|are not)\b/i;
+const FAILURE_TERM = /\b(?:fail(?:ed|ing|ure)?|error|invalid|mismatch(?:ed)?|inconsistent|blocked|broken|unavailable|unauthorized|denied|unable|cannot|can['’]?t|not working)\b/i;
 
 function cleanStatusSubject(value: string): string | undefined {
   const subject = value
@@ -148,6 +151,67 @@ function subjectForStatusLine(line: string): string | undefined {
   return statusSubjects(line)[0];
 }
 
+interface NegativeActionParts {
+  actor: string;
+  action: string;
+}
+
+function negativeActionParts(line: string): NegativeActionParts | undefined {
+  const match = line.match(/^(.+?)\s+(?:(has|have|had)\s+not|(hasn't|haven't|hadn't)|(?:did)\s+not|didn't)\s+(?:yet\s+)?(.+?)[.!?]?$/i);
+  if (!match?.[1]) return undefined;
+  const action = match[4] ?? match[3];
+  if (!action) return undefined;
+  return {
+    actor: match[1].trim(),
+    action: action.replace(/[.!?]+$/, '').trim(),
+  };
+}
+
+function isFirstPersonActor(actor: string): boolean {
+  return /^(?:i|we|my|our)\b/i.test(actor.trim());
+}
+
+function baseActionVerb(value: string): string {
+  const verb = value.toLowerCase();
+  if (verb.endsWith('ies') && verb.length > 4) return `${verb.slice(0, -3)}y`;
+  if (verb.endsWith('ied') && verb.length > 4) return `${verb.slice(0, -3)}y`;
+  if (verb.endsWith('ed') && verb.length > 4) {
+    const stem = verb.slice(0, -2);
+    if (stem.endsWith('c') || stem.endsWith('v')) return `${stem}e`;
+    return stem;
+  }
+  return verb;
+}
+
+function antecedentFromPreviousLines(previousLines: string[]): string | undefined {
+  for (const line of [...previousLines].reverse()) {
+    const match = line.match(/\b(?:contains?|includes?|stores?|holds?|uses?|mentions?|references?|lists?|tracks?|records?|captures?|has)\s+(.+?)[.!?]?$/i);
+    const antecedent = match?.[1]?.trim();
+    if (!antecedent || /^(?:not|no|never|still)\b/i.test(antecedent)) continue;
+    if (antecedent.split(/\s+/).length > 12) continue;
+    return antecedent;
+  }
+  return undefined;
+}
+
+function resolveActionPronouns(action: string, previousLines: string[]): string | undefined {
+  if (!/\b(?:it|them|this|that)\b/i.test(action)) return action;
+  const antecedent = antecedentFromPreviousLines(previousLines);
+  if (!antecedent) return undefined;
+  return action
+    .replace(/\bit\b/gi, antecedent)
+    .replace(/\bthem\b/gi, antecedent)
+    .replace(/\b(this|that)\b/gi, antecedent);
+}
+
+function actionText(action: string, previousLines: string[] = []): string | undefined {
+  const words = action.split(/\s+/).filter(Boolean);
+  if (!words.length || /^been\b/i.test(action)) return undefined;
+  const [verb, ...rest] = words;
+  const phrase = resolveActionPronouns([baseActionVerb(verb), ...rest].join(' '), previousLines);
+  return phrase?.replace(/^./, (value) => value.toUpperCase());
+}
+
 /**
  * Converts an explicit negative or pending statement into a confirmation
  * question without guessing the domain, answer, owner, or next decision.
@@ -155,18 +219,27 @@ function subjectForStatusLine(line: string): string | undefined {
  * statements preserve the named source and action ("The responsible source
  * has not confirmed X" -> "Has the responsible source confirmed X?").
  */
-function negativeStatementQuestion(line: string): string | undefined {
+function negativeStatementQuestion(line: string, previousLines: string[] = []): string | undefined {
   const normalized = line.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!/(?:has|have|had)\s+not\b|\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b|\b(?:pending|under review|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
+  if (!/(?:has|have|had)\s+not\b|\b(?:hasn't|haven't|hadn't|did\s+not|didn't)\b|\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b|\b(?:pending|under review|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
     return undefined;
   }
 
-  const active = line.match(/^(.+?)\s+(has|have|had)\s+not\s+(?:yet\s+)?(approved|confirmed|accepted|agreed|provided|reviewed|verified|demonstrated|selected|recorded)\s+(.+?)[.!?]?$/i);
-  if (active?.[1] && active[3] && active[4]) {
-    const actor = (active[1].split(/,|\band\b/i).at(-1)?.trim() ?? active[1].trim())
+  // Keep the grammar generic: the unresolved action may be any verb phrase,
+  // not only one of the common approval/status verbs. This is what lets
+  // first-person source prose such as "I have not tested both values..."
+  // become a usable question without domain-specific vocabulary.
+  const active = negativeActionParts(line);
+  if (active) {
+    // The source already answers user-controlled action questions such as
+    // "I have not tested it." Keep that status as evidence and derive work
+    // from it instead of asking whether the known action happened.
+    if (isFirstPersonActor(active.actor)) return undefined;
+    const actor = (active.actor.split(/,|\band\b/i).at(-1)?.trim() ?? active.actor.trim())
       .replace(/^(The|A|An)\b/, (article) => article.toLowerCase());
-    const object = active[4].replace(/[.!?]+$/, '').trim();
-    return `Has ${actor} ${active[3].toLowerCase()} ${object}?`;
+    const action = resolveActionPronouns(active.action, previousLines);
+    if (!action) return undefined;
+    return `Has ${actor} ${action}?`;
   }
 
   const passive = line.match(/^(.+?)\s+has\s+not\s+(?:yet\s+)?(?:been\s+)?(approved|confirmed|reviewed|verified|recorded)[.!?]?$/i);
@@ -178,6 +251,15 @@ function negativeStatementQuestion(line: string): string | undefined {
   const subject = subjectForStatusLine(line);
   if (!subject) return undefined;
   return `What current status is recorded for ${subject}?`;
+}
+
+function missingContingencyQuestion(line: string): string | undefined {
+  const contingency = line.match(CONTINGENCY_TERM)?.[0].toLowerCase();
+  const condition = line.match(/^\s*if\s+(.+?),\s*/i)?.[1]
+    ?.replace(/[.!?]+$/, '')
+    .trim();
+  if (!contingency || !condition || !ABSENCE_TERM.test(line)) return undefined;
+  return `What ${contingency} is available if ${condition}?`;
 }
 
 function questionNodesFromTexts(texts: string[]): PrecomputedSourceNode[] {
@@ -201,15 +283,20 @@ export function extractLiteralQuestionNodes(content: string): PrecomputedSourceN
 
 /**
  * Questions inferred from pending or negative prose. These are fallback
- * candidates only; successful model analysis does not call this extractor.
+ * candidates only; model-backed finalization selects the narrow first-person
+ * subset when the model omits an unresolved action question.
  */
 export function extractInferredStatusQuestionNodes(content: string): PrecomputedSourceNode[] {
   const inferredQuestions: string[] = [];
-  sentenceLines(content).forEach((line) => {
+  const lines = sentenceLines(content);
+  lines.forEach((line, index) => {
     const cleaned = cleanQuestionLine(line);
     if (cleaned.endsWith('?')) return;
 
-    const inferred = negativeStatementQuestion(cleaned);
+    const contingency = missingContingencyQuestion(cleaned);
+    if (contingency) inferredQuestions.push(contingency);
+
+    const inferred = negativeStatementQuestion(cleaned, lines.slice(0, index));
     if (inferred) inferredQuestions.push(inferred);
 
     // A prose sentence can contain more than one explicit status clause
@@ -224,18 +311,110 @@ export function extractInferredStatusQuestionNodes(content: string): Precomputed
 }
 
 /**
+ * First-person negative action statements are known status, not unknowns.
+ * Preserve the exact sentence as evidence and expose the unfinished action
+ * without turning it into a yes/no question.
+ */
+export function extractDeterministicActionNodes(content: string): PrecomputedSourceNode[] {
+  const actions: PrecomputedSourceNode[] = [];
+  const lines = sentenceLines(content);
+  lines.forEach((line, index) => {
+    const parts = negativeActionParts(line);
+    if (!parts || !isFirstPersonActor(parts.actor)) return;
+    const action = actionText(parts.action, lines.slice(0, index));
+    if (!action) return;
+    actions.push({
+      type: 'NEXT_ACTION',
+      text: action.endsWith('.') ? action : `${action}.`,
+      confidence: 0.84,
+      impact: 0.78,
+      whyItMatters: ['This action is explicitly unfinished in the supplied project context.'],
+      status: 'OPEN',
+    });
+  });
+  return Array.from(new Map(actions.map((node) => [node.text.toLowerCase(), node])).values());
+}
+
+function actionAsGerund(action: string): string {
+  const words = action.replace(/[.!?]+$/, '').trim().split(/\s+/).filter(Boolean);
+  const verb = words.shift()?.toLowerCase() ?? '';
+  const gerund = verb.endsWith('ie')
+    ? `${verb.slice(0, -2)}ying`
+    : verb.endsWith('e') && !verb.endsWith('ee')
+      ? `${verb.slice(0, -1)}ing`
+      : /[^aeiou][aeiou][^aeiouwxy]$/.test(verb)
+        ? `${verb}${verb.at(-1) ?? ''}ing`
+        : `${verb}ing`;
+  return [gerund, ...words].join(' ');
+}
+
+function failureOutcomeSubject(line: string): string | undefined {
+  const cleaned = line.replace(/[.!?]+$/, '').replace(/\s+/g, ' ').trim();
+  const state = cleaned.match(/\b(?:is|are|was|were)\s+(?:currently\s+)?(?:failing|broken|blocked|unavailable|not working)\b/i);
+  if (state?.index === undefined) return undefined;
+  const subject = cleaned.slice(0, state.index)
+    .replace(/^\s*(?:the|a|an|this|that|my|our)\s+/i, '')
+    .trim();
+  if (!subject) return undefined;
+  const detail = cleaned.slice(state.index + state[0].length).replace(/^\s+with\s+/i, '').trim();
+  return `${subject} failure${detail ? ` (${detail})` : ''}`;
+}
+
+/**
+ * Derive one outcome question only when the source contains both an
+ * unfinished user action and a concrete failure state. Ordinary unfinished
+ * actions remain evidence plus NEXT_ACTION; they are not automatically
+ * treated as knowledge gaps.
+ */
+export function extractDeterministicFailureOutcomeQuestionNodes(
+  content: string,
+  selectedActionText?: string,
+): PrecomputedSourceNode[] {
+  const failureLines = sentenceLines(content).filter((line) => FAILURE_TERM.test(line));
+  const actions = extractDeterministicActionNodes(content);
+  if (failureLines.length !== 1 || actions.length === 0 || (!selectedActionText && actions.length !== 1)) return [];
+  const action = selectedActionText
+    ? actions.find((candidate) => candidate.text === selectedActionText)
+    : actions[0];
+  if (!action) return [];
+  const failureLine = failureLines[0];
+  const subject = failureOutcomeSubject(failureLine);
+  if (!subject) return [];
+  return questionNodesFromTexts([
+    `Does ${actionAsGerund(action.text)} resolve the ${subject}?`,
+  ]);
+}
+
+/**
+ * Extracts only missing-contingency questions for model-backed finalization.
+ * This lets a successful analysis retain a useful gap when the model records
+ * the risk but omits the corresponding unresolved question.
+ */
+export function extractMissingContingencyQuestionNodes(content: string): PrecomputedSourceNode[] {
+  return questionNodesFromTexts(
+    sentenceLines(content)
+      .map((line) => missingContingencyQuestion(line))
+      .filter((question): question is string => Boolean(question))
+  );
+}
+
+/**
  * Compatibility entry point for demo and model-unavailable ingestion. It
  * combines literal and inferred candidates only when no model finalizer is
  * available to choose between them.
  */
 export function extractDeterministicQuestionNodes(content: string): PrecomputedSourceNode[] {
+  const literalQuestions = extractLiteralQuestionNodes(content);
   return questionNodesFromTexts([
-    ...extractLiteralQuestionNodes(content).map((node) => node.text),
+    ...literalQuestions.map((node) => node.text),
     ...extractInferredStatusQuestionNodes(content).map((node) => node.text),
+    ...(literalQuestions.length === 0
+      ? extractDeterministicFailureOutcomeQuestionNodes(content).map((node) => node.text)
+      : []),
   ]);
 }
 
-function extractDeterministicEvidenceNodes(content: string): PrecomputedSourceNode[] {
+export function extractDeterministicEvidenceNodes(content: string): PrecomputedSourceNode[] {
   const seen = new Set<string>();
   return sentenceLines(content)
     .filter((line) => {
@@ -260,10 +439,12 @@ function extractDeterministicEvidenceNodes(content: string): PrecomputedSourceNo
     }));
 }
 
-function extractDeterministicDecisionNode(content: string): PrecomputedSourceNode | undefined {
+export function extractDeterministicDecisionNode(content: string): PrecomputedSourceNode | undefined {
   const line = sentenceLines(content).find((candidate) =>
     /\b(?:pending|open|unresolved|not yet approved|still open)\b.{0,80}\b(?:decision|go\s*\/\s*no[- ]go|choice)\b/i.test(candidate)
     || /\b(?:decision|go\s*\/\s*no[- ]go)\b.{0,80}\b(?:pending|open|unresolved|still open|not made)\b/i.test(candidate)
+    || /\b(?:i|we)\s+(?:still\s+)?need\s+to\s+decide\b/i.test(candidate)
+    || /\b(?:i|we)\s+(?:still\s+)?haven['’]?t\s+decided\b/i.test(candidate)
   );
   if (!line) return undefined;
   const text = line.replace(/\s+/g, ' ').trim().replace(/[.]+$/, '');
@@ -279,10 +460,11 @@ function extractDeterministicDecisionNode(content: string): PrecomputedSourceNod
 
 function fallbackNodesForSource(content: string): PrecomputedSourceNode[] {
   const questionNodes = extractDeterministicQuestionNodes(content);
+  const actionNodes = extractDeterministicActionNodes(content);
   const evidenceNodes = extractDeterministicEvidenceNodes(content);
   const decisionNode = extractDeterministicDecisionNode(content);
-  if (questionNodes.length || evidenceNodes.length || decisionNode) {
-    return [ ...(decisionNode ? [decisionNode] : []), ...questionNodes, ...evidenceNodes ];
+  if (questionNodes.length || actionNodes.length || evidenceNodes.length || decisionNode) {
+    return [ ...(decisionNode ? [decisionNode] : []), ...questionNodes, ...actionNodes, ...evidenceNodes ];
   }
   const type = inferNodeType(content);
   return [{
@@ -293,11 +475,20 @@ function fallbackNodesForSource(content: string): PrecomputedSourceNode[] {
   }];
 }
 
+/** Deterministic graph fallback used when model analysis is unavailable. */
+export function extractDeterministicFallbackNodes(content: string): PrecomputedSourceNode[] {
+  return fallbackNodesForSource(content);
+}
+
 function inferFallbackResolutionTargets(project: Project, content: string): ClarityNode[] {
   const lower = content.toLowerCase();
   if (!/\b(?:test|trial|experiment|demonstrated|confirmed|approved|completed|produced|passed|verified|shows?|recorded)\b/i.test(lower)) return [];
 
-  const contentTokens = new Set(questionIdentityKey(content).split(' ').filter(Boolean));
+  const positiveContent = sentenceLines(content)
+    .filter((line) => !/(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b/i.test(line))
+    .join(' ');
+  if (!positiveContent.trim()) return [];
+  const contentTokens = new Set(questionIdentityKey(positiveContent).split(' ').filter(Boolean));
   const genericTokens = new Set(['current', 'status', 'record', 'recorded', 'confirm', 'confirmed', 'approval', 'approved', 'review', 'reviewed']);
   return project.nodes.filter((node) => {
     if (!['UNKNOWN', 'ASSUMPTION'].includes(node.type) || node.status !== 'OPEN') return false;
@@ -403,6 +594,94 @@ function applyRelationshipState(
   if (relationship === 'resolves' && ['UNKNOWN', 'ASSUMPTION'].includes(target.type)) {
     target.status = 'RESOLVED';
   }
+}
+
+/**
+ * A stored EVIDENCE node is complete as a record, but that lifecycle state
+ * does not mean the evidence answers another node. Resolution requires a
+ * result-bearing statement and must reject language that explicitly leaves
+ * the result pending or unverified.
+ */
+function hasConclusiveResultEvidence(node: ClarityNode): boolean {
+  if (!['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(node.type)) return false;
+  const text = node.text.trim();
+  if (!text || /\b(?:(?:has|have|did|does)\s+not\s+(?:yet\s+)?(?:test(?:ed)?|verif(?:y|ied)|confirm(?:ed)?|record(?:ed)?|receiv(?:e|ed)|complet(?:e|ed)|resolv(?:e|ed))|not tested|still pending|under review|no response|result unknown|unresolved|unconfirmed|not verified|not recorded)\b/i.test(text)) {
+    return false;
+  }
+  return /\b(?:returned|created|produced|passed|failed|rejected|approved|confirmed|verified|recorded|completed|received|shows?|demonstrated|succeeded|successfully|matched|resolved)\b/i.test(text);
+}
+
+/**
+ * Keep model-supplied graph edges role-compatible. A valid node id and a high
+ * confidence score are not enough: for example, a question should not
+ * support an unrelated fact, and evidence should not block a decision. This
+ * is deliberately type-based so it stays generic across projects.
+ */
+function relationshipRoleCompatible(
+  source: ClarityNode,
+  target: ClarityNode,
+  relationship: EdgeType,
+): boolean {
+  const question = (node: ClarityNode) => node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
+  const evidence = (node: ClarityNode) => ['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(node.type);
+  const structuralTarget = (node: ClarityNode) => question(node)
+    || ['GOAL', 'DECISION', 'NEXT_ACTION', 'RISK', 'CONSTRAINT'].includes(node.type);
+
+  switch (relationship) {
+    case 'supports':
+      return evidence(source) || source.type === 'PREFERENCE';
+    case 'contradicts':
+      return evidence(source) && (evidence(target) || question(target) || target.type === 'DECISION');
+    case 'resolves':
+      return hasConclusiveResultEvidence(source)
+        && (question(target) || target.type === 'DECISION');
+    case 'supersedes':
+      return evidence(source) && (evidence(target) || question(target) || target.type === 'DECISION');
+    case 'blocks':
+      return (question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION'].includes(source.type))
+        && structuralTarget(target);
+    case 'depends_on':
+      return (question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION'].includes(source.type))
+        && structuralTarget(target);
+    case 'informs':
+      return (evidence(source) || question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION', 'PREFERENCE'].includes(source.type))
+        && structuralTarget(target);
+    case 'affects':
+      return (evidence(source) || question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION', 'PREFERENCE'].includes(source.type))
+        && structuralTarget(target);
+    case 'derived_from':
+      return source.id !== target.id;
+    default:
+      return false;
+  }
+}
+
+function relationshipTokens(text: string): Set<string> {
+  return new Set(questionIdentityKey(text)
+    .split(' ')
+    .filter((token) => token.length >= 4)
+    .filter((token) => !['current', 'result', 'status', 'question', 'decision', 'action', 'information'].includes(token)));
+}
+
+/**
+ * Structural edges are allowed to express dependency without lexical overlap.
+ * Evidence-to-decision edges are different: without either an explicit node
+ * link or a shared subject, a same-source edge can make unrelated facts look
+ * like decision evidence.
+ */
+function relationshipHasSemanticSupport(
+  source: ClarityNode,
+  target: ClarityNode,
+  relationship: EdgeType,
+  explicitlyLinked: boolean,
+): boolean {
+  if (explicitlyLinked || !((relationship === 'informs' || relationship === 'affects') && ['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(source.type) && target.type === 'DECISION')) {
+    return true;
+  }
+  const sourceTokens = relationshipTokens(source.text);
+  const targetTokens = relationshipTokens(target.text);
+  const shared = [...sourceTokens].filter((token) => targetTokens.has(token)).length;
+  return shared >= 2;
 }
 
 export async function ingestContextSource(
@@ -521,7 +800,7 @@ export async function ingestContextSource(
       }
       if (existingNode) {
         const previousText = existingNode.text;
-        if (node.questionClassification && existingNode.reconciliation_status === 'fallback') {
+        if (node.questionClassification && !node.canonicalQuestionId && existingNode.reconciliation_status === 'fallback') {
           existingNode.text = node.text;
         }
         existingNode.source_refs = Array.from(new Set([...existingNode.source_refs, sourceId]));
@@ -611,14 +890,16 @@ export async function ingestContextSource(
         ? nodeIds[Number(relationship.targetNodeId.slice(4))]
         : relationship.targetNodeId;
       if (!sourceNodeId || !targetNodeId) return;
+      const sourceNode = updated.nodes.find((candidate) => candidate.id === sourceNodeId);
       const targetNode = updated.nodes.find((candidate) => candidate.id === targetNodeId);
+      if (!sourceNode || !targetNode) return;
       if (sourceNodeId === targetNodeId) {
-        if (targetNode && relationship.type === 'resolves') {
-          applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
-        }
         return;
       }
-      if (!updated.nodes.some((candidate) => candidate.id === targetNodeId)) return;
+      if (!relationshipRoleCompatible(sourceNode, targetNode, relationship.type)) return;
+      const sourceSpec = nodesToProcess[relationship.sourceNodeIndex];
+      const explicitlyLinked = Boolean(sourceSpec?.relatedNodeIds?.some((id) => id === relationship.targetNodeId || id === targetNodeId));
+      if (!relationshipHasSemanticSupport(sourceNode, targetNode, relationship.type, explicitlyLinked)) return;
       const confidence = relationship.confidence ?? nodesToProcess[relationship.sourceNodeIndex]?.confidence ?? 0;
       if (confidence < 0.6) return;
       const exists = updated.edges.some((edge) =>

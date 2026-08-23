@@ -30,7 +30,12 @@ describe('canonical question projection', () => {
     const project = createProjectFromInput({ name: 'Pilot planning', goal: 'Coordinate a safe clinic rollout.' }, '2026-08-20T09:00:00.000Z');
     project.nodes.push(
       question('mri', 'Which MRI time is correct?', 'OPEN', []),
-      question('mri_alias', 'What is the correct MRI appointment time?', 'OPEN', []),
+      {
+        ...question('mri_alias', 'What is the correct MRI appointment time?', 'OPEN', []),
+        canonical_question_id: 'mri',
+        question_role: 'alias',
+        reconciliation_status: 'reconciled',
+      },
       question('medication_budget', 'What is the monthly medication budget for clinic visits?', 'OPEN', []),
       question('transport_budget', 'What is the monthly transport budget for clinic visits?', 'OPEN', []),
       question('clinic_wifi', 'Is clinic Wi-Fi available?', 'OPEN', []),
@@ -57,6 +62,49 @@ describe('canonical question projection', () => {
     });
   });
 
+  it('keeps a broad question and a narrower question separate without reconciliation metadata', () => {
+    const project = createProjectFromInput({ name: 'Passport renewal', goal: 'Renew a passport before travel.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      question(
+        'passport_requirements',
+        'What are the current official requirements, fee, appointment steps, and processing timeline for renewing a Mexican passport in Mexico City?',
+        'OPEN',
+        ['ask_source'],
+      ),
+      question(
+        'passport_timeline',
+        'What is the expected processing timeline for a Mexican passport renewal in Mexico City?',
+        'OPEN',
+        ['ask_source'],
+      ),
+    );
+
+    const groups = canonicalQuestionGroups(project);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('uses a literal compound question as the canonical answer target for generated subquestions', () => {
+    const project = createProjectFromInput({ name: 'RelayOps', goal: 'Launch a field-service SaaS beta.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      {
+        ...question('sms_pricing', 'What are the current Twilio SMS pricing rates for US messaging relevant to the RelayOps beta?', 'OPEN', ['ask_source']),
+        canonical_question_id: 'sms_compound',
+        question_role: 'subquestion',
+      },
+      {
+        ...question('sms_compliance', 'What are the current Twilio SMS opt-out and compliance requirements for a US field-service SaaS beta?', 'OPEN', ['ask_source']),
+        canonical_question_id: 'sms_compound',
+        question_role: 'subquestion',
+      },
+      question('sms_compound', 'What are the current Twilio SMS pricing and opt-out requirements relevant to a US field-service SaaS beta?', 'OPEN', ['ask_source']),
+    );
+
+    const groups = canonicalQuestionGroups(project);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.nodeIds).toEqual(expect.arrayContaining(['sms_pricing', 'sms_compliance', 'sms_compound']));
+    expect(groups[0]?.canonical.id).toBe('sms_compound');
+  });
+
   it('honors an explicit canonical relationship even when lexical similarity is low', () => {
     const project = createProjectFromInput({ name: 'Pilot planning', goal: 'Coordinate a safe clinic rollout.' }, '2026-08-20T09:00:00.000Z');
     project.nodes.push(
@@ -72,6 +120,16 @@ describe('canonical question projection', () => {
     expect(canonicalQuestionGroups(project)).toEqual(expect.arrayContaining([
       expect.objectContaining({ canonical: expect.objectContaining({ id: 'root' }), nodeIds: ['root', 'explicit_alias'] }),
     ]));
+  });
+
+  it('keeps shared-noun questions separate when their answers differ', () => {
+    const project = createProjectFromInput({ name: 'Release plan', goal: 'Prepare the release.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      question('launch_costs', 'What are the project launch costs?', 'OPEN', []),
+      question('launch_requirements', 'What are the project launch requirements?', 'OPEN', []),
+    );
+
+    expect(canonicalQuestionGroups(project)).toHaveLength(2);
   });
 
   it('collapses legacy semantic aliases and rewires their decision edges', () => {

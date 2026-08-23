@@ -387,6 +387,22 @@ export default function Home() {
     });
   }, [userId]);
 
+  const refreshProjectData = useCallback(async () => {
+    try {
+      const [loadedProjects, loadedGeneralContext] = await Promise.all([
+        loadProjectsFromAPI(userId),
+        loadGeneralContextFromAPI(userId),
+      ]);
+      setProjects(loadedProjects.projects);
+      setGeneralContext(loadedGeneralContext);
+      setProject((current) => current.id === GENERAL_CONTEXT_ID
+        ? loadedGeneralContext
+        : loadedProjects.projects.find((item) => item.id === current.id) ?? current);
+    } catch {
+      // The answer is already persisted; keep the current view if a refresh is unavailable.
+    }
+  }, [userId]);
+
   const handleSelectProject = useCallback((projectId: string) => {
     const selected = projects.find((item) => item.id === projectId);
     if (selected) {
@@ -1007,6 +1023,7 @@ export default function Home() {
             onInitialPromptSent={() => setAskInitialPrompt('')}
             newChatPrompt={askNewChatPrompt}
             onNewChatPromptOpened={() => setAskNewChatPrompt(null)}
+            onProjectUpdated={refreshProjectData}
             onViewSource={(source: AskSource) => {
               if (source.kind === 'source') {
                 openContext({ sourceId: source.id, tab: 'recent' });

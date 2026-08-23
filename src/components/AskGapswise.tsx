@@ -21,6 +21,7 @@ interface AskGapswiseProps {
   newChatPrompt?: { id: string; text: string } | null;
   onNewChatPromptOpened?: () => void;
   onViewSource?: (source: AskSource) => void;
+  onProjectUpdated?: () => void | Promise<void>;
 }
 
 interface ChatMessage {
@@ -137,6 +138,17 @@ function chatHoverLabel(chat: ChatSession): string {
   return `${chatTimestamp(chat.createdAt)} · ${chatQuestion(chat)}`;
 }
 
+export function canonicalAskQuestions(questions: AskOpenQuestion[]): AskOpenQuestion[] {
+  // The API already returns stored canonical question IDs. The UI must not
+  // invent a second semantic grouping based on display text; that can hide a
+  // genuinely distinct question or target the wrong graph node.
+  const byId = new Map<string, AskOpenQuestion>();
+  questions.forEach((question) => {
+    if (!byId.has(question.id)) byId.set(question.id, question);
+  });
+  return Array.from(byId.values());
+}
+
 export function chatPickerOptions(chats: ChatSession[], draftChat: ChatSession | null): Array<{ id: string; label: string; title?: string }> {
   const options: Array<{ id: string; label: string; title?: string }> = [];
   if (draftChat) {
@@ -218,15 +230,6 @@ export function researchStatusFromRecords(records: Array<Partial<AskResearchEvid
   return { savedMessageIds, savedContextMessageIds, confirmedAnswerMessageIds };
 }
 
-function conclusionFromAnswer(text: string): string {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith('#'));
-  return lines[0] ?? text.trim();
-}
-
 function safeSearchSuggestionText(suggestions?: AskSearchSuggestions): string {
   if (!suggestions) return '';
   const text = (suggestions.renderedContent ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -243,6 +246,7 @@ export function AskGapswise({
   newChatPrompt,
   onNewChatPromptOpened,
   onViewSource,
+  onProjectUpdated,
 }: AskGapswiseProps) {
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -256,7 +260,6 @@ export function AskGapswise({
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState('');
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
-  const [hydratedScope, setHydratedScope] = useState<string | null>(null);
   const [researchAction, setResearchAction] = useState<ResearchActionState | null>(null);
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchError, setResearchError] = useState('');
@@ -281,7 +284,6 @@ export function AskGapswise({
   }, [activeChatId, chats, draftChat]);
 
   useEffect(() => {
-    setHydratedScope(`${userId}:${scopeStorageKey(scope)}`);
     try {
       const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
       const parsedChats: ChatSession[] = storedChats ? JSON.parse(storedChats) : [];
@@ -352,6 +354,43 @@ export function AskGapswise({
     };
   }, [hasLoadedPersistedState, scope, userId]);
 
+  useEffect(() => {
+    if (!hasLoadedPersistedState) return;
+    let isMounted = true;
+    const fetchSuggestions = async () => {
+      setIsSuggestionsLoading(true);
+      setSuggestionsError('');
+      try {
+        const response = await authFetch('/api/ask/suggestions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            scopeLabel,
+            ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+          }),
+        });
+        const data = await response.json() as { topQuestions?: unknown[]; error?: string };
+        if (!response.ok) throw new Error(data.error ?? 'Suggestions are unavailable.');
+        const top = (data.topQuestions ?? [])
+          .filter((question): question is string => typeof question === 'string')
+          .slice(0, 3);
+        if (!isMounted) return;
+        setSuggestedQuestions({ top, other: [] });
+      } catch (caught) {
+        if (!isMounted) return;
+        setSuggestedQuestions(null);
+        setSuggestionsError(caught instanceof Error ? caught.message : 'Suggestions are unavailable.');
+      } finally {
+        if (isMounted) setIsSuggestionsLoading(false);
+      }
+    };
+    void fetchSuggestions();
+    return () => {
+      isMounted = false;
+    };
+  }, [hasLoadedPersistedState, scope, scopeLabel, userId]);
+
   const handleNewChat = () => {
     const fresh = newChat();
     setDraftChat(fresh);
@@ -370,22 +409,13 @@ export function AskGapswise({
     }
   };
 
-  const conclusionFromAnswer = (text: string): string => {
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .filter((line) => !line.startsWith('#'));
-    return lines[0] ?? text.trim();
-  };
-
   const openResearchAction = (message: ChatMessage, mode: ResearchActionState['mode']) => {
-    const questions = message.openQuestions ?? [];
+    const questions = canonicalAskQuestions(message.openQuestions ?? []);
     setResearchError('');
     setResearchAction({
       message,
       mode,
-      text: conclusionFromAnswer(message.text),
+      text: message.text.trim(),
       targetQuestionId: questions.length === 1 ? questions[0].id : '',
     });
   };
@@ -418,6 +448,7 @@ export function AskGapswise({
         setSavedContextMessageIds((current) => new Set(current).add(researchAction.message.id));
       } else if (researchAction.mode === 'use_as_answer') {
         setConfirmedAnswerMessageIds((current) => new Set(current).add(researchAction.message.id));
+        void onProjectUpdated?.();
       } else {
         setSavedResearchMessageIds((current) => new Set(current).add(researchAction.message.id));
       }
@@ -511,6 +542,10 @@ export function AskGapswise({
     void sendMessage(input);
   };
 
+  const researchQuestions = researchAction
+    ? canonicalAskQuestions(researchAction.message.openQuestions ?? [])
+    : [];
+
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-7rem)] max-w-5xl flex-col px-3 py-4 sm:min-h-[calc(100vh-5rem)] sm:px-6 sm:py-6 lg:px-8">
       <div className="border-b border-slate-800 pb-5">
@@ -547,6 +582,39 @@ export function AskGapswise({
           )}
         </div>
       </div>
+
+      {!activeChat?.messages.length && (
+        <section className="mb-4 rounded-2xl border border-cyan-900/60 bg-cyan-950/20 p-4 sm:p-5" aria-labelledby="ask-suggestions-title">
+          <div className="flex items-start gap-3">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" aria-hidden="true" />
+            <div>
+              <h2 id="ask-suggestions-title" className="text-sm font-extrabold text-slate-100">Questions worth asking</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">Based on your goal and context, these are the three questions most likely to help you move forward.</p>
+            </div>
+          </div>
+          {isSuggestionsLoading ? (
+            <div className="mt-4 space-y-2" aria-label="Loading suggested questions">
+              {[1, 2, 3].map((item) => <div key={item} className="h-10 animate-pulse rounded-lg bg-slate-900/80" />)}
+            </div>
+          ) : suggestedQuestions?.top.length ? (
+            <div className="mt-4 grid gap-2">
+              {suggestedQuestions.top.slice(0, 3).map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => void sendMessage(question)}
+                  disabled={isLoading}
+                  className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2.5 text-left text-xs font-semibold leading-relaxed text-slate-200 transition hover:border-cyan-700 hover:text-cyan-200 disabled:opacity-50"
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-slate-500">{suggestionsError || 'No suggestions are available yet.'}</p>
+          )}
+        </section>
+      )}
 
       <div className="flex-1 space-y-4 overflow-y-auto py-6">
         {activeChat?.messages.map((message) => {
@@ -732,7 +800,7 @@ export function AskGapswise({
               </button>
             </div>
 
-            {researchAction.mode === 'use_as_answer' && (
+            {researchAction.mode === 'use_as_answer' && researchQuestions.length > 1 && (
               <label className="mt-5 block text-xs font-bold text-slate-300">
                 Question to answer
                 <select
@@ -741,11 +809,18 @@ export function AskGapswise({
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal text-slate-200 outline-none focus:border-cyan-700"
                 >
                   <option value="">Select an open question</option>
-                  {(researchAction.message.openQuestions ?? []).map((question) => (
+                  {researchQuestions.map((question) => (
                     <option key={question.id} value={question.id}>{question.text}</option>
                   ))}
                 </select>
               </label>
+            )}
+
+            {researchAction.mode === 'use_as_answer' && researchQuestions.length === 1 && (
+              <div className="mt-5 rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-300">Question this resolves</p>
+                <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{researchQuestions[0].text}</p>
+              </div>
             )}
 
             <label className="mt-5 block text-xs font-bold text-slate-300">

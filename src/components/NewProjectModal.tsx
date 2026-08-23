@@ -1,7 +1,7 @@
 'use client';
 
 import React, { FormEvent, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { CalendarDays, X } from 'lucide-react';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 
@@ -18,6 +18,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
   const [error, setError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const dialogRef = useRef<HTMLFormElement | null>(null);
+  const deadlineInputRef = useRef<HTMLInputElement | null>(null);
 
   useDismissibleModal(onClose, dialogRef);
 
@@ -31,7 +32,12 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
     setIsCreating(true);
     setError('');
     try {
-      await onCreateProject({ name, goal, description, deadline });
+      await onCreateProject({
+        name,
+        goal,
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(deadline.trim() ? { deadline: deadline.trim() } : {}),
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Project creation failed.');
       setIsCreating(false);
@@ -81,7 +87,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
             />
           </label>
           <label className="block">
-            <span className="text-xs font-bold text-slate-300">Description / context</span>
+            <span className="text-xs font-bold text-slate-300">Initial context (optional)</span>
             <textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
@@ -90,13 +96,27 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
             />
           </label>
           <label className="block">
-            <span className="text-xs font-bold text-slate-300">Deadline</span>
-            <input
-              value={deadline}
-              onChange={(event) => setDeadline(event.target.value)}
-              type="date"
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
-            />
+            <span className="text-xs font-bold text-slate-300">Deadline (optional)</span>
+            <div className="relative mt-2">
+              <input
+                ref={deadlineInputRef}
+                value={deadline}
+                onChange={(event) => setDeadline(event.target.value)}
+                type="date"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-10 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  deadlineInputRef.current?.showPicker?.();
+                  deadlineInputRef.current?.focus();
+                }}
+                aria-label="Open deadline calendar"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-cyan-300"
+              >
+                <CalendarDays className="h-4 w-4" />
+              </button>
+            </div>
           </label>
         </div>
 

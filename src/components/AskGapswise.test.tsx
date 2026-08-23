@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatPickerOptions, ChatSession, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
+import { canonicalAskQuestions, chatPickerOptions, ChatSession, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 function chat(id: string, question: string, messagesCount = 1): ChatSession {
@@ -66,6 +66,21 @@ describe('Ask research persistence state', () => {
     expect([...status.savedMessageIds]).toEqual(['assistant_saved', 'assistant_legacy']);
     expect([...status.savedContextMessageIds]).toEqual(['assistant_context']);
     expect([...status.confirmedAnswerMessageIds]).toEqual(['assistant_confirmed']);
+  });
+});
+
+describe('Ask answer targeting', () => {
+  it('uses stored question IDs instead of grouping answer targets by display text', () => {
+    const questions = canonicalAskQuestions([
+      { id: 'question_a', text: 'What is the current status of the launch input?' },
+      { id: 'question_b', text: 'What action should I take for the launch input?' },
+      { id: 'question_a', text: 'A duplicate display copy for the same stored question.' },
+    ]);
+
+    expect(questions).toEqual([
+      { id: 'question_a', text: 'What is the current status of the launch input?' },
+      { id: 'question_b', text: 'What action should I take for the launch input?' },
+    ]);
   });
 });
 

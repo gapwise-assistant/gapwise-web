@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createProjectFromInput } from '@/lib/projects/createProject';
+import { processContextSource } from '@/lib/context/contextAnalysis';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { listProjects, loadProjectState, saveProject, setActiveProjectId, setAppScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
@@ -68,7 +70,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = createProjectSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
-    const project = createProjectFromInput(body);
+    let project = createProjectFromInput(body);
+    if (body.description) {
+      const processed = await processContextSource(project, {
+        sourceId: `${project.id}_initial_context`,
+        filename: 'Initial context',
+        content: body.description,
+        type: 'note',
+        origin: 'user',
+      }, DEFAULT_USER_PROFILE);
+      project = processed.project;
+    }
     await saveProject(userId, project);
     const scope = { type: 'project' as const, projectId: project.id };
     await setAppScope(userId, scope);

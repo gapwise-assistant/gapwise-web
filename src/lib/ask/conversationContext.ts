@@ -3,6 +3,7 @@ import { processContextSource } from '@/lib/context/contextAnalysis';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
+import { canonicalQuestionGroups, canonicalOpenQuestions } from '@/lib/questions/canonical';
 
 function askSourceId(chatId: string, messageId: string): string {
   return `ask_${chatId}_${messageId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
@@ -54,15 +55,24 @@ export async function persistAskConversationContext(params: {
   if (!result.skipped) await saveTarget(params.userId, result.project, target.isGeneral);
 
   const source = result.project.sources.find((candidate) => candidate.id === sourceId);
-  const openQuestions = (source?.derived_node_ids ?? [])
-    .map((nodeId) => result.project.nodes.find((node) => node.id === nodeId))
-    .filter((node): node is NonNullable<typeof node> => Boolean(node))
-    .filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN')
+  const sourceQuestionIds = new Set(source?.derived_node_ids ?? []);
+  const openQuestions = canonicalOpenQuestions(result.project)
+    .filter((node) => sourceQuestionIds.has(node.id) || canonicalQuestionGroups(result.project).some((group) =>
+      group.canonical.id === node.id && group.nodeIds.some((nodeId) => sourceQuestionIds.has(nodeId))
+    ))
     .map((node) => ({ id: node.id, text: node.text }));
+  /*
+   * Canonical question IDs are the only identity returned to Ask. Older
+   * source nodes remain available for provenance, but aliases never become
+   * independent answer targets.
+   */
+  const uniqueOpenQuestions = Array.from(new Map(
+    openQuestions.map((node) => [node.id, node] as const)
+  ).values());
 
   return {
     sourceId,
-    openQuestionIds: openQuestions.map((question) => question.id),
-    openQuestions,
+    openQuestionIds: uniqueOpenQuestions.map((question) => question.id),
+    openQuestions: uniqueOpenQuestions,
   };
 }

@@ -104,6 +104,8 @@ describe('context ingestion', () => {
         text: 'Confirm that the vendor audit log distinguishes patient edits, coordinator edits, and clinician approval.',
         confidence: 0.8,
         impact: 0.9,
+        questionClassification: 'PARAPHRASE',
+        canonicalQuestionId: 'unknown_audit_a',
       }],
     }, DEFAULT_USER_PROFILE);
 
@@ -224,6 +226,139 @@ describe('context ingestion', () => {
       expect.objectContaining({ source: 'os_question', target: 'budget_question', type: 'depends_on' }),
     ]));
     expect(updated.nodes.find((node) => node.id === 'budget_question')?.source_refs).not.toContain('os-notes');
+  });
+
+  it('does not let an unfinished action resolve a question or unrelated evidence inform a decision', async () => {
+    const project = createProjectFromInput({ name: 'Release plan', goal: 'Ship a reliable release.' }, '2026-08-20T09:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'relationship-note',
+      filename: 'relationship-note.txt',
+      type: 'text',
+      content: 'The note contains unrelated details.',
+      derivedNodes: [
+        {
+          type: 'NEXT_ACTION',
+          text: 'Test the integration before launch.',
+          confidence: 0.9,
+          impact: 0.8,
+          relationship: 'resolves',
+          relatedNodeIds: ['new:1'],
+        },
+        {
+          type: 'UNKNOWN',
+          text: 'What is the integration status?',
+          confidence: 0.8,
+          impact: 0.8,
+        },
+        {
+          type: 'EVIDENCE',
+          text: 'The sample contains an unrelated contact detail.',
+          confidence: 0.9,
+          impact: 0.7,
+        },
+        {
+          type: 'DECISION',
+          text: 'Choose the release timing.',
+          confidence: 0.9,
+          impact: 0.8,
+          status: 'OPEN',
+        },
+      ],
+      relationships: [{ sourceNodeIndex: 2, targetNodeId: 'new:3', type: 'informs', confidence: 0.95 }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.find((node) => node.text === 'What is the integration status?')?.status).toBe('OPEN');
+    expect(updated.edges.some((edge) => edge.type === 'resolves')).toBe(false);
+    expect(updated.edges.some((edge) => edge.type === 'informs')).toBe(false);
+  });
+
+  it('does not let negative evidence resolve an open question even when the model supplies resolves', async () => {
+    const project = createProjectFromInput({ name: 'Release check', goal: 'Verify the release path.' }, '2026-08-20T09:00:00Z');
+    project.nodes.push({
+      id: 'release_question',
+      type: 'UNKNOWN',
+      text: 'Does the corrected request resolve the failure?',
+      status: 'OPEN',
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T09:00:00Z',
+      updated_at: '2026-08-20T09:00:00Z',
+    });
+
+    const updated = await ingestContextSource(project, {
+      sourceId: 'negative-result',
+      filename: 'negative-result.txt',
+      type: 'text',
+      content: 'I have not tested the corrected request.',
+      derivedNodes: [{
+        type: 'EVIDENCE',
+        text: 'I have not tested the corrected request.',
+        confidence: 0.95,
+        impact: 0.9,
+        relationship: 'resolves',
+        relatedNodeIds: ['release_question'],
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.find((node) => node.id === 'release_question')?.status).toBe('OPEN');
+    expect(updated.edges.some((edge) => edge.type === 'resolves')).toBe(false);
+  });
+
+  it.each([
+    'The corrected request returned 201 and created the expected record.',
+    'The completed request failed with a recorded authentication error.',
+  ])('accepts a conclusive result statement for resolution: %s', async (resultText) => {
+    const project = createProjectFromInput({ name: 'Release check', goal: 'Verify the release path.' }, '2026-08-20T09:00:00Z');
+    project.nodes.push({
+      id: 'release_question',
+      type: 'UNKNOWN',
+      text: 'Does the corrected request resolve the failure?',
+      status: 'OPEN',
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T09:00:00Z',
+      updated_at: '2026-08-20T09:00:00Z',
+    });
+
+    const updated = await ingestContextSource(project, {
+      sourceId: 'conclusive-result',
+      filename: 'conclusive-result.txt',
+      type: 'text',
+      content: resultText,
+      derivedNodes: [{
+        type: 'EVIDENCE',
+        text: resultText,
+        confidence: 0.95,
+        impact: 0.9,
+        relationship: 'resolves',
+        relatedNodeIds: ['release_question'],
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.find((node) => node.id === 'release_question')?.status).toBe('RESOLVED');
+    expect(updated.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: expect.any(String), target: 'release_question', type: 'resolves' }),
+    ]));
+  });
+
+  it('does not pair an ambiguous failure with an arbitrary unfinished action in fallback mode', async () => {
+    const project = createProjectFromInput({ name: 'Release check', goal: 'Prepare a reliable demo.' }, '2026-08-20T09:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'ambiguous-failure',
+      filename: 'ambiguous-failure.txt',
+      type: 'text',
+      content: 'The endpoint is failing. I have not replaced the sample label. I have not tested the corrected configuration.',
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.some((node) => node.type === 'UNKNOWN' && /resolve the endpoint failure/i.test(node.text))).toBe(false);
+    expect(updated.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Replace the sample label.' }),
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test the corrected configuration.' }),
+    ]));
   });
 
   it('moves a source to discarded context and can restore it without deleting provenance', async () => {
@@ -418,5 +553,60 @@ describe('context ingestion', () => {
     expect(questions.some((node) => /authorization|preparation/i.test(node.text))).toBe(true);
     expect(questions.some((node) => /insurance|appointment|transport/i.test(node.text))).toBe(true);
     expect(questions.some((node) => /insurance company told me/i.test(node.text))).toBe(false);
+  });
+
+  it('keeps a pending external confirmation separate from user-controlled work', async () => {
+    const project = createProjectFromInput({
+      name: 'Release readiness',
+      goal: 'Ship the release with the required confirmation recorded.',
+    }, '2026-08-20T12:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'approval-note',
+      filename: 'approval-note.txt',
+      type: 'text',
+      content: 'The reviewing office told me the final approval is still being reviewed.',
+    }, DEFAULT_USER_PROFILE);
+
+    const questions = updated.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('approval-note'));
+    expect(questions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'What current status is recorded for final approval?' }),
+    ]));
+    expect(questions.some((node) => /reviewing office told me/i.test(node.text))).toBe(false);
+  });
+
+  it('turns a missing conditional fallback into a generic open question', async () => {
+    const project = createProjectFromInput({
+      name: 'Demo app',
+      goal: 'Present a reliable working demo.',
+    }, '2026-08-20T12:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'demo-risk-source',
+      filename: 'demo-risk.txt',
+      type: 'text',
+      content: 'If matching takes longer than five seconds, we do not have a fallback screen.',
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.map((node) => node.text)).toContain(
+      'What fallback is available if matching takes longer than five seconds?'
+    );
+  });
+
+  it('keeps a first-person unresolved action as evidence and unfinished work', async () => {
+    const project = createProjectFromInput({
+      name: 'Demo app',
+      goal: 'Present a reliable working demo.',
+    }, '2026-08-20T12:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'credential-note',
+      filename: 'credential-note.txt',
+      type: 'text',
+      content: 'I have not tested both values from the same project.',
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.some((node) => node.type === 'UNKNOWN' && /have i tested/i.test(node.text))).toBe(false);
+    expect(updated.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test both values from the same project.' }),
+      expect.objectContaining({ type: 'EVIDENCE', text: 'I have not tested both values from the same project.' }),
+    ]));
   });
 });
