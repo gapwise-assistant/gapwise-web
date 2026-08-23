@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
-import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions } from '@/lib/today/sections';
+import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, openTodayDecisions } from '@/lib/today/sections';
 import { AttentionCandidate, DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
 import { formatCalendarSchedule } from '@/lib/google/calendarFormatting';
@@ -64,6 +64,39 @@ describe('Today sections', () => {
 
     expect(countTodayOpenQuestions(project)).toBe(4);
     expect(countTodayOpenQuestions(project, ['first'])).toBe(3);
+  });
+
+  it('surfaces open decisions separately from answerable questions', () => {
+    const project = createProjectFromInput({ name: 'Window cleanup', goal: 'Prepare the house safely.' }, '2026-08-11T10:00:00Z');
+    project.nodes.push(
+      {
+        id: 'decision_ladder',
+        type: 'DECISION',
+        text: 'Decide whether it is safe to clean the upstairs windows alone.',
+        status: 'OPEN',
+        confidence: 0.9,
+        impact: 0.95,
+        source_refs: ['window-note'],
+        created_by: 'agent',
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+      },
+      {
+        id: 'decision_finished',
+        type: 'DECISION',
+        text: 'Decide which cleaning cloth to use.',
+        status: 'RESOLVED',
+        confidence: 1,
+        impact: 0.5,
+        source_refs: ['window-note'],
+        created_by: 'agent',
+        created_at: '2026-08-11T10:00:00Z',
+        updated_at: '2026-08-11T10:00:00Z',
+      },
+    );
+
+    expect(openTodayDecisions(project).map((node) => node.id)).toEqual(['decision_ladder']);
+    expect(countTodayOpenQuestions(project)).toBe(0);
   });
 
   it('surfaces at most four deterministic questions with provenance', () => {

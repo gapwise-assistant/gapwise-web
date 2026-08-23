@@ -83,6 +83,19 @@ describe('canonical question projection', () => {
     expect(groups).toHaveLength(2);
   });
 
+  it('groups a near-verbatim paraphrase with small grammatical changes', () => {
+    const project = createProjectFromInput({ name: 'Desktop cleanup', goal: 'Safely organize the desktop.' }, '2026-08-20T09:00:00.000Z');
+    project.nodes.push(
+      question('archive_files', 'Which files should I archive instead of deleting?', 'OPEN', ['cleanup-note']),
+      question('archive_files_alias', 'Which specific files should be archived instead of deleted?', 'OPEN', ['cleanup-note']),
+    );
+
+    const groups = canonicalQuestionGroups(project);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.canonical.id).toBe('archive_files');
+    expect(groups[0]?.nodeIds).toEqual(expect.arrayContaining(['archive_files', 'archive_files_alias']));
+  });
+
   it('uses a literal compound question as the canonical answer target for generated subquestions', () => {
     const project = createProjectFromInput({ name: 'RelayOps', goal: 'Launch a field-service SaaS beta.' }, '2026-08-20T09:00:00.000Z');
     project.nodes.push(

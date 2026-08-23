@@ -1,4 +1,4 @@
-import { ClarityNode, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
+import { ClarityNode, ContextProcessingLog, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { linkOpenDecisionQuestions, matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
@@ -9,6 +9,7 @@ import {
   semanticallyEquivalentQuestion,
   type QuestionReconciliationClassification,
 } from '@/lib/questions/canonical';
+import { resolveQuestionReferences } from '@/lib/questions/presentation';
 
 export { semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
@@ -56,6 +57,7 @@ export interface IngestSourceInput {
   relevance?: ContextSource['relevance'];
   discardedAt?: string;
   reconciliationSummary?: QuestionReconciliationSummary;
+  processingLog?: ContextProcessingLog;
   derivedNodes?: PrecomputedSourceNode[];
   relationships?: PrecomputedRelationship[];
 }
@@ -156,7 +158,24 @@ interface NegativeActionParts {
   action: string;
 }
 
+function unfinishedNeedActionParts(line: string): NegativeActionParts | undefined {
+  const match = line.match(/(?:^|[,;:]|\band\b)\s*((?:i|we)\b)\s+(?:still\s+)?need\s+to\s+(.+?)[.!?]?$/i);
+  if (!match?.[1] || !match[2] || /^(?:decide|choose|select|pick|determine|know|understand|find\s+out)\b/i.test(match[2].trim())) return undefined;
+  return { actor: match[1].trim(), action: match[2].replace(/[.!?]+$/, '').trim() };
+}
+
 function negativeActionParts(line: string): NegativeActionParts | undefined {
+  // A source sentence may introduce a fact before the user's unfinished
+  // action: "The building requires ..., and I have not booked one yet."
+  // Prefer that first-person clause so the action is not attributed to the
+  // preceding subject.
+  const firstPersonMatch = line.match(/(?:^|[,;:]|\band\b)\s*((?:i|we|my|our)\b)\s+(?:(?:has|have|had)\s+not|(?:hasn't|haven't|hadn't)|(?:did)\s+not|didn't)\s+(?:yet\s+)?(.+?)[.!?]?$/i);
+  if (firstPersonMatch?.[1] && firstPersonMatch[2]) {
+    return {
+      actor: firstPersonMatch[1].trim(),
+      action: firstPersonMatch[2].replace(/[.!?]+$/, '').trim(),
+    };
+  }
   const match = line.match(/^(.+?)\s+(?:(has|have|had)\s+not|(hasn't|haven't|hadn't)|(?:did)\s+not|didn't)\s+(?:yet\s+)?(.+?)[.!?]?$/i);
   if (!match?.[1]) return undefined;
   const action = match[4] ?? match[3];
@@ -169,6 +188,14 @@ function negativeActionParts(line: string): NegativeActionParts | undefined {
 
 function isFirstPersonActor(actor: string): boolean {
   return /^(?:i|we|my|our)\b/i.test(actor.trim());
+}
+
+function reportedActor(line: string, actor: string): string | undefined {
+  if (!/^(?:he|she|they|it)\b/i.test(actor.trim())) return undefined;
+  const match = line.match(/^\s*((?:the|a|an)\s+[a-z][a-z0-9'/-]*(?:\s+[a-z][a-z0-9'/-]*){0,4}?)\s+(?:said|told|informed|advised|reported|notified|emailed|messaged)\s+(?:he|she|they|it)\b/i);
+  const subject = match?.[1]?.trim();
+  if (!subject) return undefined;
+  return `the ${subject.replace(/^(?:the|a|an)\s+/i, '')}`;
 }
 
 function baseActionVerb(value: string): string {
@@ -205,11 +232,17 @@ function resolveActionPronouns(action: string, previousLines: string[]): string 
 }
 
 function actionText(action: string, previousLines: string[] = []): string | undefined {
-  const words = action.split(/\s+/).filter(Boolean);
+  const cleanedAction = action.replace(/\s+(?:yet|still)$/i, '').trim();
+  const words = cleanedAction.split(/\s+/).filter(Boolean);
   if (!words.length || /^been\b/i.test(action)) return undefined;
   const [verb, ...rest] = words;
   const phrase = resolveActionPronouns([baseActionVerb(verb), ...rest].join(' '), previousLines);
-  return phrase?.replace(/^./, (value) => value.toUpperCase());
+  if (!phrase) return undefined;
+  const groundedQuestion = resolveQuestionReferences(`Should I ${phrase}?`, previousLines.join(' '));
+  return groundedQuestion
+    .replace(/^Should I\s+/i, '')
+    .replace(/[?]+$/, '.')
+    .replace(/^./, (value) => value.toUpperCase());
 }
 
 /**
@@ -235,11 +268,12 @@ function negativeStatementQuestion(line: string, previousLines: string[] = []): 
     // "I have not tested it." Keep that status as evidence and derive work
     // from it instead of asking whether the known action happened.
     if (isFirstPersonActor(active.actor)) return undefined;
-    const actor = (active.actor.split(/,|\band\b/i).at(-1)?.trim() ?? active.actor.trim())
+    const actor = (active.actor.split(/,|\b(?:and|but|while|although)\b/i).at(-1)?.trim() ?? active.actor.trim())
       .replace(/^(The|A|An)\b/, (article) => article.toLowerCase());
     const action = resolveActionPronouns(active.action, previousLines);
     if (!action) return undefined;
-    return `Has ${actor} ${action}?`;
+    const subject = reportedActor(line, actor) ?? actor;
+    return resolveQuestionReferences(`Has ${subject} ${action}?`, [...previousLines, line].join(' '));
   }
 
   const passive = line.match(/^(.+?)\s+has\s+not\s+(?:yet\s+)?(?:been\s+)?(approved|confirmed|reviewed|verified|recorded)[.!?]?$/i);
@@ -319,9 +353,9 @@ export function extractDeterministicActionNodes(content: string): PrecomputedSou
   const actions: PrecomputedSourceNode[] = [];
   const lines = sentenceLines(content);
   lines.forEach((line, index) => {
-    const parts = negativeActionParts(line);
+    const parts = negativeActionParts(line) ?? unfinishedNeedActionParts(line);
     if (!parts || !isFirstPersonActor(parts.actor)) return;
-    const action = actionText(parts.action, lines.slice(0, index));
+    const action = actionText(parts.action, [...lines.slice(0, index), line]);
     if (!action) return;
     actions.push({
       type: 'NEXT_ACTION',
@@ -744,6 +778,7 @@ export async function ingestContextSource(
     relevance: input.relevance ?? 'relevant',
     discarded_at: input.discardedAt ?? previousSource?.discarded_at,
     reconciliation_summary: input.reconciliationSummary,
+    processing_log: input.processingLog,
   };
 
   updated.sources.push(newSource);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ClarityNode, Project } from '@/types/clarity';
-import { professionalQuestionText, questionEffectText, questionWhyText } from '@/lib/questions/presentation';
+import { normalizeQuestionGrammar, professionalQuestionText, questionEffectText, questionWhyText, resolveQuestionReferences } from '@/lib/questions/presentation';
 
 const node = (id: string, type: ClarityNode['type'], text: string): ClarityNode => ({
   id,
@@ -32,6 +32,22 @@ function project(nodes: ClarityNode[], edges: Project['edges'] = [], deadline?: 
 }
 
 describe('question card presentation', () => {
+  it('corrects first-person auxiliary grammar without changing the question meaning', () => {
+    expect(normalizeQuestionGrammar('Has I booked one yet?')).toBe('Have I booked one yet?');
+    expect(normalizeQuestionGrammar('Has the landlord confirmed the date, and I need more time?')).toBe('Has the landlord confirmed the date, and do I need more time?');
+  });
+
+  it('replaces a vague one with the closest source-grounded subject', () => {
+    expect(resolveQuestionReferences(
+      'Have I booked one yet?',
+      'I booked the elevator reservation earlier, but I am unsure whether the booking is recorded.',
+    )).toBe('Have I booked the elevator reservation yet?');
+    expect(resolveQuestionReferences(
+      'Have I booked one yet?',
+      'The building requires elevator reservations for large moves, and I have not booked one yet.',
+    )).toBe('Have I booked the elevator reservation yet?');
+  });
+
   it('uses professional confirmation wording for an authority-backed question while preserving preferences', () => {
     expect(professionalQuestionText(
       'Do I need to change any regular settings before the scheduled event?',

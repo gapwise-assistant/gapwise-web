@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Globe, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
-import { AskOpenQuestion, AskResearchEvidence, AskResult, AskSearchSuggestions, AskSource } from '@/types/ask';
+import { AskOpenQuestion, AskResearchEvidence, AskResult, AskSearchSuggestions, AskSource, AskTarget } from '@/types/ask';
 import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
@@ -18,7 +18,7 @@ interface AskGapswiseProps {
   initialPrompt?: string;
   autoSendInitialPrompt?: boolean;
   onInitialPromptSent?: () => void;
-  newChatPrompt?: { id: string; text: string } | null;
+  newChatPrompt?: { id: string; text: string; target?: AskTarget } | null;
   onNewChatPromptOpened?: () => void;
   onViewSource?: (source: AskSource) => void;
   onProjectUpdated?: () => void | Promise<void>;
@@ -58,6 +58,7 @@ export interface ChatSession {
   createdAt: string;
   firstQuestion: string;
   sessionId: string | null;
+  target?: AskTarget;
   messages: ChatMessage[];
 }
 
@@ -65,6 +66,7 @@ interface PersistedAskChat {
   id: string;
   title: string;
   adkSessionId?: string;
+  target?: AskTarget;
   createdAt: string;
   updatedAt: string;
 }
@@ -76,9 +78,12 @@ interface PersistedAskMessage extends ChatMessage {
 
 interface ResearchActionState {
   message: ChatMessage;
-  mode: 'save' | 'use_as_answer' | 'save_as_context';
+  mode: 'save' | 'use_as_answer' | 'use_as_decision' | 'save_as_context';
   text: string;
   targetQuestionId: string;
+  targetQuestionText?: string;
+  targetDecisionId: string;
+  targetDecisionText?: string;
 }
 
 function sessionStorageKey(userId: string, scope: AppScope): string {
@@ -97,13 +102,14 @@ function hiddenWorkspaceKey(userId: string, scope: AppScope): string {
   return `gapwise_ask_workspace_hidden_${userId}_${scopeStorageKey(scope)}`;
 }
 
-function newChat(): ChatSession {
+function newChat(target?: AskTarget): ChatSession {
   return {
     id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: 'New chat',
     createdAt: new Date().toISOString(),
     firstQuestion: '',
     sessionId: null,
+    ...(target ? { target } : {}),
     messages: [],
   };
 }
@@ -197,6 +203,7 @@ export function restoreChatSessions(
       createdAt: chat.createdAt,
       firstQuestion,
       sessionId: chat.adkSessionId ?? null,
+      target: chat.target,
       messages,
     };
   });
@@ -206,10 +213,12 @@ export function researchStatusFromRecords(records: Array<Partial<AskResearchEvid
   savedMessageIds: Set<string>;
   savedContextMessageIds: Set<string>;
   confirmedAnswerMessageIds: Set<string>;
+  confirmedDecisionMessageIds: Set<string>;
 } {
   const savedMessageIds = new Set<string>();
   const savedContextMessageIds = new Set<string>();
   const confirmedAnswerMessageIds = new Set<string>();
+  const confirmedDecisionMessageIds = new Set<string>();
 
   records.forEach((record) => {
     if (!record.assistantMessageId) return;
@@ -222,12 +231,15 @@ export function researchStatusFromRecords(records: Array<Partial<AskResearchEvid
     if (record.action === 'use_as_answer' && record.status === 'confirmed') {
       confirmedAnswerMessageIds.add(record.assistantMessageId);
     }
+    if (record.action === 'use_as_decision' && record.status === 'confirmed') {
+      confirmedDecisionMessageIds.add(record.assistantMessageId);
+    }
     if (!record.action && !record.provenance) {
       savedMessageIds.add(record.assistantMessageId);
     }
   });
 
-  return { savedMessageIds, savedContextMessageIds, confirmedAnswerMessageIds };
+  return { savedMessageIds, savedContextMessageIds, confirmedAnswerMessageIds, confirmedDecisionMessageIds };
 }
 
 function safeSearchSuggestionText(suggestions?: AskSearchSuggestions): string {
@@ -260,17 +272,20 @@ export function AskGapswise({
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState('');
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
+  const [hasLoadedRemoteState, setHasLoadedRemoteState] = useState(false);
   const [researchAction, setResearchAction] = useState<ResearchActionState | null>(null);
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchError, setResearchError] = useState('');
   const [savedResearchMessageIds, setSavedResearchMessageIds] = useState<Set<string>>(new Set());
   const [savedContextMessageIds, setSavedContextMessageIds] = useState<Set<string>>(new Set());
   const [confirmedAnswerMessageIds, setConfirmedAnswerMessageIds] = useState<Set<string>>(new Set());
+  const [confirmedDecisionMessageIds, setConfirmedDecisionMessageIds] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sourcesPanelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSentRef = useRef<string | null>(null);
+  const handledNewChatPromptRef = useRef<string | null>(null);
 
   useDismissibleModal(
     () => setSelectedSources(null),
@@ -284,6 +299,7 @@ export function AskGapswise({
   }, [activeChatId, chats, draftChat]);
 
   useEffect(() => {
+    setHasLoadedRemoteState(false);
     try {
       const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
       const parsedChats: ChatSession[] = storedChats ? JSON.parse(storedChats) : [];
@@ -344,8 +360,11 @@ export function AskGapswise({
         setSavedResearchMessageIds(researchStatus.savedMessageIds);
         setSavedContextMessageIds(researchStatus.savedContextMessageIds);
         setConfirmedAnswerMessageIds(researchStatus.confirmedAnswerMessageIds);
+        setConfirmedDecisionMessageIds(researchStatus.confirmedDecisionMessageIds);
       } catch {
         // Keep the local cache visible when the database is temporarily unavailable.
+      } finally {
+        if (isMounted) setHasLoadedRemoteState(true);
       }
     };
     void fetchChatState();
@@ -411,12 +430,20 @@ export function AskGapswise({
 
   const openResearchAction = (message: ChatMessage, mode: ResearchActionState['mode']) => {
     const questions = canonicalAskQuestions(message.openQuestions ?? []);
+    const target = activeChat?.target;
+    const isDecision = mode === 'use_as_decision' || target?.type === 'decision';
+    const actionMode = isDecision && mode === 'use_as_answer' ? 'use_as_decision' : mode;
     setResearchError('');
     setResearchAction({
       message,
-      mode,
-      text: message.text.trim(),
-      targetQuestionId: questions.length === 1 ? questions[0].id : '',
+      mode: actionMode,
+      text: actionMode === 'use_as_decision' ? '' : message.text.trim(),
+      targetQuestionId: !isDecision
+        ? target?.type === 'question' ? target.id : questions.length === 1 ? questions[0].id : ''
+        : '',
+      ...(target?.type === 'question' ? { targetQuestionText: target.text } : {}),
+      targetDecisionId: isDecision && target?.type === 'decision' ? target.id : '',
+      ...(isDecision && target?.type === 'decision' ? { targetDecisionText: target.text } : {}),
     });
   };
 
@@ -424,6 +451,10 @@ export function AskGapswise({
     if (!researchAction || !activeChat) return;
     if (researchAction.mode === 'use_as_answer' && !researchAction.targetQuestionId) {
       setResearchError('Select the open question this answer should resolve.');
+      return;
+    }
+    if (researchAction.mode === 'use_as_decision' && !researchAction.targetDecisionId) {
+      setResearchError('This decision chat is missing its target. Reopen the decision and start the discussion again.');
       return;
     }
     setResearchBusy(true);
@@ -440,6 +471,7 @@ export function AskGapswise({
           text: researchAction.text,
           ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
           ...(researchAction.mode === 'use_as_answer' ? { targetQuestionId: researchAction.targetQuestionId } : {}),
+          ...(researchAction.mode === 'use_as_decision' ? { targetDecisionId: researchAction.targetDecisionId } : {}),
         }),
       });
       const researchBody = await researchResponse.json();
@@ -448,6 +480,9 @@ export function AskGapswise({
         setSavedContextMessageIds((current) => new Set(current).add(researchAction.message.id));
       } else if (researchAction.mode === 'use_as_answer') {
         setConfirmedAnswerMessageIds((current) => new Set(current).add(researchAction.message.id));
+        void onProjectUpdated?.();
+      } else if (researchAction.mode === 'use_as_decision') {
+        setConfirmedDecisionMessageIds((current) => new Set(current).add(researchAction.message.id));
         void onProjectUpdated?.();
       } else {
         setSavedResearchMessageIds((current) => new Set(current).add(researchAction.message.id));
@@ -460,12 +495,12 @@ export function AskGapswise({
     }
   };
 
-  const sendMessage = async (promptText: string) => {
+  const sendMessage = async (promptText: string, chatOverride?: ChatSession) => {
     const text = promptText.trim();
     if (!text || isLoading) return;
     const userMsgId = `user_${Date.now()}`;
     const userMsg: ChatMessage = { id: userMsgId, role: 'user', text };
-    const chatToUse = activeChat ?? newChat();
+    const chatToUse = chatOverride ?? activeChat ?? newChat();
     const updatedMessages = [...chatToUse.messages, userMsg];
     const isNewFirstQuestion = !chatToUse.firstQuestion;
     const updatedChat: ChatSession = {
@@ -501,6 +536,7 @@ export function AskGapswise({
           userMessageId: userMsgId,
           ...(chatToUse.sessionId ? { sessionId: chatToUse.sessionId } : {}),
           ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+          ...(chatToUse.target ? { target: chatToUse.target } : {}),
         }),
       });
       const data = await response.json();
@@ -536,6 +572,21 @@ export function AskGapswise({
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!hasLoadedPersistedState || !hasLoadedRemoteState || !newChatPrompt) return;
+    if (handledNewChatPromptRef.current === newChatPrompt.id) return;
+    handledNewChatPromptRef.current = newChatPrompt.id;
+    const text = newChatPrompt.text.trim();
+    onNewChatPromptOpened?.();
+    if (!text) return;
+    const fresh = newChat(newChatPrompt.target);
+    setDraftChat(fresh);
+    setActiveChatId(fresh.id);
+    setInput('');
+    setError('');
+    void sendMessage(text, fresh);
+  }, [hasLoadedPersistedState, hasLoadedRemoteState, newChatPrompt, onNewChatPromptOpened, sendMessage]);
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -620,6 +671,9 @@ export function AskGapswise({
         {activeChat?.messages.map((message) => {
           const hasWebSources = Boolean(message.sources?.some((s) => s.kind === 'web' && s.url));
           const hasOpenQuestions = Boolean(message.openQuestions && message.openQuestions.length > 0);
+          const activeDecisionTarget = activeChat?.target?.type === 'decision' ? activeChat.target : undefined;
+          const activeQuestionTarget = activeChat?.target?.type === 'question' ? activeChat.target : undefined;
+          const hasActionTarget = Boolean(activeDecisionTarget || activeQuestionTarget || hasOpenQuestions);
 
           return (
             <div
@@ -688,15 +742,17 @@ export function AskGapswise({
                       )}
 
                       {/* Action 2: Use as my answer (Available when open questions exist) */}
-                      {confirmedAnswerMessageIds.has(message.id) ? (
+                      {activeDecisionTarget && confirmedDecisionMessageIds.has(message.id) ? (
+                        <span className="text-xs font-semibold text-emerald-300">Decision confirmed.</span>
+                      ) : !activeDecisionTarget && confirmedAnswerMessageIds.has(message.id) ? (
                         <span className="text-xs font-semibold text-emerald-300">Answer confirmed.</span>
-                      ) : hasOpenQuestions ? (
+                      ) : hasActionTarget ? (
                         <button
                           type="button"
-                          onClick={() => openResearchAction(message, 'use_as_answer')}
+                          onClick={() => openResearchAction(message, activeDecisionTarget ? 'use_as_decision' : 'use_as_answer')}
                           className="min-h-10 rounded-lg border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-600"
                         >
-                          Use as my answer
+                          {activeDecisionTarget ? 'Use as my decision' : 'Use as my answer'}
                         </button>
                       ) : null}
 
@@ -782,14 +838,16 @@ export function AskGapswise({
             <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
               <div>
                 <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">
-                  {researchAction.mode === 'save_as_context' ? 'User Context' : researchAction.mode === 'use_as_answer' ? 'Answer Question' : 'Cited Web Research'}
+                  {researchAction.mode === 'save_as_context' ? 'User Context' : researchAction.mode === 'use_as_decision' ? 'Project Decision' : researchAction.mode === 'use_as_answer' ? 'Answer Question' : 'Cited Web Research'}
                 </p>
                 <h2 id="ask-action-title" className="mt-1 text-lg font-bold text-slate-100">
-                  {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_answer' ? 'Use as my answer' : 'Save research'}
+                  {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Use as my decision' : researchAction.mode === 'use_as_answer' ? 'Use as my answer' : 'Save research'}
                 </h2>
                 <p className="mt-1 text-xs text-slate-400">
                   {researchAction.mode === 'save_as_context'
                     ? 'Save this conclusion as user-confirmed context for this conversation and future reasoning.'
+                    : researchAction.mode === 'use_as_decision'
+                      ? 'The discussion is guidance. Enter the concise decision you are making in the originating Decision workspace.'
                     : researchAction.mode === 'use_as_answer'
                       ? 'Select which open question this conclusion resolves.'
                       : 'Review the proposed text and cited web sources.'}
@@ -800,7 +858,7 @@ export function AskGapswise({
               </button>
             </div>
 
-            {researchAction.mode === 'use_as_answer' && researchQuestions.length > 1 && (
+            {researchAction.mode === 'use_as_answer' && !researchAction.targetQuestionText && researchQuestions.length > 1 && (
               <label className="mt-5 block text-xs font-bold text-slate-300">
                 Question to answer
                 <select
@@ -816,7 +874,21 @@ export function AskGapswise({
               </label>
             )}
 
-            {researchAction.mode === 'use_as_answer' && researchQuestions.length === 1 && (
+            {researchAction.mode === 'use_as_answer' && researchAction.targetQuestionText && (
+              <div className="mt-5 rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-300">Question this resolves</p>
+                <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{researchAction.targetQuestionText}</p>
+              </div>
+            )}
+
+            {researchAction.mode === 'use_as_decision' && researchAction.targetDecisionText && (
+              <div className="mt-5 rounded-lg border border-violet-900/60 bg-violet-950/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-violet-300">Decision this resolves</p>
+                <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{researchAction.targetDecisionText}</p>
+              </div>
+            )}
+
+            {researchAction.mode === 'use_as_answer' && !researchAction.targetQuestionText && researchQuestions.length === 1 && (
               <div className="mt-5 rounded-lg border border-cyan-900/60 bg-cyan-950/20 p-3">
                 <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-300">Question this resolves</p>
                 <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{researchQuestions[0].text}</p>
@@ -824,10 +896,11 @@ export function AskGapswise({
             )}
 
             <label className="mt-5 block text-xs font-bold text-slate-300">
-              {researchAction.mode === 'save_as_context' ? 'Confirmed context statement' : researchAction.mode === 'use_as_answer' ? 'Your confirmed conclusion' : 'Research statement'}
+              {researchAction.mode === 'save_as_context' ? 'Confirmed context statement' : researchAction.mode === 'use_as_decision' ? 'Your confirmed decision' : researchAction.mode === 'use_as_answer' ? 'Your confirmed conclusion' : 'Research statement'}
               <textarea
                 value={researchAction.text}
                 onChange={(event) => setResearchAction((current) => current ? { ...current, text: event.target.value } : current)}
+                placeholder={researchAction.mode === 'use_as_decision' ? 'For example: I will ask someone to act as a spotter.' : undefined}
                 rows={5}
                 className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal leading-relaxed text-slate-200 outline-none focus:border-cyan-700"
               />
@@ -854,7 +927,7 @@ export function AskGapswise({
               </button>
               <button type="button" onClick={() => void submitResearchAction()} disabled={researchBusy || !researchAction.text.trim()} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-extrabold text-slate-950 disabled:opacity-50">
                 {researchBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
+                {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Confirm decision' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
               </button>
             </div>
           </section>

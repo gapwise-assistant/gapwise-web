@@ -66,6 +66,52 @@ describe('AI context graph analysis', () => {
     expect(result.project.clarity_score).toBe(calculateClarityScore(result.project));
   });
 
+  it('corrects first-person auxiliary grammar in generated questions', async () => {
+    const genAI = mockGenAI({
+      summary: 'The move still has an unresolved booking detail.',
+      nodes: [{ type: 'UNKNOWN', text: 'Has I booked one yet?', confidence: 0.9, impact: 0.8 }],
+    });
+    const result = await processContextSource(projectWithGoal('Move out before the apartment deadline.'), input({
+      sourceId: 'src_move_notes',
+      content: 'I booked the elevator reservation earlier, but I am unsure whether the booking is recorded.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.find((node) => node.source_refs.includes('src_move_notes'))?.text).toBe('Have I booked the elevator reservation yet?');
+  });
+
+  it('rejects a combined unfinished-action question and keeps separate grounded actions', async () => {
+    const genAI = mockGenAI({
+      summary: 'The move has two unfinished tasks.',
+      nodes: [{ type: 'UNKNOWN', text: 'Have I booked the to pack everything yet?', confidence: 0.9, impact: 0.8 }],
+    });
+    const result = await processContextSource(projectWithGoal('Move out before the apartment deadline.'), input({
+      sourceId: 'src_move_actions',
+      content: 'The building requires elevator reservations for large moves, and I have not booked one yet. I still need to pack everything.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const derived = result.project.nodes.filter((node) => node.source_refs.includes('src_move_actions'));
+    expect(derived.some((node) => node.type === 'UNKNOWN' && /booked the to pack/i.test(node.text))).toBe(false);
+    expect(derived).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Book the elevator reservation.' }),
+      expect.objectContaining({ type: 'NEXT_ACTION', text: 'Pack everything.' }),
+    ]));
+  });
+
+  it('keeps professional model wording over a reporting-clause fallback', async () => {
+    const genAI = mockGenAI({
+      summary: 'The inspection time still needs confirmation.',
+      nodes: [{ type: 'UNKNOWN', text: 'When will the electrician confirm the appointment time for Friday?', confidence: 0.9, impact: 0.8 }],
+    });
+    const result = await processContextSource(projectWithGoal('Prepare the home office safely.'), input({
+      sourceId: 'src_inspection_time',
+      content: 'An electrician said he could inspect the outlet on Friday, but he has not confirmed the appointment time yet.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('src_inspection_time'));
+    expect(questions.map((node) => node.text)).toEqual(['When will the electrician confirm the appointment time for Friday?']);
+    expect(questions.some((node) => /\b(?:but\s+)?he\b/i.test(node.text))).toBe(false);
+  });
+
   it('applies the batched Context Agent reconciliation to an existing canonical question', async () => {
     const project = projectWithGoal('Build a quiet PC within budget.');
     project.nodes.push({
@@ -198,6 +244,48 @@ describe('AI context graph analysis', () => {
     expect(result.project.nodes.map((node) => node.text)).toContain(
       'What fallback is available if matching takes longer than five seconds?'
     );
+  });
+
+  it('merges duplicate decisions and keeps a high-value risk within the final node budget', async () => {
+    const genAI = mockGenAI({
+      summary: 'The book exchange still has several operational uncertainties.',
+      nodes: [
+        { type: 'KNOWN', text: 'The book exchange is scheduled for September 20 at the community center.', confidence: 0.9, impact: 0.8 },
+        { type: 'KNOWN', text: 'The room is reserved.', confidence: 0.9, impact: 0.7 },
+        { type: 'KNOWN', text: 'About 300 books have been collected.', confidence: 0.9, impact: 0.7 },
+        { type: 'KNOWN', text: 'Four folding tables are available and six are needed.', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'When can I pick up the keys to the community center room?', confidence: 0.9, impact: 0.9 },
+        { type: 'UNKNOWN', text: 'Will the neighbor lend two more folding tables?', confidence: 0.9, impact: 0.9 },
+        { type: 'DECISION', text: 'Decide whether people can bring books without registering or require advance registration.', confidence: 0.9, impact: 0.95 },
+        { type: 'DECISION', text: 'I need to decide whether people can bring books without registering or require advance registration.', confidence: 0.8, impact: 0.9 },
+        { type: 'RISK', text: 'Rain is expected during the event weekend and the signs are not waterproof.', confidence: 0.9, impact: 0.95 },
+        { type: 'PREFERENCE', text: 'The event should be manageable with two volunteers.', confidence: 0.8, impact: 0.7 },
+        { type: 'NEXT_ACTION', text: 'Sort and label the books by category.', confidence: 0.9, impact: 0.8 },
+        { type: 'NEXT_ACTION', text: 'Prepare signs for the entrance and category tables.', confidence: 0.8, impact: 0.7 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Run a reliable neighborhood book exchange.'), input({
+      sourceId: 'src_book_exchange',
+      filename: 'book-exchange.txt',
+      content: [
+        'I am organizing a neighborhood book exchange at the community center on September 20.',
+        'The room is reserved, but the manager has not confirmed when I can pick up the keys.',
+        'I have collected about 300 books, but they still need to be sorted and labeled by category.',
+        'I have four folding tables, while the event probably needs six.',
+        'A neighbor may lend me two more tables, but they have not confirmed yet.',
+        'I need to decide whether people can bring books without registering or require advance registration.',
+        'Rain is expected during the event weekend, and I do not have waterproof materials for the signs.',
+        'I want the event to be manageable with only two volunteers.',
+      ].join(' '),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((item) => item.id === 'src_book_exchange');
+    const derived = result.project.nodes.filter((node) => source?.derived_node_ids.includes(node.id));
+    expect(derived.length).toBeLessThanOrEqual(12);
+    expect(derived.filter((node) => node.type === 'DECISION')).toHaveLength(1);
+    expect(derived.some((node) => node.type === 'RISK' && /rain/i.test(node.text))).toBe(true);
+    expect(derived.some((node) => node.type === 'UNKNOWN' && /keys/i.test(node.text))).toBe(true);
+    expect(derived.some((node) => node.type === 'UNKNOWN' && /tables/i.test(node.text))).toBe(true);
   });
 
   it('keeps an upload prerequisite actionable when the model returns it as a statement', async () => {
@@ -544,6 +632,46 @@ describe('AI context graph analysis', () => {
     expect(second.skipped).toBe(true);
     expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
     expect(second.project.sources).toHaveLength(1);
+  });
+
+  it('captures the complete context-processing trace when local development logging is enabled', async () => {
+    const genAI = mockGenAI({
+      summary: 'A useful note.',
+      nodes: [{ type: 'KNOWN', text: 'Tokyo and Kyoto are in the itinerary.', confidence: 0.9, impact: 0.6 }],
+    });
+    const result = await processContextSource(projectWithGoal(), input({
+      content: 'Tokyo and Kyoto are in the itinerary.',
+    }), DEFAULT_USER_PROFILE, { genAI, captureProcessingLog: true });
+
+    const source = result.project.sources.find((item) => item.id === 'src_japan_notes');
+    expect(source?.processing_log).toMatchObject({
+      version: 1,
+      status: 'completed',
+      input: expect.objectContaining({
+        source_id: 'src_japan_notes',
+        content: 'Tokyo and Kyoto are in the itinerary.',
+      }),
+    });
+    const stages = source?.processing_log?.stages ?? [];
+    expect(stages.map((stage) => stage.name)).toEqual([
+      'Context Agent model analysis',
+      'Candidate finalization and canonical question selection',
+      'Goal relevance filtering',
+      'Graph persistence',
+      'Graph persistence result',
+    ]);
+    expect(JSON.stringify(source?.processing_log)).toContain('Tokyo and Kyoto are in the itinerary.');
+    expect(JSON.stringify(source?.processing_log)).toContain('validated_analysis');
+    expect(source?.processing_log?.stages.at(-1)?.output).toEqual(expect.objectContaining({
+      derived_node_ids: expect.arrayContaining(source?.derived_node_ids ?? []),
+    }));
+  });
+
+  it('does not attach a processing trace unless explicitly enabled', async () => {
+    const genAI = mockGenAI({ summary: 'A useful note.', nodes: [] });
+    const result = await processContextSource(projectWithGoal(), input(), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.sources[0]?.processing_log).toBeUndefined();
   });
 
   it('does not call Gemini in demo mode and keeps deterministic ingestion', async () => {

@@ -53,10 +53,11 @@ describe('AnswerQuestionModal', () => {
       />,
     );
 
-    expect(html).toContain('What we know');
+    expect(html).toContain('Where this comes from');
     expect(html).toContain('What this affects');
     expect(html).toContain('What your answer could change');
     expect(html).toContain('Sources');
+    expect(html).not.toContain('What we know');
     expect(html).not.toContain('Decision options');
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('role="tab"');

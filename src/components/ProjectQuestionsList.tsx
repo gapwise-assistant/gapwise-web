@@ -1,76 +1,61 @@
-import { ChevronRight } from 'lucide-react';
+import { Check, Eye, EyeOff, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ClarityNode } from '@/types/clarity';
 import type { AnsweredQuestion } from '@/lib/questions/history';
+import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 
 interface ProjectQuestionsListProps {
   openQuestions: ClarityNode[];
   answeredQuestions: AnsweredQuestion[];
+  openDecisions: ClarityNode[];
+  resolvedDecisions: ClarityNode[];
   projectId: string;
+  sourceContents?: string[];
   onAnswerQuestion: (node: ClarityNode, intent?: 'confirm' | 'correct') => void;
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
+  onReviewDecision: (nodeId: string) => void;
+  initialStatusFilter?: GapStatusFilter;
+}
+
+export type GapStatusFilter = 'all' | 'open' | 'resolved';
+
+interface GapRow {
+  id: string;
+  text: string;
+  displayText: string;
+  status: 'open' | 'resolved';
+  kind: 'question' | 'decision';
+  question?: ClarityNode;
+  answeredQuestion?: AnsweredQuestion;
+  node?: ClarityNode;
 }
 
 function rowKey(item: AnsweredQuestion): string {
   return `${item.timestamp}-${item.question}`;
 }
 
-function answerPreview(answer: string): string {
-  return answer.replace(/\s+/g, ' ').trim() || 'Answer recorded';
+function sortGaps(left: GapRow, right: GapRow): number {
+  if (left.status !== right.status) return left.status === 'open' ? -1 : 1;
+  return left.text.localeCompare(right.text);
 }
 
-function OpenQuestionRow({
-  node,
-  onAnswerQuestion,
-}: {
-  node: ClarityNode;
-  onAnswerQuestion: ProjectQuestionsListProps['onAnswerQuestion'];
-}) {
-  const answer = () => onAnswerQuestion(node, node.type === 'ASSUMPTION' ? 'confirm' : undefined);
-
-  return (
-    <div className="flex items-center gap-3 px-4 py-3.5 sm:px-5">
-      <button type="button" onClick={answer} className="min-w-0 flex-1 text-left">
-        <span className="block text-sm font-bold leading-snug text-slate-100 sm:text-[15px]">{node.text}</span>
-        <span className="mt-1 block text-xs font-semibold text-slate-500">Unanswered</span>
-      </button>
-      <button
-        type="button"
-        onClick={answer}
-        aria-label={`Answer ${node.text}`}
-        className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg border border-cyan-700/80 bg-cyan-950/30 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-500 hover:bg-cyan-900/40 sm:min-h-0"
-      >
-        Answer
-        <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-    </div>
-  );
-}
-
-function AnsweredQuestionRow({
-  item,
-  projectId,
-  onEditAnsweredQuestion,
-}: {
-  item: AnsweredQuestion;
-  projectId: string;
-  onEditAnsweredQuestion: ProjectQuestionsListProps['onEditAnsweredQuestion'];
-}) {
-  const answer = answerPreview(item.answer);
+function GapRowButton({ gap, onOpen }: { gap: GapRow; onOpen: () => void }) {
+  const resolved = gap.status === 'resolved';
 
   return (
     <button
       type="button"
-      onClick={() => onEditAnsweredQuestion(item, projectId)}
-      className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500 sm:px-5"
-      title={`Edit answer: ${item.question}`}
+      onClick={onOpen}
+      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500 sm:px-5 ${resolved ? 'bg-slate-950/25' : ''}`}
+      title={resolved ? 'View resolved gap details' : 'Open gap details'}
     >
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-bold leading-snug text-slate-100 sm:text-[15px]">{item.question}</span>
-        <span className="mt-1 block truncate text-xs font-semibold text-emerald-300/90" title={answer}>
-          Answered · {answer}
-        </span>
+      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${resolved ? 'border-slate-700 text-slate-500' : 'border-cyan-700 text-cyan-400'}`} aria-hidden="true">
+        {resolved ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />}
       </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+      <span className={`line-clamp-2 min-w-0 flex-1 text-sm font-bold leading-snug sm:text-[15px] ${resolved ? 'text-slate-500' : 'text-slate-100'}`}>
+        {gap.displayText}
+      </span>
+      <span className={`shrink-0 text-xs ${resolved ? 'text-slate-700' : 'text-slate-600'}`} aria-hidden="true">›</span>
     </button>
   );
 }
@@ -78,42 +63,156 @@ function AnsweredQuestionRow({
 export function ProjectQuestionsList({
   openQuestions,
   answeredQuestions,
+  openDecisions,
+  resolvedDecisions,
   projectId,
+  sourceContents = [],
   onAnswerQuestion,
   onEditAnsweredQuestion,
+  onReviewDecision,
+  initialStatusFilter,
 }: ProjectQuestionsListProps) {
-  return (
-    <div className="space-y-6">
-      <section aria-labelledby="project-open-questions-heading" className="space-y-2">
-        <h2 id="project-open-questions-heading" className="text-lg font-extrabold text-slate-100">
-          Open questions
-        </h2>
-        <div className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-          {openQuestions.length ? openQuestions.map((node) => (
-            <OpenQuestionRow key={node.id} node={node} onAnswerQuestion={onAnswerQuestion} />
-          )) : (
-            <p className="px-4 py-4 text-sm text-slate-500 sm:px-5">No open project questions right now.</p>
-          )}
-        </div>
-      </section>
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<GapStatusFilter>(initialStatusFilter ?? 'all');
+  const [hideResolved, setHideResolved] = useState(false);
 
-      <section aria-labelledby="project-answered-questions-heading" className="space-y-2">
-        <h2 id="project-answered-questions-heading" className="text-lg font-extrabold text-slate-100">
-          Answered
+  useEffect(() => {
+    if (initialStatusFilter) setStatusFilter(initialStatusFilter);
+  }, [initialStatusFilter]);
+
+  const gaps = useMemo<GapRow[]>(() => [
+    ...openQuestions.map((node) => ({
+      id: node.id,
+      text: node.text,
+      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+      status: 'open' as const,
+      kind: 'question' as const,
+      question: node,
+    })),
+    ...openDecisions.map((node) => ({
+      id: node.id,
+      text: node.text,
+      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+      status: 'open' as const,
+      kind: 'decision' as const,
+      node,
+    })),
+    ...answeredQuestions.map((item) => ({
+      id: rowKey(item),
+      text: item.question,
+      displayText: normalizeQuestionGrammar(resolveQuestionReferences(item.question, sourceContents.join('\n'))),
+      status: 'resolved' as const,
+      kind: 'question' as const,
+      answeredQuestion: item,
+    })),
+    ...resolvedDecisions.map((node) => ({
+      id: node.id,
+      text: node.text,
+      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+      status: 'resolved' as const,
+      kind: 'decision' as const,
+      node,
+    })),
+  ].sort(sortGaps), [answeredQuestions, openDecisions, openQuestions, resolvedDecisions, sourceContents]);
+
+  const filteredGaps = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    return gaps.filter((gap) => {
+      if (hideResolved && gap.status === 'resolved') return false;
+      if (statusFilter !== 'all' && gap.status !== statusFilter) return false;
+      return !normalizedQuery || gap.text.toLocaleLowerCase().includes(normalizedQuery);
+    });
+  }, [gaps, hideResolved, query, statusFilter]);
+
+  const openGaps = filteredGaps.filter((gap) => gap.status === 'open');
+  const resolvedGaps = filteredGaps.filter((gap) => gap.status === 'resolved');
+
+  const openGap = (gap: GapRow) => {
+    if (gap.kind === 'decision' && gap.node) {
+      onReviewDecision(gap.node.id);
+      return;
+    }
+    if (gap.answeredQuestion) {
+      onEditAnsweredQuestion(gap.answeredQuestion, projectId);
+      return;
+    }
+    if (gap.question) {
+      onAnswerQuestion({ ...gap.question, text: gap.displayText }, gap.question.type === 'ASSUMPTION' ? 'confirm' : undefined);
+    }
+  };
+
+  const renderSection = (title: string, items: GapRow[], emptyText: string) => (
+    <section aria-labelledby={`project-${title.toLocaleLowerCase()}-gaps-heading`} className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id={`project-${title.toLocaleLowerCase()}-gaps-heading`} className={`text-sm font-extrabold ${title === 'Resolved' ? 'text-slate-500' : 'text-slate-100'}`}>
+          {title}
         </h2>
-        <div className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-          {answeredQuestions.length ? answeredQuestions.map((item) => (
-            <AnsweredQuestionRow
-              key={rowKey(item)}
-              item={item}
-              projectId={projectId}
-              onEditAnsweredQuestion={onEditAnsweredQuestion}
-            />
-          )) : (
-            <p className="px-4 py-4 text-sm text-slate-500 sm:px-5">No answered questions yet.</p>
-          )}
+        {title === 'Resolved' && (
+          <button
+            type="button"
+            onClick={() => setHideResolved(true)}
+            aria-label="Hide resolved gaps"
+            title="Hide resolved gaps"
+            className="rounded-md p-1 text-slate-600 hover:bg-slate-900 hover:text-slate-300"
+          >
+            <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <div className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        {items.length ? items.map((gap) => <GapRowButton key={gap.id} gap={gap} onOpen={() => openGap(gap)} />) : (
+          <p className="px-4 py-4 text-sm text-slate-500 sm:px-5">{emptyText}</p>
+        )}
+      </div>
+    </section>
+  );
+
+  return (
+    <div className="space-y-5">
+      <header>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPS</p>
+        <h2 className="mt-2 text-xl font-extrabold text-slate-100">Project gaps</h2>
+        <p className="mt-1 text-sm text-slate-500">Open uncertainties and resolved items in one place.</p>
+      </header>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 sm:flex-row sm:items-center">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Search gaps</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search gaps"
+            className="min-h-10 w-full rounded-lg border border-slate-700 bg-slate-900 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-600"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Filter gaps by status">
+          {(['all', 'open', 'resolved'] as const).map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              onClick={() => setStatusFilter(filter)}
+              aria-pressed={statusFilter === filter}
+              className={`min-h-9 rounded-md px-2.5 py-1.5 text-xs font-bold capitalize ${statusFilter === filter ? 'bg-cyan-500 text-slate-950' : 'bg-slate-900 text-slate-400 hover:text-slate-100'}`}
+            >
+              {filter}
+            </button>
+          ))}
         </div>
-      </section>
+      </div>
+
+      {hideResolved && (
+        <button
+          type="button"
+          onClick={() => setHideResolved(false)}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-200"
+        >
+          <Eye className="h-3.5 w-3.5" aria-hidden="true" /> Show resolved gaps
+        </button>
+      )}
+      {statusFilter !== 'resolved' && renderSection('Open', openGaps, 'No open gaps match this view.')}
+      {statusFilter !== 'open' && !hideResolved && renderSection('Resolved', resolvedGaps, 'No resolved gaps match this view.')}
     </div>
   );
 }

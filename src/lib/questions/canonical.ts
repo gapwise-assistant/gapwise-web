@@ -29,7 +29,10 @@ function stemQuestionToken(token: string): string {
 function stemSubjectToken(token: string): string {
   if (token.endsWith('ing') && token.length > 6) return stemSubjectToken(token.slice(0, -3));
   if (token.endsWith('al') && token.length > 6) return stemSubjectToken(token.slice(0, -2));
-  if (token.endsWith('ed') && token.length > 5) return stemSubjectToken(token.slice(0, -2));
+  if (token.endsWith('ed') && token.length > 5) {
+    const stem = token.slice(0, -2);
+    return stem.endsWith('v') ? `${stem}e` : stem;
+  }
   return stemQuestionToken(token);
 }
 
@@ -111,6 +114,21 @@ export function questionsShareSubject(left: string, right: string): boolean {
   const statusFallbackMatch = statusFallbackSharesSubject(left, right)
     || statusFallbackSharesSubject(right, left);
   if (statusFallbackMatch) return true;
+  const hasCompoundParts = (text: string) => compoundQuestionParts(text).length > 1;
+  const smallerQuestionSize = Math.min(leftTokens.size, rightTokens.size);
+  // Near-verbatim paraphrases can differ only by grammatical detail such as
+  // "archive"/"archived" or an added "specific". Require several shared
+  // substantive terms and avoid collapsing a broad compound question into
+  // one of its independently answerable parts.
+  const leftIsSubset = [...leftTokens].every((token) => rightTokens.has(token));
+  const rightIsSubset = [...rightTokens].every((token) => leftTokens.has(token));
+  if (!hasCompoundParts(left) && !hasCompoundParts(right)
+    && (leftIsSubset || rightIsSubset)
+    && shared >= 3
+    && smallerQuestionSize >= 3
+    && shared / smallerQuestionSize >= 0.75) {
+    return true;
+  }
   // Different ordinary phrasings are not merged here. The model's
   // reconciliation metadata is the authority for paraphrases and
   // subquestions. Only the two narrow, grammatical fallbacks below are safe

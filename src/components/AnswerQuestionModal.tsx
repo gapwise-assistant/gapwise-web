@@ -22,7 +22,7 @@ export interface AnswerQuestionDecisionSupport {
   } | null;
 }
 
-type ResolveSection = 'know' | 'affects' | 'changes' | 'checks' | 'options' | 'sources';
+type ResolveSection = 'affects' | 'changes' | 'checks' | 'options' | 'origin' | 'sources';
 
 export interface AnswerQuestionTarget {
   nodeId?: string;
@@ -103,6 +103,7 @@ export function AnswerQuestionModal({
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [openSections, setOpenSections] = useState<ResolveSection[]>([]);
+  const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
   const [selectedOptionId, setSelectedOptionId] = useState(target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '');
   const [simulationOptionId, setSimulationOptionId] = useState('');
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -114,15 +115,12 @@ export function AnswerQuestionModal({
     setError('');
     setSaved(false);
     setOpenSections([]);
+    setExpandedSourceIds([]);
     const recommendedOptionId = target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '';
     setSelectedOptionId(recommendedOptionId);
     setSimulationOptionId('');
   }, [target]);
 
-  const knownFacts = Array.from(new Set([
-    ...(target.explanation?.whatGapswiseKnows ?? []),
-    ...(target.decisionSupport?.currentPicture ?? []),
-  ])).filter((fact) => fact.trim()).slice(0, 3);
   const sources = (target.explanation?.evidence ?? []).filter((source) => source.title.trim());
   const whatThisAffects = (target.explanation?.whatThisBlocks ?? []).filter((item) => item.trim());
   const whatCouldChange = (target.explanation?.whatCouldChange ?? []).filter((item) => item.trim());
@@ -166,7 +164,7 @@ export function AnswerQuestionModal({
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Resolve</p>
             <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold leading-relaxed text-slate-100">
-              {target.question}
+              {target.presentationTitle ?? target.question}
             </h2>
             {(target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason) && (
               <p className="mt-2 text-sm leading-relaxed text-slate-400">{target.presentationSummary ?? target.answerSuggestion?.whyItMatters ?? target.reason}</p>
@@ -195,11 +193,6 @@ export function AnswerQuestionModal({
         ) : (
           <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             <div className="space-y-1.5">
-              {knownFacts.length > 0 && (
-                <AccordionSection id="know" label="What we know" open={openSections.includes('know')} onToggle={toggleSection}>
-                  <ul className="space-y-2">{knownFacts.map((fact) => <li key={fact} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />{fact}</li>)}</ul>
-                </AccordionSection>
-              )}
               {whatThisAffects.length > 0 && (
                 <AccordionSection id="affects" label="What this affects" open={openSections.includes('affects')} onToggle={toggleSection}>
                   <ul className="space-y-2">{whatThisAffects.slice(0, 3).map((item) => <li key={item} className="flex gap-2 text-xs leading-relaxed text-slate-300"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-300" />{presentationImpact(item)}</li>)}</ul>
@@ -239,11 +232,42 @@ export function AnswerQuestionModal({
                   </div>
                 </AccordionSection>
               )}
+              {target.explanation && (
+                <AccordionSection id="origin" label="Where this comes from" open={openSections.includes('origin')} onToggle={toggleSection}>
+                  {sources.length > 0 ? (
+                    <div className="space-y-3">
+                      {sources.map((source) => (
+                        <div key={`${source.sourceId ?? source.title}-${source.excerpt}`} className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+                          <div className="flex items-center gap-2 border-b border-slate-800 px-3 py-2">
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                            <span className="min-w-0 flex-1 text-xs font-semibold text-slate-300">{source.title}</span>
+                            {source.sourceId && onNavigateToSource && !source.sourceId.startsWith('gcal_') && <button type="button" onClick={() => openSource(source.sourceId as string)} className="inline-flex shrink-0 items-center gap-1 text-[11px] font-bold text-cyan-200 hover:text-cyan-100">Open source <ChevronRight className="h-3.5 w-3.5" /></button>}
+                          </div>
+                          <p className="px-3 py-3 text-xs leading-relaxed text-slate-200"><mark className="rounded bg-cyan-400/20 px-1 text-cyan-100">{source.relevantExcerpt ?? source.excerpt}</mark></p>
+                          {source.fullText && source.fullText !== (source.relevantExcerpt ?? source.excerpt) && (
+                            <>
+                              {expandedSourceIds.includes(source.sourceId ?? source.title) && <p className="max-h-72 overflow-y-auto whitespace-pre-wrap border-t border-slate-800 px-3 py-3 text-xs leading-relaxed text-slate-300">{source.fullText}</p>}
+                              <button type="button" onClick={() => {
+                                const id = source.sourceId ?? source.title;
+                                setExpandedSourceIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+                              }} className="border-t border-slate-800 px-3 py-2 text-[11px] font-bold text-cyan-300 hover:text-cyan-200">
+                                {expandedSourceIds.includes(source.sourceId ?? source.title) ? 'Hide full context' : 'Expand full context'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="text-xs leading-relaxed text-slate-500">No linked source text was recorded for this gap.</p>}
+                </AccordionSection>
+              )}
               {sources.length > 0 && (
                 <AccordionSection id="sources" label="Sources" open={openSections.includes('sources')} onToggle={toggleSection}>
-                  <div className="space-y-1.5">{sources.slice(0, 4).map((source) => source.sourceId && onNavigateToSource && !source.sourceId.startsWith('gcal_') ? (
-                    <button key={`${source.sourceId}-${source.title}`} type="button" onClick={() => openSource(source.sourceId as string)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-cyan-200 hover:border-cyan-700"><FileText className="h-3.5 w-3.5 shrink-0" />{source.title}<ChevronRight className="ml-auto h-3.5 w-3.5" /></button>
-                  ) : <div key={`${source.sourceId ?? source.title}-${source.excerpt}`} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300"><FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />{source.title}</div>)}</div>
+                  <div className="space-y-1.5">
+                    {sources.map((source) => source.sourceId && onNavigateToSource && !source.sourceId.startsWith('gcal_') ? (
+                      <button key={`${source.sourceId}-${source.title}`} type="button" onClick={() => openSource(source.sourceId as string)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs font-semibold text-cyan-200 hover:border-cyan-700"><FileText className="h-3.5 w-3.5 shrink-0" />{source.title}<ChevronRight className="ml-auto h-3.5 w-3.5" /></button>
+                    ) : <div key={`${source.sourceId ?? source.title}-${source.excerpt}`} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300"><FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />{source.title}</div>)}
+                  </div>
                 </AccordionSection>
               )}
             </div>

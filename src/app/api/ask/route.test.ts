@@ -148,6 +148,37 @@ describe('POST /api/ask', () => {
     }));
   });
 
+  it('persists the originating Ask target on a new chat', async () => {
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: 'Let us compare the options.',
+      sessionId: 'session_decision',
+      sources: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'Help me think through this decision.',
+      chatId: 'chat_decision',
+      userMessageId: 'message_decision',
+      projectId: 'project_a',
+      target: {
+        type: 'decision',
+        id: 'decision_windows',
+        text: 'Decide whether to clean the upstairs windows alone.',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askStorage.saveAskChat).toHaveBeenCalledWith('demo-user', expect.objectContaining({
+      id: 'chat_decision',
+      target: {
+        type: 'decision',
+        id: 'decision_windows',
+        text: 'Decide whether to clean the upstairs windows alone.',
+      },
+    }));
+  });
+
   it('uses a local context response when the ADK agent is unavailable', async () => {
     vi.mocked(askGapswise).mockRejectedValue(new AskAgentError('ADK run failed with status 503.'));
     vi.mocked(askGapswiseLocally).mockResolvedValue({

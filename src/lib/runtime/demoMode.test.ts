@@ -8,7 +8,7 @@ import { getStorageMode, getStorageProvider, resetStorageProviderForTests } from
 import { MockStorageProvider } from '@/lib/storage/mock';
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { buildComingUp } from '@/lib/today/sections';
-import { assertExternalServicesAllowed, isDemoMode } from '@/lib/runtime/demoMode';
+import { assertExternalServicesAllowed, isDemoMode, isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { ingestContextSource } from '@/lib/context/ingestion';
 import { createDurableMemory } from '@/lib/memory/policy';
@@ -34,6 +34,12 @@ afterEach(async () => {
 });
 
 describe('zero-cost demo mode', () => {
+  it('enables detailed processing logs only for local development hosts', () => {
+    expect(isLocalhostRequest(new Request('http://localhost:3000/api/context/ingest'))).toBe(true);
+    expect(isLocalhostRequest(new Request('http://127.0.0.1:3000/api/context/ingest'))).toBe(true);
+    expect(isLocalhostRequest(new Request('https://gapwise.example/api/context/ingest'))).toBe(false);
+  });
+
   it('uses one explicit flag and forces local storage even if Firestore is enabled', () => {
     process.env.GAPSWISE_DEMO_MODE = 'true';
     process.env.USE_FIRESTORE = 'true';

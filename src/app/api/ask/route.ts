@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { askGapswiseLocally } from '@/lib/ask/localDemoAdapter';
-import { isDemoMode } from '@/lib/runtime/demoMode';
+import { isDemoMode, isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getConfiguredGeminiModel } from '@/lib/google/genai';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
@@ -10,7 +10,7 @@ import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { persistAskConversationContext } from '@/lib/ask/conversationContext';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
-import { AskChatMessage, AskChatSession, AskOpenQuestion, AskSearchSuggestions } from '@/types/ask';
+import { AskChatMessage, AskChatSession, AskOpenQuestion, AskSearchSuggestions, AskTarget } from '@/types/ask';
 
 export const runtime = 'nodejs';
 
@@ -49,6 +49,11 @@ const askRequestSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   chatId: z.string().trim().min(1).optional(),
   userMessageId: z.string().trim().min(1).optional(),
+  target: z.object({
+    type: z.enum(['question', 'decision']),
+    id: z.string().trim().min(1),
+    text: z.string().trim().min(1).max(1000),
+  }).optional(),
 });
 
 function titleForMessage(message: string): string {
@@ -67,12 +72,14 @@ async function persistUserAskMessage(params: {
   message: string;
   projectId?: string;
   sessionId?: string;
+  target?: AskTarget;
+  request?: Request;
 }): Promise<{ context: Awaited<ReturnType<typeof persistAskConversationContext>>; chat: AskChatSession }> {
   const storage = getStorageProvider();
   const now = new Date().toISOString();
   const chats = await storage.getAskChats(params.userId);
   const existingChat = chats.find((chat) => chat.id === params.chatId);
-  assertAskChatBinding(existingChat, params.projectId, params.sessionId);
+  assertAskChatBinding(existingChat, params.projectId, params.sessionId, params.target);
   const chat: AskChatSession = {
     id: params.chatId,
     userId: params.userId,
@@ -80,6 +87,7 @@ async function persistUserAskMessage(params: {
     ...(params.projectId ? { projectId: params.projectId } : {}),
     title: existingChat?.title || titleForMessage(params.message),
     ...(existingChat?.adkSessionId || params.sessionId ? { adkSessionId: existingChat?.adkSessionId ?? params.sessionId } : {}),
+    ...(existingChat?.target || params.target ? { target: existingChat?.target ?? params.target } : {}),
     createdAt: existingChat?.createdAt ?? now,
     updatedAt: now,
   };
@@ -100,6 +108,7 @@ async function persistUserAskMessage(params: {
     messageId: params.userMessageId,
     text: params.message,
     ...(params.projectId ? { projectId: params.projectId } : {}),
+    captureProcessingLog: params.request ? isLocalhostRequest(params.request) : false,
   });
   return { context, chat };
 }
@@ -108,6 +117,7 @@ function assertAskChatBinding(
   chat: AskChatSession | undefined,
   projectId: string | undefined,
   sessionId: string | undefined,
+  target?: AskTarget,
 ): void {
   if (!chat) return;
   const projectScope = projectId ? 'project' : 'general';
@@ -117,6 +127,9 @@ function assertAskChatBinding(
   if (chat.adkSessionId && sessionId && chat.adkSessionId !== sessionId) {
     throw new StorageError('This chat is bound to another active AI session.', 'VALIDATION_ERROR');
   }
+  if (chat.target && target && (chat.target.type !== target.type || chat.target.id !== target.id)) {
+    throw new StorageError('This chat is bound to a different project target.', 'VALIDATION_ERROR');
+  }
 }
 
 async function loadAskChatBinding(
@@ -124,10 +137,11 @@ async function loadAskChatBinding(
   chatId: string | undefined,
   projectId: string | undefined,
   sessionId: string | undefined,
+  target?: AskTarget,
 ): Promise<AskChatSession | undefined> {
   if (!chatId) return undefined;
   const chat = (await getStorageProvider().getAskChats(userId)).find((candidate) => candidate.id === chatId);
-  assertAskChatBinding(chat, projectId, sessionId);
+  assertAskChatBinding(chat, projectId, sessionId, target);
   return chat;
 }
 
@@ -195,7 +209,7 @@ export async function POST(request: Request) {
 
   let existingChat: AskChatSession | undefined;
   try {
-    existingChat = await loadAskChatBinding(userId, parsed.data.chatId, parsed.data.projectId, parsed.data.sessionId);
+    existingChat = await loadAskChatBinding(userId, parsed.data.chatId, parsed.data.projectId, parsed.data.sessionId, parsed.data.target);
   } catch (error) {
     if (error instanceof StorageError) return storageErrorResponse(error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Ask chat storage is unavailable.' }, { status: 503 });
@@ -219,6 +233,8 @@ export async function POST(request: Request) {
         message: parsed.data.message,
         projectId: parsed.data.projectId,
         sessionId: boundSessionId,
+        target: parsed.data.target,
+        request,
       });
     } catch (error) {
       if (error instanceof StorageError && (error.code === 'PERMISSION_DENIED' || error.code === 'VALIDATION_ERROR')) {

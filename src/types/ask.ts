@@ -1,5 +1,12 @@
 export type AskScopeType = 'general' | 'project';
 export type AskMessageRole = 'user' | 'assistant';
+export type AskTargetType = 'question' | 'decision';
+
+export interface AskTarget {
+  type: AskTargetType;
+  id: string;
+  text: string;
+}
 
 export type AskSourceKind = 'source' | 'graph' | 'memory' | 'calendar' | 'web';
 
@@ -57,6 +64,7 @@ export interface AskChatSession {
   projectId?: string;
   title: string;
   adkSessionId?: string;
+  target?: AskTarget;
   createdAt: string;
   updatedAt: string;
 }
@@ -87,10 +95,11 @@ export interface AskResearchEvidence {
   createdAt: string;
   updatedAt: string;
   /** Optional while reading records created before research actions were persisted. */
-  action?: 'save' | 'use_as_answer' | 'save_as_context';
+  action?: 'save' | 'use_as_answer' | 'use_as_decision' | 'save_as_context';
   targetQuestionId?: string;
+  targetDecisionId?: string;
   answerFingerprint?: string;
-  /** A use-as-answer record is pending until the graph answer and research write both succeed. */
+  /** A question/decision confirmation is pending until the graph write and research write both succeed. */
   status?: 'pending' | 'confirmed';
   provenance: 'assistant_web_research_confirmed_by_user' | 'user_confirmed_ai_response';
 }

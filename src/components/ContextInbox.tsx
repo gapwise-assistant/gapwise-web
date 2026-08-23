@@ -79,6 +79,14 @@ function formatDate(value: string | undefined): string | null {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function formatProcessingLog(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return 'The local processing log could not be displayed.';
+  }
+}
+
 function learnedNodesForSource(source: ContextSource, contexts: Project[]): Project['nodes'] {
   const learnedIds = new Set(source.derived_node_ids);
   return contexts
@@ -489,7 +497,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
               </div>
             </div>
 
-            {(selectedSource.storage_url || selectedSource.model_used || selectedSource.hash || selectedSource.error_message) && (
+            {(selectedSource.storage_url || selectedSource.model_used || selectedSource.hash || selectedSource.error_message || selectedSource.processing_log) && (
               <div>
                 <h3 className="text-sm font-extrabold text-slate-100">Processing and storage</h3>
                 <div className="mt-2 space-y-2 rounded-lg border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400">
@@ -504,6 +512,25 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
                   {selectedSource.hash && <p className="break-all"><span className="font-semibold text-slate-300">File fingerprint:</span> {selectedSource.hash}</p>}
                   {selectedSource.error_message && <p className="text-rose-300"><span className="font-semibold">Issue:</span> {selectedSource.error_message}</p>}
                 </div>
+                {selectedSource.processing_log && (
+                  <div className="mt-3 rounded-lg border border-amber-800/70 bg-amber-950/20 p-4" data-testid="context-processing-log">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-xs font-extrabold uppercase tracking-[0.14em] text-amber-200">Local processing log</h4>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/70">
+                        {selectedSource.processing_log.status} · {selectedSource.processing_log.duration_ms}ms
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-amber-100/70">
+                      Full development trace captured on localhost. It includes the source input, model prompt and response, candidate finalization, filtering, fallback, and graph persistence stages.
+                    </p>
+                    <details className="mt-3" open>
+                      <summary className="cursor-pointer text-[11px] font-semibold text-amber-200">Show full processing trace</summary>
+                      <pre className="mt-2 max-h-[38rem] overflow-auto whitespace-pre-wrap break-words rounded-md border border-amber-900/60 bg-slate-950 p-3 text-[10px] leading-relaxed text-slate-300">
+                        {formatProcessingLog(selectedSource.processing_log)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
               </div>
             )}
           </div>

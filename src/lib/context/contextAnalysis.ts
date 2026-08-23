@@ -1,6 +1,6 @@
 import { Type } from '@google/genai';
 import { z } from 'zod';
-import { ClarityNode, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
+import { ClarityNode, ContextProcessingLog, ContextProcessingLogStage, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
 import { nodeTypeSchema, validateStructuredOutput } from '@/lib/agents/schemas';
 import { getVertexGenAIClient } from '@/lib/google/genai';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
@@ -14,7 +14,6 @@ import {
   extractDeterministicEvidenceNodes,
   extractDeterministicFailureOutcomeQuestionNodes,
   extractInferredStatusQuestionNodes,
-  extractMissingContingencyQuestionNodes,
   extractLiteralQuestionNodes,
   ingestContextSource,
   IngestSourceInput,
@@ -28,7 +27,9 @@ import {
   questionIdentityKey,
   reconcileQuestionCandidates,
   semanticallyEquivalentQuestion,
+  questionsShareSubject,
 } from '@/lib/questions/canonical';
+import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 
 const reconciliationClassificationSchema = z.enum([
   'NEW_UNCERTAINTY',
@@ -113,6 +114,18 @@ export interface ProcessContextSourceResult {
   error?: string;
 }
 
+interface ContextModelTrace {
+  prompt: string;
+  model: string;
+  request: {
+    temperature: number;
+    response_mime_type: string;
+    response_schema: string;
+  };
+  raw_response: string;
+  parsed_response: unknown;
+}
+
 function parseModelJson(text: string | undefined): unknown {
   if (!text) throw new StorageError('Gemini returned an empty context analysis response.', 'UNAVAILABLE');
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
@@ -189,6 +202,7 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     'Return only structured JSON. Extract explicit facts, goals, constraints, decisions, preferences, evidence, risks, experiments, and next actions when materially useful.',
     'For DECISION nodes, return status OPEN only when the source explicitly describes a pending, unresolved, conditional, or not-yet-chosen decision. Return RESOLVED only when a choice is already recorded. Never infer an open decision from a generic task or plan.',
     'Create an UNKNOWN node for every explicit unresolved question in the source, including bullets under headings such as "unresolved", "pending", "open questions", or "blocking inputs". Do not drop an explicit question just because nearby facts are more detailed. A negative statement about a user-controlled action (for example, "I have not tested it" or "I have not replaced the data") already has a known answer: classify it as EVIDENCE or KNOWN and, when materially useful, add a NEXT_ACTION. Do not create an UNKNOWN that merely asks whether the user performed that already-known action. If the result of that action is unknown and material, ask about the result or resolution instead. A missing external confirmation can remain an evidence-seeking UNKNOWN. Only add a small number of additional inferred questions when answering them could materially improve a decision or advance the project goal.',
+    'Before returning the batch, check every UNKNOWN for a complete grammatical subject and object grounded in the source. Do not combine two unfinished actions into one question, use vague placeholders such as "one" when the source names the object, or turn an unfinished user action into a question. An unfinished action belongs as evidence plus a NEXT_ACTION; create a question only when a missing result, external confirmation, or user decision remains.',
     'Phrase factual, status, and requirement UNKNOWNs as evidence-seeking questions: ask what is confirmed, approved, required, current, or recorded by the source or authority named in the context. Do not turn an authority-dependent uncertainty into advice-seeking wording such as "Do I need to change X?" when the missing input is the authority\'s confirmation. Preserve genuine preference and choice questions when the user is the decision-maker. Keep wording concise, first-person-compatible, and grounded; never invent an answer, owner, deadline, or decision.',
     'Treat explicit pending prose (for example, "a prerequisite is still being reviewed", "approval is pending", or "the final schedule has not been confirmed") as unresolved UNKNOWNs when it is relevant to the project goal or deadline, even without a question mark. Retain the original sentence as evidence.',
     'When the source says a capability has no fallback, backup, contingency, failover, or recovery path under a stated condition, create an UNKNOWN question asking what is available under that condition. Retain the risk or limitation as evidence; do not invent a solution.',
@@ -205,11 +219,12 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
 export async function analyzeContextItem(
   input: AnalyzeContextInput,
   project: Project
-): Promise<{ analysis: ContextAnalysis; modelUsed: string }> {
+): Promise<{ analysis: ContextAnalysis; modelUsed: string; trace: ContextModelTrace }> {
   assertExternalServicesAllowed('Vertex AI / Gemini context analysis');
   const model = input.model ?? getAgentModelConfig('context').model;
   const genAI = input.genAI ?? getVertexGenAIClient();
   const reasoningProject = projectForReasoning(project);
+  const prompt = analysisPrompt(input, reasoningProject);
   const parts: Array<Record<string, unknown>> = [];
   if (input.storageUrl?.startsWith('gs://')) {
     parts.push({
@@ -219,7 +234,7 @@ export async function analyzeContextItem(
       },
     });
   }
-  parts.push({ text: analysisPrompt(input, reasoningProject) });
+  parts.push({ text: prompt });
 
   const response = await genAI.models.generateContent({
     model,
@@ -283,9 +298,59 @@ export async function analyzeContextItem(
     },
   });
 
+  const rawResponse = response.text ?? '';
+  let parsedResponse: unknown;
+  try {
+    parsedResponse = parseModelJson(rawResponse);
+  } catch (error) {
+    if (error instanceof Error) {
+      (error as Error & { contextTrace?: ContextModelTrace }).contextTrace = {
+        prompt,
+        model: response.modelVersion || model,
+        request: {
+          temperature: 0,
+          response_mime_type: 'application/json',
+          response_schema: 'contextAnalysisSchema',
+        },
+        raw_response: rawResponse,
+        parsed_response: null,
+      };
+    }
+    throw error;
+  }
+  let analysis: ContextAnalysis;
+  try {
+    analysis = validateStructuredOutput(contextAnalysisSchema, parsedResponse);
+  } catch (error) {
+    if (error instanceof Error) {
+      (error as Error & { contextTrace?: ContextModelTrace }).contextTrace = {
+        prompt,
+        model: response.modelVersion || model,
+        request: {
+          temperature: 0,
+          response_mime_type: 'application/json',
+          response_schema: 'contextAnalysisSchema',
+        },
+        raw_response: rawResponse,
+        parsed_response: parsedResponse,
+      };
+    }
+    throw error;
+  }
   return {
-    analysis: validateStructuredOutput(contextAnalysisSchema, parseModelJson(response.text)),
+    analysis,
     modelUsed: response.modelVersion || model,
+    trace: {
+      prompt,
+      model: response.modelVersion || model,
+      request: {
+        temperature: 0,
+        response_mime_type: 'application/json',
+        response_schema: 'contextAnalysisSchema',
+      },
+      raw_response: rawResponse,
+      parsed_response: parsedResponse,
+    },
   };
 }
 
@@ -392,8 +457,9 @@ function sourceUsesFirstPerson(content: string): boolean {
 
 /** Keep generated personal questions addressed to the person who supplied the source. */
 function normalizePersonalQuestion(text: string, sourceContent: string): string {
-  if (!sourceUsesFirstPerson(sourceContent)) return text;
-  return text
+  const groundedText = resolveQuestionReferences(text, sourceContent);
+  if (!sourceUsesFirstPerson(sourceContent)) return normalizeQuestionGrammar(groundedText);
+  const normalized = normalizeQuestionGrammar(groundedText
     .replace(/\bdoes the user\b/gi, 'do I')
     .replace(/\bhas the user\b/gi, 'have I')
     .replace(/\bis the user\b/gi, 'am I')
@@ -408,7 +474,8 @@ function normalizePersonalQuestion(text: string, sourceContent: string): string 
     .replace(/\bwith I\b/gi, 'with me')
     .replace(/\bof I\b/gi, 'of me')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim());
+  return normalized.replace(/^([a-z])/, (character) => character.toUpperCase());
 }
 
 function questionCandidateMatches(left: string, right: string): boolean {
@@ -416,6 +483,99 @@ function questionCandidateMatches(left: string, right: string): boolean {
   const rightKey = questionIdentityKey(right);
   return left.trim().toLowerCase() === right.trim().toLowerCase()
     || (leftKey.length > 0 && leftKey === rightKey);
+}
+
+function normalizedSemanticText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function nodeIsQuestionLike(node: ContextAnalysis['nodes'][number]): boolean {
+  return node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = meaningfulTokens(left);
+  const rightTokens = meaningfulTokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union ? intersection / union : 0;
+}
+
+function semanticNodeFamily(type: ClarityNode['type']): string {
+  if (type === 'UNKNOWN' || type === 'ASSUMPTION') return 'QUESTION';
+  if (type === 'KNOWN' || type === 'EVIDENCE') return 'FACT';
+  return type;
+}
+
+/** Compare concepts without treating every shared noun as a duplicate. */
+function semanticallyEquivalentNode(
+  left: ContextAnalysis['nodes'][number],
+  right: ContextAnalysis['nodes'][number],
+): boolean {
+  if (semanticNodeFamily(left.type) !== semanticNodeFamily(right.type)) return false;
+  if (normalizedSemanticText(left.text) === normalizedSemanticText(right.text)) return true;
+
+  if (nodeIsQuestionLike(left) && nodeIsQuestionLike(right)) {
+    return questionCandidateMatches(left.text, right.text)
+      || semanticallyEquivalentQuestion(left.text, right.text);
+  }
+
+  const leftKey = questionIdentityKey(left.text);
+  const rightKey = questionIdentityKey(right.text);
+  if (leftKey && rightKey && leftKey === rightKey) return true;
+
+  const similarity = tokenSimilarity(left.text, right.text);
+  switch (left.type) {
+    case 'DECISION': return similarity >= 0.62;
+    case 'NEXT_ACTION': return similarity >= 0.7;
+    case 'RISK':
+    case 'CONSTRAINT':
+    case 'PREFERENCE': return similarity >= 0.72;
+    case 'KNOWN':
+    case 'EVIDENCE': return similarity >= 0.78;
+    default: return similarity >= 0.8;
+  }
+}
+
+function questionSpecificityScore(text: string): number {
+  const normalized = normalizedSemanticText(text);
+  const tokens = meaningfulTokens(text);
+  let score = tokens.size;
+  if (tokens.size >= 4) score += 2;
+  if (tokens.size >= 6) score += 1;
+  if (/\bconfirmed yet\b/i.test(text)) score -= 5;
+  if (/\bcurrent status\b/i.test(text)) score -= 2;
+  if (/\bstatus is recorded\b/i.test(text)) score -= 2;
+  if (/\b(?:it|that|this|one)\b/i.test(normalized)) score -= 1;
+  return score;
+}
+
+function usefulAlias(text: string): boolean {
+  if (!text.trim()) return false;
+  if (/^has .+ confirmed yet\?$/i.test(text.trim())) return false;
+  if (/^what is the current status\??$/i.test(text.trim())) return false;
+  return true;
+}
+
+function nodeBudgetPriority(node: ContextAnalysis['nodes'][number]): number {
+  const typePriority: Partial<Record<ClarityNode['type'], number>> = {
+    GOAL: 100,
+    DECISION: 95,
+    UNKNOWN: 92,
+    ASSUMPTION: 88,
+    RISK: 86,
+    CONSTRAINT: 84,
+    PREFERENCE: 82,
+    NEXT_ACTION: 80,
+    KNOWN: 65,
+    EVIDENCE: 55,
+  };
+  return (typePriority[node.type] ?? 50) + (node.impact * 10) + (node.confidence * 5);
 }
 
 function remapAnalysisIndexes(
@@ -457,15 +617,19 @@ function remapFinalizedAnalysis(
 ): ContextAnalysis {
   if (nodes.length <= 12) return { ...analysis, nodes };
 
-  // Literal source questions are protected when the structured response is full.
   const selectedIndices = Array.from(new Set([
+    // Exact user questions remain protected.
     ...Array.from(protectedIndices),
     ...nodes
-      .map((node, index) => ({ node, index }))
+      .map((node, index) => ({ node, index, fallback: fallbackIndices.has(index) }))
       .filter(({ index }) => !protectedIndices.has(index))
-      .sort((left, right) =>
-        Number(fallbackIndices.has(left.index)) - Number(fallbackIndices.has(right.index))
-        || (right.node.impact * right.node.confidence) - (left.node.impact * left.node.confidence))
+      .sort((left, right) => {
+        const fallbackDifference = Number(left.fallback) - Number(right.fallback);
+        if (fallbackDifference !== 0) return fallbackDifference;
+        const priorityDifference = nodeBudgetPriority(right.node) - nodeBudgetPriority(left.node);
+        if (priorityDifference !== 0) return priorityDifference;
+        return (right.node.impact * right.node.confidence) - (left.node.impact * left.node.confidence);
+      })
       .map(({ index }) => index),
   ])).slice(0, 12);
   const indexMap = new Map(selectedIndices.map((oldIndex, newIndex) => [oldIndex, newIndex]));
@@ -506,22 +670,37 @@ function remapFinalizedAnalysis(
  * contributes explicit external-status questions plus evidence/actions for
  * user-controlled unfinished work.
  */
-function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeContextInput): ContextAnalysis {
+function finalizeQuestionCandidates(
+  analysis: ContextAnalysis,
+  input: AnalyzeContextInput,
+  trace?: Record<string, unknown>,
+): ContextAnalysis {
+  type CandidateOrigin = 'model' | 'literal' | 'deterministic' | 'fallback';
   type Candidate = {
     node: ContextAnalysis['nodes'][number];
     originalIndices: number[];
     literal: boolean;
     fallback: boolean;
+    origin: CandidateOrigin;
   };
 
   const inferredQuestions = extractInferredStatusQuestionNodes(input.content);
   const deterministicEvidence = extractDeterministicEvidenceNodes(input.content);
   const deterministicActions = extractDeterministicActionNodes(input.content);
   const deterministicDecision = extractDeterministicDecisionNode(input.content);
+  const literalQuestions = extractLiteralQuestionNodes(input.content);
   const explicitQuestions = [
-    ...extractLiteralQuestionNodes(input.content),
+    ...literalQuestions,
     ...analysis.nodes.filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && /\?\s*$/.test(node.text)),
   ];
+  if (trace) {
+    trace.model_candidates = analysis.nodes;
+    trace.literal_questions = explicitQuestions;
+    trace.inferred_status_questions = inferredQuestions;
+    trace.deterministic_actions = deterministicActions;
+    trace.deterministic_evidence = deterministicEvidence;
+    trace.deterministic_decision = deterministicDecision;
+  }
   const directActionQuestion = (text: string) => /^(?:have|has|had|do|does|did|am|is|are|can|will|should)\s+(?:i|we)\b/i.test(text.trim());
   const normalizedText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const exactTextMatch = (left: string, right: string) => {
@@ -568,6 +747,10 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     .filter((outcome) => !explicitQuestions.some((question) =>
       exactTextMatch(outcome.text, question.text) || semanticallyEquivalentQuestion(outcome.text, question.text)
     ));
+  if (trace) {
+    trace.model_linked_actions = modelLinkedActions;
+    trace.deterministic_outcome_questions = deterministicOutcomes;
+  }
   const fallbackSubject = (text: string): string | undefined =>
     text.match(/^what current status is recorded for (.+)\?$/i)?.[1]?.trim()
     ?? text.match(/^what (.+) is currently confirmed\?$/i)?.[1]?.trim();
@@ -581,19 +764,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     return subjectTokens.every((token) => candidateKey.split(' ').includes(token))
       && /\b(?:status|record(?:ed)?|confirm(?:ed|ation)?|approv(?:ed|al)?|review(?:ed|ing)?|outcome|pending|unresolved|unconfirm(?:ed)?|verified?)\b/i.test(candidate);
   };
-  const candidateTextMatch = (left: string, right: string) => exactTextMatch(left, right)
-    || fallbackMatchesQuestion(left, right)
-    || fallbackMatchesQuestion(right, left);
   const actionForModel = () => deterministicActions.length === 1 ? deterministicActions[0] : undefined;
-  const explicitCandidateMerge = (left: Candidate, right: Candidate) => {
-    const leftIndexes = new Set(left.originalIndices);
-    const rightIndexes = new Set(right.originalIndices);
-    return analysis.reconciliation.some((item) => {
-      if (!['PARAPHRASE', 'SUBQUESTION'].includes(item.classification) || item.canonical_candidate_index === undefined) return false;
-      return (leftIndexes.has(item.candidate_index) && rightIndexes.has(item.canonical_candidate_index))
-        || (rightIndexes.has(item.candidate_index) && leftIndexes.has(item.canonical_candidate_index));
-    });
-  };
 
   const normalizeModelNode = (node: ContextAnalysis['nodes'][number]): ContextAnalysis['nodes'][number] => {
     if (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION') return node;
@@ -601,6 +772,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     const normalizedAliases = node.question_aliases?.map((alias) => normalizePersonalQuestion(alias, input.content));
     const inferredQuestion = inferredQuestions.find((question) => fallbackMatchesQuestion(question.text, normalized));
     const action = actionForModel();
+    const malformedActionQuestion = /\b[a-z][a-z-]*ed\s+(?:the|a|an)\s+to\b/i.test(normalized);
     const describesUnfinishedWork = /\b(?:not|n't|mismatch|inconsistent|failing|failure|error|invalid|unverified|missing|untested|unconfirmed|unresolved|pending|under review|not recorded|not confirmed)\b/i.test(normalized);
     const evidence = deterministicEvidence.find((candidate) => exactTextMatch(normalized, candidate.text));
 
@@ -613,6 +785,28 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
         text: action.text,
         question_aliases: normalizedAliases,
         status: 'OPEN',
+      };
+    }
+    // A model can accidentally combine two unfinished actions into one
+    // first-person question. There is no safe canonical answer target then:
+    // keep source evidence and let the separate deterministic NEXT_ACTION
+    // candidates represent the work.
+    if (normalized.trim().endsWith('?') && directActionQuestion(normalized) && deterministicActions.length > 1) {
+      return {
+        ...node,
+        type: 'EVIDENCE',
+        text: deterministicEvidence[0]?.text ?? normalized,
+        question_aliases: normalizedAliases,
+        status: 'RESOLVED',
+      };
+    }
+    if (normalized.trim().endsWith('?') && directActionQuestion(normalized) && malformedActionQuestion) {
+      return {
+        ...node,
+        type: 'EVIDENCE',
+        text: deterministicEvidence[0]?.text ?? normalized.replace(/[?]+$/, '.'),
+        question_aliases: normalizedAliases,
+        status: 'RESOLVED',
       };
     }
     // A non-question UNKNOWN is either a pending external status or supplied
@@ -633,63 +827,102 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     originalIndices: [index],
     literal: false,
     fallback: false,
+    origin: 'model',
   }));
+
+  const fallbackEquivalentToQuestion = (
+    fallback: ContextAnalysis['nodes'][number],
+    existing: ContextAnalysis['nodes'][number],
+  ): boolean => {
+    if (!nodeIsQuestionLike(fallback) || !nodeIsQuestionLike(existing)) return false;
+    if (semanticallyEquivalentNode(fallback, existing)) return true;
+    const isGenericConfirmation = /\b(?:confirmed|confirmation|status|pending|approved|approval|reviewed)\b/i.test(fallback.text);
+    return isGenericConfirmation && questionsShareSubject(fallback.text, existing.text);
+  };
+
+  const findEquivalentCandidate = (
+    node: ContextAnalysis['nodes'][number],
+    origin: CandidateOrigin,
+  ): number => candidates.findIndex((candidate) =>
+    semanticallyEquivalentNode(candidate.node, node)
+      || (origin === 'fallback' && fallbackEquivalentToQuestion(node, candidate.node))
+  );
 
   const addCandidate = (
     node: ContextAnalysis['nodes'][number],
-    literal = false,
-    deduplicate = true,
-    fallback = false,
+    origin: CandidateOrigin,
+    options: { literal?: boolean; fallback?: boolean } = {},
   ) => {
-    const alreadyPresent = candidates.some((candidate) =>
-      candidate.node.type === node.type && exactTextMatch(candidate.node.text, node.text)
-    );
-    // Literal questions are user-authored answer targets. Similarity is only
-    // a guard for inferred/model candidates and must never discard the exact
-    // wording the user supplied.
-    if (alreadyPresent && !literal && deduplicate) return;
-    candidates.push({ node, originalIndices: [], literal, fallback });
-  };
+    const literal = options.literal ?? false;
+    const fallback = options.fallback ?? false;
+    const existingIndex = findEquivalentCandidate(node, origin);
+    if (existingIndex < 0) {
+      candidates.push({ node, originalIndices: [], literal, fallback, origin });
+      return;
+    }
 
-  extractLiteralQuestionNodes(input.content).forEach((question) => {
-    const existingIndex = candidates.findIndex((candidate) =>
-      !candidate.literal
-      && (candidate.node.type === 'UNKNOWN' || candidate.node.type === 'ASSUMPTION')
-      && questionCandidateMatches(candidate.node.text, question.text)
-    );
-    if (existingIndex >= 0) {
-      const existing = candidates[existingIndex];
+    const existing = candidates[existingIndex];
+    if (literal) {
       candidates[existingIndex] = {
         ...existing,
         literal: true,
+        origin: 'literal',
         node: {
           ...existing.node,
-          text: question.text,
+          text: node.text,
           status: 'OPEN',
-          confidence: Math.max(existing.node.confidence, question.confidence),
-          impact: Math.max(existing.node.impact, question.impact ?? 0.82),
-          why_it_matters: Array.from(new Set([
-            ...existing.node.why_it_matters,
-            ...(question.whyItMatters ?? []),
-          ])),
+          confidence: Math.max(existing.node.confidence, node.confidence),
+          impact: Math.max(existing.node.impact, node.impact),
+          why_it_matters: Array.from(new Set([...existing.node.why_it_matters, ...node.why_it_matters])),
+          question_aliases: Array.from(new Set([
+            ...(existing.node.question_aliases ?? []),
+            ...(node.question_aliases ?? []),
+            existing.node.text,
+          ])).filter((alias) => alias !== node.text && usefulAlias(alias)),
         },
       };
       return;
     }
-    addCandidate({
-      type: question.type,
-      text: question.text,
-      confidence: question.confidence,
-      impact: question.impact ?? 0.82,
-      status: 'OPEN',
-      why_it_matters: question.whyItMatters ?? [],
-      question_aliases: [],
-      related_node_ids: [],
-      relationship: null,
-    }, true);
-  });
 
-  extractMissingContingencyQuestionNodes(input.content).forEach((question) => addCandidate({
+    // Model output wins over deterministic recovery for the same concept.
+    if (existing.origin === 'model' && (origin === 'deterministic' || origin === 'fallback')) {
+      const alias = usefulAlias(node.text) && nodeIsQuestionLike(existing.node) ? node.text : undefined;
+      if (alias) {
+        candidates[existingIndex] = {
+          ...existing,
+          node: {
+            ...existing.node,
+            question_aliases: Array.from(new Set([...(existing.node.question_aliases ?? []), alias]))
+              .filter((value) => value !== existing.node.text && usefulAlias(value)),
+          },
+        };
+      }
+      return;
+    }
+
+    const existingSpecificity = questionSpecificityScore(existing.node.text);
+    const newSpecificity = questionSpecificityScore(node.text);
+    const shouldReplace = !fallback && (existing.fallback || newSpecificity > existingSpecificity);
+    if (!shouldReplace) return;
+    candidates[existingIndex] = {
+      ...existing,
+      node: {
+        ...node,
+        confidence: Math.max(existing.node.confidence, node.confidence),
+        impact: Math.max(existing.node.impact, node.impact),
+        why_it_matters: Array.from(new Set([...existing.node.why_it_matters, ...node.why_it_matters])),
+        question_aliases: Array.from(new Set([
+          ...(existing.node.question_aliases ?? []),
+          ...(node.question_aliases ?? []),
+          existing.node.text,
+        ])).filter((alias) => alias !== node.text && usefulAlias(alias)),
+      },
+      fallback,
+      origin,
+    };
+  };
+
+  literalQuestions.forEach((question) => addCandidate({
     type: question.type,
     text: question.text,
     confidence: question.confidence,
@@ -699,7 +932,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     question_aliases: [],
     related_node_ids: [],
     relationship: null,
-  }, false, true, true));
+  }, 'literal', { literal: true }));
 
   // Inferred status questions are fallback candidates. They are added to the
   // same candidate set so a model question can supply the canonical wording,
@@ -714,7 +947,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     question_aliases: [],
     related_node_ids: [],
     relationship: null,
-  }, false, false, true));
+  }, 'fallback', { fallback: true }));
 
   // A material failure can justify one grounded outcome question. Ordinary
   // user-controlled actions remain evidence and work only.
@@ -728,7 +961,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     question_aliases: [],
     related_node_ids: [],
     relationship: null,
-  }, false, true, true));
+  }, 'fallback', { fallback: true }));
 
   // These are known source facts and unfinished work, never additional open
   // questions. Model output remains authoritative when it already supplied
@@ -743,27 +976,31 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     question_aliases: [],
     related_node_ids: [],
     relationship: null,
-  }));
+  }, 'deterministic'));
 
   const merged: Candidate[] = [];
   const consumed = new Set<number>();
-  // Literal questions are the user's intended answer shape. Process them
-  // first so every generated subquestion they cover joins that one canonical
-  // candidate, regardless of the model's output order.
-  const candidateOrder = candidates
+  const originPriority: Record<CandidateOrigin, number> = {
+    literal: 4,
+    model: 3,
+    deterministic: 2,
+    fallback: 1,
+  };
+  const orderedCandidates = candidates
     .map((candidate, index) => ({ candidate, index }))
-    .sort((left, right) => Number(right.candidate.literal) - Number(left.candidate.literal));
-  candidateOrder.forEach(({ candidate, index }) => {
+    .sort((left, right) =>
+      Number(right.candidate.literal) - Number(left.candidate.literal)
+      || originPriority[right.candidate.origin] - originPriority[left.candidate.origin]
+    );
+
+  orderedCandidates.forEach(({ candidate, index }) => {
     if (consumed.has(index)) return;
     const memberIndices = candidates
       .map((other, otherIndex) => ({ other, otherIndex }))
       .filter(({ other, otherIndex }) => {
         if (otherIndex === index || consumed.has(otherIndex)) return false;
         if (candidate.literal && other.literal) return false;
-        if (!((candidate.node.type === 'UNKNOWN' || candidate.node.type === 'ASSUMPTION')
-          && (other.node.type === 'UNKNOWN' || other.node.type === 'ASSUMPTION'))) return false;
-        return candidateTextMatch(candidate.node.text, other.node.text)
-          || explicitCandidateMerge(candidate, other);
+        return semanticallyEquivalentNode(candidate.node, other.node);
       })
       .map(({ otherIndex }) => otherIndex);
     const indices = [index, ...memberIndices];
@@ -771,21 +1008,22 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     const members = indices.map((memberIndex) => candidates[memberIndex]);
     const selected = [...members].sort((left, right) =>
       Number(right.literal) - Number(left.literal)
-      || Number(left.fallback) - Number(right.fallback)
+      || originPriority[right.origin] - originPriority[left.origin]
+      || questionSpecificityScore(right.node.text) - questionSpecificityScore(left.node.text)
       || right.node.confidence - left.node.confidence
       || right.node.impact - left.node.impact
     )[0];
     const aliases = Array.from(new Set([
       ...members.flatMap((member) => member.node.question_aliases ?? []),
       ...members.map((member) => member.node.text),
-    ].filter((text) => text && text !== selected.node.text)));
+    ])).filter((text) => text && text !== selected.node.text && usefulAlias(text));
     merged.push({
       node: {
         ...selected.node,
         confidence: Math.max(...members.map((member) => member.node.confidence)),
         impact: Math.max(...members.map((member) => member.node.impact)),
         why_it_matters: Array.from(new Set(members.flatMap((member) => member.node.why_it_matters))),
-        question_aliases: aliases,
+        question_aliases: nodeIsQuestionLike(selected.node) ? aliases : selected.node.question_aliases,
       },
       originalIndices: [
         ...selected.originalIndices,
@@ -794,6 +1032,7 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
       ],
       literal: members.some((member) => member.literal),
       fallback: selected.fallback,
+      origin: selected.origin,
     });
   });
 
@@ -814,7 +1053,13 @@ function finalizeQuestionCandidates(analysis: ContextAnalysis, input: AnalyzeCon
     indexMap,
   );
   const protectedIndices = new Set(merged.flatMap((candidate, index) => candidate.literal ? [index] : []));
-  return remapFinalizedAnalysis(remapped, remapped.nodes, protectedIndices, new Set());
+  const fallbackIndices = new Set(merged.flatMap((candidate, index) => candidate.fallback ? [index] : []));
+  const finalized = remapFinalizedAnalysis(remapped, remapped.nodes, protectedIndices, fallbackIndices);
+  if (trace) {
+    trace.merged_candidates = merged;
+    trace.finalized_analysis = finalized;
+  }
+  return finalized;
 }
 
 function analysisRelationshipsToPrecomputedRelationships(analysis: ContextAnalysis): PrecomputedRelationship[] {
@@ -894,6 +1139,51 @@ function filterGoalRelevantUnknowns(analysis: ContextAnalysis, input: AnalyzeCon
   return { ...analysis, nodes, relationships, reconciliation };
 }
 
+function appendProcessingStage(
+  log: ContextProcessingLog | undefined,
+  stage: Omit<ContextProcessingLogStage, 'started_at' | 'duration_ms'> & { started_at?: string; duration_ms?: number },
+): void {
+  if (!log) return;
+  log.stages.push({
+    ...stage,
+    started_at: stage.started_at ?? new Date().toISOString(),
+    duration_ms: stage.duration_ms ?? 0,
+  });
+}
+
+function completeProcessingLog(
+  log: ContextProcessingLog | undefined,
+  status: ContextProcessingLog['status'],
+  error?: string,
+): void {
+  if (!log) return;
+  log.status = status;
+  log.completed_at = new Date().toISOString();
+  log.duration_ms = Math.max(0, Date.now() - Date.parse(log.started_at));
+  if (error) log.error = error;
+}
+
+function createProcessingLog(project: Project, input: IngestSourceInput, hash: string): ContextProcessingLog {
+  return {
+    version: 1,
+    status: 'completed',
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    duration_ms: 0,
+    input: {
+      source_id: input.sourceId ?? 'new-source',
+      filename: input.filename,
+      type: input.type,
+      mime_type: input.mimeType,
+      content: input.content,
+      storage_url: input.storageUrl,
+      hash,
+      project_snapshot: projectSnapshot(project),
+    },
+    stages: [],
+  };
+}
+
 export async function processContextSource(
   project: Project,
   input: IngestSourceInput,
@@ -902,27 +1192,50 @@ export async function processContextSource(
     forceReprocess?: boolean;
     model?: string;
     genAI?: ReturnType<typeof getVertexGenAIClient>;
+    /** Enables complete prompt/response/candidate logging for localhost development only. */
+    captureProcessingLog?: boolean;
   } = {}
 ): Promise<ProcessContextSourceResult> {
+  const processStarted = Date.now();
   const hash = input.hash ?? await hashText(`${input.filename}:${input.content}:${input.storageUrl ?? ''}`);
+  const processingLog = options.captureProcessingLog
+    ? createProcessingLog(project, input, hash)
+    : undefined;
+  if (processingLog) processingLog.started_at = new Date(processStarted).toISOString();
   const existing = project.sources.find((source) => successfulSource(source, hash));
   if (existing && !options.forceReprocess) {
     return { project, skipped: true, modelUsed: existing.model_used };
   }
 
   if (isDemoMode()) {
+    appendProcessingStage(processingLog, {
+      name: 'Deterministic demo extraction',
+      status: 'completed',
+      input: {
+        demo_mode: true,
+        source_type: input.type,
+      },
+      output: {
+        model_used: input.modelUsed ?? 'deterministic-demo',
+        supplied_nodes: input.derivedNodes ?? 'fallbackNodesForSource(content)',
+      },
+      duration_ms: Date.now() - processStarted,
+    });
+    completeProcessingLog(processingLog, 'completed');
     const updated = await ingestContextSource(project, {
       ...input,
       hash,
       extractionHash: hash,
       processingStatus: input.processingStatus ?? 'completed',
       relevance: input.relevance ?? 'relevant',
+      processingLog,
     }, profile);
     return { project: updated, skipped: false, modelUsed: input.modelUsed };
   }
 
   try {
-    const { analysis: rawAnalysis, modelUsed } = await analyzeContextItem({
+    const modelStageStarted = Date.now();
+    const analyzed = await analyzeContextItem({
       sourceId: input.sourceId ?? 'new-source',
       filename: input.filename,
       content: input.content,
@@ -932,6 +1245,23 @@ export async function processContextSource(
       model: options.model,
       genAI: options.genAI,
     }, project);
+    const { analysis: rawAnalysis, modelUsed } = analyzed;
+    appendProcessingStage(processingLog, {
+      name: 'Context Agent model analysis',
+      status: 'completed',
+      input: {
+        model: analyzed.trace.model,
+        request: analyzed.trace.request,
+        prompt: analyzed.trace.prompt,
+      },
+      output: {
+        raw_response: analyzed.trace.raw_response,
+        parsed_response: analyzed.trace.parsed_response,
+        validated_analysis: rawAnalysis,
+      },
+      started_at: new Date(modelStageStarted).toISOString(),
+      duration_ms: Date.now() - modelStageStarted,
+    });
     const analysisInput = {
       sourceId: input.sourceId ?? 'new-source',
       filename: input.filename,
@@ -942,7 +1272,36 @@ export async function processContextSource(
       model: options.model,
       genAI: options.genAI,
     } satisfies AnalyzeContextInput;
-    const analysis = filterGoalRelevantUnknowns(finalizeQuestionCandidates(rawAnalysis, analysisInput), analysisInput, project);
+    const finalizationTrace: Record<string, unknown> = {};
+    const finalizedAnalysis = finalizeQuestionCandidates(rawAnalysis, analysisInput, finalizationTrace);
+    appendProcessingStage(processingLog, {
+      name: 'Candidate finalization and canonical question selection',
+      status: 'completed',
+      input: { raw_analysis: rawAnalysis },
+      output: finalizationTrace,
+    });
+    const analysis = filterGoalRelevantUnknowns(finalizedAnalysis, analysisInput, project);
+    appendProcessingStage(processingLog, {
+      name: 'Goal relevance filtering',
+      status: 'completed',
+      input: { finalized_analysis: finalizedAnalysis },
+      output: { filtered_analysis: analysis },
+    });
+    appendProcessingStage(processingLog, {
+      name: 'Graph persistence',
+      status: 'completed',
+      input: {
+        extraction_summary: analysis.summary,
+        relevance: analysis.relevance,
+        nodes: analysisNodesToPrecomputedNodes(analysis, project),
+        relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
+      },
+      output: {
+        node_count: analysis.nodes.length,
+        relationship_count: analysis.relationships.length,
+      },
+    });
+    completeProcessingLog(processingLog, 'completed');
     const updated = await ingestContextSource(project, {
       ...input,
       hash,
@@ -954,17 +1313,79 @@ export async function processContextSource(
       relevance: analysis.relevance,
       derivedNodes: analysisNodesToPrecomputedNodes(analysis, project),
       relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
+      processingLog,
     }, profile);
+    if (processingLog) {
+      const persistedSource = updated.sources.find((source) => source.id === input.sourceId);
+      processingLog.stages.push({
+        name: 'Graph persistence result',
+        status: 'completed',
+        started_at: new Date().toISOString(),
+        duration_ms: 0,
+        output: {
+          source_id: persistedSource?.id,
+          derived_node_ids: persistedSource?.derived_node_ids ?? [],
+          project_node_count: updated.nodes.length,
+          project_edge_count: updated.edges.length,
+          reconciliation_summary: persistedSource?.reconciliation_summary,
+        },
+      });
+      completeProcessingLog(processingLog, 'completed');
+    }
     return { project: updated, skipped: false, analysis, modelUsed };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Gemini context analysis failed.';
+    const contextTrace = error instanceof Error
+      ? (error as Error & { contextTrace?: ContextModelTrace }).contextTrace
+      : undefined;
+    const failedAnalysisInput = {
+      sourceId: input.sourceId ?? 'new-source',
+      filename: input.filename,
+      content: input.content,
+      type: input.type,
+      storageUrl: input.storageUrl,
+      mimeType: input.mimeType,
+      model: options.model,
+      genAI: options.genAI,
+    } satisfies AnalyzeContextInput;
+    appendProcessingStage(processingLog, {
+      name: 'Context Agent model analysis',
+      status: 'failed',
+      input: contextTrace ? {
+        model: contextTrace.model,
+        request: contextTrace.request,
+        prompt: contextTrace.prompt,
+      } : {
+        model: options.model ?? getAgentModelConfig('context').model,
+        request: {
+          temperature: 0,
+          response_mime_type: 'application/json',
+          response_schema: 'contextAnalysisSchema',
+        },
+        prompt: analysisPrompt(failedAnalysisInput, projectForReasoning(project)),
+      },
+      output: contextTrace ? {
+        raw_response: contextTrace.raw_response,
+        parsed_response: contextTrace.parsed_response,
+      } : undefined,
+      error: message,
+    });
+    const fallbackNodes = extractDeterministicFallbackNodes(input.content);
+    appendProcessingStage(processingLog, {
+      name: 'Deterministic fallback extraction',
+      status: 'completed',
+      input: { content: input.content },
+      output: { nodes: fallbackNodes },
+    });
+    completeProcessingLog(processingLog, 'failed', message);
     const failed = await ingestContextSource(project, {
       ...input,
       hash,
       processingStatus: 'failed',
       errorMessage: message,
       extractionHash: undefined,
-      derivedNodes: extractDeterministicFallbackNodes(input.content),
+      derivedNodes: fallbackNodes,
+      processingLog,
     }, profile);
     return { project: failed, skipped: false, error: message };
   }

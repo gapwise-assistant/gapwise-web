@@ -1,4 +1,4 @@
-import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary } from '@/types/clarity';
+import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary, ContextProcessingLog } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -63,6 +63,7 @@ export interface FirestoreSource extends BaseEntity {
   relevance?: 'relevant' | 'possibly_not_relevant';
   discarded_at?: string;
   reconciliation_summary?: QuestionReconciliationSummary;
+  processing_log?: ContextProcessingLog;
 }
 
 export interface FirestoreContext extends BaseEntity {

@@ -53,6 +53,25 @@ export interface ConfirmDecisionInput {
   resolveQuestionIds?: string[];
 }
 
+function normalizedDecisionText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A decision node keeps its confirmed value in `text` for graph compatibility.
+ * The decision's original question is retained in confirmation history and is
+ * the stable, readable title for presentation surfaces.
+ */
+export function decisionQuestionForDisplay(project: Project, decision: ClarityNode): string {
+  const currentText = normalizedDecisionText(decision.text);
+  const confirmation = [...(project.history ?? [])].reverse().find((entry) =>
+    entry.graph_diff_summary.startsWith('Decision confirmed')
+      && normalizedDecisionText(entry.answer) === currentText
+      && entry.question.trim(),
+  );
+  return confirmation?.question.trim() || decision.text;
+}
+
 function cloneProject(project: Project): Project {
   return JSON.parse(JSON.stringify(project)) as Project;
 }

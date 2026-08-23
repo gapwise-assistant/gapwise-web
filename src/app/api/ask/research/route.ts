@@ -1,23 +1,25 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { loadGeneralContext, listProjects, getStorageProvider } from '@/lib/storage';
+import { loadGeneralContext, listProjects, getStorageProvider, saveGeneralContext, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { answerQuestion } from '@/lib/questions/answerQuestion';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { AskResearchEvidence } from '@/types/ask';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
+import { confirmDecision } from '@/lib/decisions/workspace';
 
 export const runtime = 'nodejs';
 
 const requestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
-  action: z.enum(['save', 'use_as_answer', 'save_as_context']),
+  action: z.enum(['save', 'use_as_answer', 'use_as_decision', 'save_as_context']),
   chatId: z.string().trim().min(1),
   assistantMessageId: z.string().trim().min(1),
   text: z.string().trim().min(1).max(5000),
   projectId: z.string().trim().min(1).optional(),
   targetQuestionId: z.string().trim().min(1).optional(),
+  targetDecisionId: z.string().trim().min(1).optional(),
 });
 
 function stableId(value: string): string {
@@ -55,6 +57,23 @@ async function assertTargetQuestion(userId: string, projectId: string | undefine
   }
 }
 
+async function loadDecisionTarget(userId: string, projectId: string | undefined, decisionId: string): Promise<{ project: Awaited<ReturnType<typeof loadGeneralContext>>; isGeneral: boolean }> {
+  if (projectId && projectId !== GENERAL_CONTEXT_ID) {
+    const project = (await listProjects(userId)).find((candidate) => candidate.id === projectId);
+    if (!project) throw new StorageError('The selected Ask project does not exist.', 'VALIDATION_ERROR');
+    return { project, isGeneral: false };
+  }
+  return { project: await loadGeneralContext(userId), isGeneral: true };
+}
+
+async function assertTargetDecision(userId: string, projectId: string | undefined, decisionId: string): Promise<void> {
+  const target = await loadDecisionTarget(userId, projectId, decisionId);
+  const decision = target.project.nodes.find((node) => node.id === decisionId);
+  if (!decision || decision.type !== 'DECISION' || decision.status !== 'OPEN') {
+    throw new StorageError('Select an open decision for this discussion.', 'VALIDATION_ERROR');
+  }
+}
+
 function questionForId(project: Awaited<ReturnType<typeof loadGeneralContext>>, questionId: string) {
   const group = canonicalQuestionGroups(project).find((candidate) => candidate.nodeIds.includes(questionId));
   return group?.canonical ?? project.nodes.find((node) => node.id === questionId);
@@ -65,6 +84,11 @@ async function targetQuestionStatus(userId: string, projectId: string | undefine
     ? (await listProjects(userId)).find((candidate) => candidate.id === projectId)
     : await loadGeneralContext(userId);
   return project ? questionForId(project, questionId)?.status : undefined;
+}
+
+async function targetDecisionStatus(userId: string, projectId: string | undefined, decisionId: string): Promise<string | undefined> {
+  const target = await loadDecisionTarget(userId, projectId, decisionId);
+  return target.project.nodes.find((node) => node.id === decisionId)?.status;
 }
 
 async function resolutionMatchesPendingAnswer(
@@ -88,17 +112,33 @@ async function resolutionMatchesPendingAnswer(
   );
 }
 
+async function resolutionMatchesPendingDecision(
+  userId: string,
+  projectId: string | undefined,
+  decisionId: string,
+  pendingText: string,
+): Promise<boolean> {
+  const target = await loadDecisionTarget(userId, projectId, decisionId);
+  const decision = target.project.nodes.find((node) => node.id === decisionId);
+  return Boolean(
+    decision
+      && decision.type === 'DECISION'
+      && decision.status === 'RESOLVED'
+      && normalizedAnswer(decision.text) === normalizedAnswer(pendingText),
+  );
+}
+
 function matchingUseAsAnswerResearch(
   records: AskResearchEvidence[],
   chatId: string,
   assistantMessageId: string,
-  targetQuestionId: string,
+  target: { questionId?: string; decisionId?: string },
 ): AskResearchEvidence | undefined {
   return records
     .filter((record) => record.chatId === chatId
       && record.assistantMessageId === assistantMessageId
-      && record.action === 'use_as_answer'
-      && record.targetQuestionId === targetQuestionId)
+      && (record.action === 'use_as_answer' || record.action === 'use_as_decision')
+      && (target.questionId ? record.targetQuestionId === target.questionId : record.targetDecisionId === target.decisionId))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 }
 
@@ -119,36 +159,69 @@ export async function POST(request: Request) {
     if (!chat || !assistantMessage) throw new StorageError('The cited Ask response could not be found.', 'PERMISSION_DENIED');
     if (chat.projectId !== body.projectId) throw new StorageError('The Ask response is outside this project.', 'PERMISSION_DENIED');
 
-    const existingUseAsAnswer = body.action === 'use_as_answer' && body.targetQuestionId
-      ? matchingUseAsAnswerResearch(researchRecords, body.chatId, body.assistantMessageId, body.targetQuestionId)
+    const isQuestionAction = body.action === 'use_as_answer';
+    const isDecisionAction = body.action === 'use_as_decision';
+    const targetQuestionId = body.targetQuestionId ?? (chat.target?.type === 'question' ? chat.target.id : undefined);
+    const targetDecisionId = body.targetDecisionId ?? (chat.target?.type === 'decision' ? chat.target.id : undefined);
+    if (chat.target && ((chat.target.type === 'question' && isDecisionAction) || (chat.target.type === 'decision' && isQuestionAction))) {
+      throw new StorageError('This Ask chat is bound to a different target type.', 'VALIDATION_ERROR');
+    }
+    if (body.targetQuestionId && chat.target?.type === 'question' && body.targetQuestionId !== chat.target.id) {
+      throw new StorageError('This Ask chat is bound to a different question.', 'VALIDATION_ERROR');
+    }
+    if (body.targetDecisionId && chat.target?.type === 'decision' && body.targetDecisionId !== chat.target.id) {
+      throw new StorageError('This Ask chat is bound to a different decision.', 'VALIDATION_ERROR');
+    }
+    if (targetQuestionId && targetDecisionId) {
+      throw new StorageError('An Ask response cannot target both a question and a decision.', 'VALIDATION_ERROR');
+    }
+
+    const existingUseAsAnswer = (isQuestionAction && targetQuestionId) || (isDecisionAction && targetDecisionId)
+      ? matchingUseAsAnswerResearch(researchRecords, body.chatId, body.assistantMessageId, {
+        ...(targetQuestionId ? { questionId: targetQuestionId } : {}),
+        ...(targetDecisionId ? { decisionId: targetDecisionId } : {}),
+      })
       : undefined;
 
-    if (existingUseAsAnswer && body.action === 'use_as_answer') {
-      const status = await targetQuestionStatus(userId, chat.projectId, body.targetQuestionId!);
+    if (existingUseAsAnswer && (isQuestionAction || isDecisionAction)) {
+      const status = isQuestionAction
+        ? await targetQuestionStatus(userId, chat.projectId, targetQuestionId!)
+        : await targetDecisionStatus(userId, chat.projectId, targetDecisionId!);
       if (status === 'RESOLVED') {
-        const matches = await resolutionMatchesPendingAnswer(
-          userId,
-          chat.projectId,
-          body.targetQuestionId!,
-          existingUseAsAnswer.text,
-          existingUseAsAnswer.answerFingerprint,
-        );
+        const matches = isQuestionAction
+          ? await resolutionMatchesPendingAnswer(
+            userId,
+            chat.projectId,
+            targetQuestionId!,
+            existingUseAsAnswer.text,
+            existingUseAsAnswer.answerFingerprint,
+          )
+          : await resolutionMatchesPendingDecision(userId, chat.projectId, targetDecisionId!, existingUseAsAnswer.text);
         if (!matches) {
-          throw new StorageError('The question was resolved with a different answer; this research cannot be confirmed.', 'VALIDATION_ERROR');
+          throw new StorageError(
+            isQuestionAction
+              ? 'The question was resolved with a different answer; this research cannot be confirmed.'
+              : 'The decision was made with different wording; this research cannot be confirmed.',
+            'VALIDATION_ERROR',
+          );
         }
         if (existingUseAsAnswer.status !== 'confirmed') {
           const confirmed = { ...existingUseAsAnswer, status: 'confirmed' as const, updatedAt: new Date().toISOString() };
           await storage.saveAskResearch(userId, confirmed);
-          return NextResponse.json({ research: confirmed, action: body.action, targetQuestionId: body.targetQuestionId });
+          return NextResponse.json({ research: confirmed, action: body.action, ...(targetQuestionId ? { targetQuestionId } : {}), ...(targetDecisionId ? { targetDecisionId } : {}) });
         }
-        return NextResponse.json({ research: existingUseAsAnswer, action: body.action, targetQuestionId: body.targetQuestionId });
+        return NextResponse.json({ research: existingUseAsAnswer, action: body.action, ...(targetQuestionId ? { targetQuestionId } : {}), ...(targetDecisionId ? { targetDecisionId } : {}) });
       }
     }
 
-    if (body.action === 'use_as_answer' && !body.targetQuestionId) {
+    if (isQuestionAction && !targetQuestionId) {
       throw new StorageError('Select which open question this research answers.', 'VALIDATION_ERROR');
     }
-    if (body.action === 'use_as_answer') await assertTargetQuestion(userId, chat.projectId, body.targetQuestionId!);
+    if (isDecisionAction && !targetDecisionId) {
+      throw new StorageError('This decision chat is missing its target.', 'VALIDATION_ERROR');
+    }
+    if (isQuestionAction) await assertTargetQuestion(userId, chat.projectId, targetQuestionId!);
+    if (isDecisionAction) await assertTargetDecision(userId, chat.projectId, targetDecisionId!);
 
     const webSources = assistantMessage.sources.filter((source) => source.kind === 'web' && source.url);
     if (body.action === 'save' && !webSources.length) {
@@ -156,7 +229,7 @@ export async function POST(request: Request) {
     }
 
     const hasWeb = webSources.length > 0;
-    const isWebResearch = body.action === 'save' || (body.action === 'use_as_answer' && hasWeb);
+    const isWebResearch = body.action === 'save' || ((isQuestionAction || isDecisionAction) && hasWeb);
     const provenance = isWebResearch ? 'assistant_web_research_confirmed_by_user' : 'user_confirmed_ai_response';
     const chosenSources = isWebResearch ? webSources : assistantMessage.sources.filter((s) => s.kind !== 'web');
 
@@ -177,27 +250,38 @@ export async function POST(request: Request) {
       createdAt: existingUseAsAnswer?.createdAt ?? now,
       updatedAt: now,
       action: body.action,
-      ...(body.targetQuestionId ? { targetQuestionId: body.targetQuestionId } : {}),
-      ...(body.action === 'use_as_answer' ? { answerFingerprint: answerFingerprint(text) } : {}),
-      status: body.action === 'use_as_answer' ? 'pending' : 'confirmed',
+      ...(targetQuestionId ? { targetQuestionId } : {}),
+      ...(targetDecisionId ? { targetDecisionId } : {}),
+      ...((isQuestionAction || isDecisionAction) ? { answerFingerprint: answerFingerprint(text) } : {}),
+      status: isQuestionAction || isDecisionAction ? 'pending' : 'confirmed',
       provenance,
     };
 
-    if (body.action === 'use_as_answer') {
+    if (isQuestionAction || isDecisionAction) {
       await storage.saveAskResearch(userId, research);
-      await answerQuestion({
-        userId,
-        nodeId: body.targetQuestionId!,
-        answer: text,
-        projectId: chat.projectId,
-      });
+      if (isQuestionAction) {
+        await answerQuestion({
+          userId,
+          nodeId: targetQuestionId!,
+          answer: text,
+          projectId: chat.projectId,
+        });
+      } else {
+        const target = await loadDecisionTarget(userId, chat.projectId, targetDecisionId!);
+        const updated = confirmDecision(target.project, {
+          decisionNodeId: targetDecisionId!,
+          customDecision: text,
+        });
+        if (target.isGeneral) await saveGeneralContext(userId, updated);
+        else await saveProject(userId, updated);
+      }
       const confirmed = { ...research, status: 'confirmed' as const, updatedAt: new Date().toISOString() };
       await storage.saveAskResearch(userId, confirmed);
-      return NextResponse.json({ research: confirmed, action: body.action, targetQuestionId: body.targetQuestionId });
+      return NextResponse.json({ research: confirmed, action: body.action, ...(targetQuestionId ? { targetQuestionId } : {}), ...(targetDecisionId ? { targetDecisionId } : {}) });
     }
 
     await storage.saveAskResearch(userId, research);
-    return NextResponse.json({ research, action: body.action, targetQuestionId: body.targetQuestionId });
+    return NextResponse.json({ research, action: body.action, ...(targetQuestionId ? { targetQuestionId } : {}) });
   } catch (error) {
     if (error instanceof z.ZodError) return errorResponse(new Error('Invalid research action request.'), 400);
     if (error instanceof StorageError) {

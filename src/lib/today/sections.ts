@@ -4,6 +4,7 @@ import { ContextPack } from '@/types/contextPack';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
+import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 import {
   calendarTimestampFromText,
   formatCalendarDateTime,
@@ -99,9 +100,13 @@ function bestContextPack(brief: DailyBrief): ContextPack | null {
 
 export function todayQuestionFromNode(project: Project, node: ClarityNode): TodayQuestion {
   const reasons = relationshipReasons(project, node.id, 2);
+  const sourceText = node.source_refs
+    .map((sourceId) => project.sources.find((source) => source.id === sourceId)?.content)
+    .filter((content): content is string => Boolean(content))
+    .join('\n');
   const question: TodayQuestion = {
     id: `question_${node.id}`,
-    question: node.text,
+    question: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceText)),
     reason: [node.why_it_matters?.[0], ...reasons].filter(Boolean).slice(0, 2).join(' ') || 'This unresolved item can affect the next decision.',
     provenance: node.source_refs.length ? `Sources: ${node.source_refs.join(', ')}` : `Graph node: ${node.id}`,
     sourceNodeIds: [node.id],
@@ -117,6 +122,17 @@ export function countTodayOpenQuestions(project: Project, hiddenQuestionNodeIds:
     .filter((group) => ['UNKNOWN', 'ASSUMPTION'].includes(group.canonical.type) && group.canonical.status === 'OPEN')
     .filter((group) => !group.nodeIds.some((nodeId) => hidden.has(nodeId)))
     .length;
+}
+
+/** Pending user-owned choices shown in Today's dedicated Decisions section. */
+export function openTodayDecisions(project: Project): ClarityNode[] {
+  return projectForReasoning(project).nodes
+    .filter((node) => node.type === 'DECISION' && node.status === 'OPEN')
+    .sort((left, right) =>
+      (right.priority ?? right.impact) - (left.priority ?? left.impact)
+      || right.confidence - left.confidence
+      || left.created_at.localeCompare(right.created_at)
+    );
 }
 
 function calendarQuestion(node: ClarityNode, now: Date): TodayQuestion | null {

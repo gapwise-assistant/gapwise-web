@@ -9,6 +9,10 @@ export interface QuestionWhyEvidence {
   sourceId?: string;
   title: string;
   excerpt: string;
+  /** The exact source sentence most closely supporting this gap. */
+  relevantExcerpt?: string;
+  /** The complete original source text, available behind expansion. */
+  fullText?: string;
 }
 
 export interface QuestionWhyExplanation {
@@ -25,7 +29,6 @@ export interface QuestionWhyExplanation {
   } | null;
 }
 
-const MAX_EVIDENCE = 4;
 const MAX_KNOWN = 4;
 const MAX_CHANGES = 4;
 
@@ -59,29 +62,73 @@ function directNodeForQuestion(project: Project, question: TodayQuestion): Clari
 }
 
 function sourceExcerpt(source: ContextSource): string {
-  return compactText(source.extraction_summary || source.content || 'This source was checked for the question.', 160);
+  // Keep the supplied context intact for the detail view. Summaries are useful
+  // for ranking, but they are not enough for a user to verify why a gap exists.
+  return source.content.trim() || source.extraction_summary?.trim() || 'This source was checked for the question.';
+}
+
+function evidenceTokens(value: string): string[] {
+  const stopWords = new Set([
+    'a', 'an', 'and', 'are', 'be', 'by', 'can', 'could', 'did', 'do', 'does', 'for',
+    'from', 'has', 'have', 'how', 'i', 'if', 'in', 'is', 'it', 'me', 'my', 'of',
+    'on', 'or', 'should', 'that', 'the', 'this', 'to', 'was', 'we', 'what', 'when',
+    'where', 'which', 'will', 'with', 'would', 'you', 'your',
+  ]);
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !stopWords.has(token));
+}
+
+function evidenceStem(token: string): string {
+  if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (token.endsWith('ed') && token.length > 5) return token.slice(0, -2);
+  if (token.endsWith('ing') && token.length > 6) return token.slice(0, -3);
+  if (token.endsWith('s') && token.length > 4) return token.slice(0, -1);
+  return token;
+}
+
+/**
+ * Selects the closest original source sentence using the wording already
+ * represented by the graph. This is provenance presentation, not a new
+ * inference pass: the source text remains the authority and is never rewritten.
+ */
+export function relevantSourceExcerpt(source: ContextSource, nodes: ClarityNode[]): string {
+  const fullText = source.content.trim();
+  if (!fullText) return source.extraction_summary?.trim() || 'This source was checked for the question.';
+  const queryTokens = new Set(nodes.flatMap((node) => evidenceTokens(node.text).map(evidenceStem)));
+  if (queryTokens.size === 0) return fullText.split(/(?<=[.!?])\s+|\r?\n+/).find(Boolean)?.trim() || fullText;
+
+  const sentences = fullText
+    .split(/(?<=[.!?])\s+|\r?\n+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const ranked = sentences.map((sentence, index) => {
+    const sentenceTokens = new Set(evidenceTokens(sentence).map(evidenceStem));
+    const overlap = [...queryTokens].filter((token) => sentenceTokens.has(token)).length;
+    return { sentence, index, overlap };
+  }).sort((left, right) => right.overlap - left.overlap || left.index - right.index);
+  return ranked[0]?.sentence || fullText;
 }
 
 function collectEvidence(project: Project, nodes: ClarityNode[]): QuestionWhyEvidence[] {
-  const evidence: QuestionWhyEvidence[] = [];
-  const seen = new Set<string>();
-
-  nodes.forEach((node) => {
-    node.source_refs.forEach((sourceId) => {
-      if (seen.has(sourceId)) return;
-      seen.add(sourceId);
-      if (sourceId.startsWith('gcal_')) {
-        evidence.push({ sourceId, title: 'Google Calendar', excerpt: nodeDescription(node) });
-        return;
-      }
-      const source = project.sources.find((candidate) => candidate.id === sourceId);
-      if (source) {
-        evidence.push({ sourceId, title: humanizeSourceTitle(source.filename), excerpt: sourceExcerpt(source) });
-      }
-    });
+  const sourceIds = Array.from(new Set(nodes.flatMap((node) => node.source_refs)));
+  return sourceIds.flatMap((sourceId) => {
+    if (sourceId.startsWith('gcal_')) {
+      const calendarNode = nodes.find((node) => node.source_refs.includes(sourceId));
+      return [{ sourceId, title: 'Google Calendar', excerpt: calendarNode ? nodeDescription(calendarNode) : 'Calendar event' }];
+    }
+    const source = project.sources.find((candidate) => candidate.id === sourceId);
+    if (!source) return [];
+    return [{
+      sourceId,
+      title: humanizeSourceTitle(source.filename),
+      excerpt: sourceExcerpt(source),
+      relevantExcerpt: relevantSourceExcerpt(source, nodes),
+      fullText: sourceExcerpt(source),
+    }];
   });
-
-  return evidence.slice(0, MAX_EVIDENCE);
 }
 
 function supportedNodes(project: Project, nodeId: string): ClarityNode[] {

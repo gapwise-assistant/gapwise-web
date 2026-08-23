@@ -6,6 +6,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { listProjects, loadProjectState, saveProject, setActiveProjectId, setAppScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { isLocalhostRequest } from '@/lib/runtime/demoMode';
 
 export const runtime = 'nodejs';
 
@@ -78,7 +79,9 @@ export async function POST(request: NextRequest) {
         content: body.description,
         type: 'note',
         origin: 'user',
-      }, DEFAULT_USER_PROFILE);
+      }, DEFAULT_USER_PROFILE, {
+        captureProcessingLog: isLocalhostRequest(request),
+      });
       project = processed.project;
     }
     await saveProject(userId, project);

@@ -37,6 +37,7 @@ export async function persistAskConversationContext(params: {
   messageId: string;
   text: string;
   projectId?: string;
+  captureProcessingLog?: boolean;
 }): Promise<{
   sourceId: string;
   openQuestionIds: string[];
@@ -50,7 +51,9 @@ export async function persistAskConversationContext(params: {
     content: params.text,
     type: 'note',
     origin: 'user',
-  }, DEFAULT_USER_PROFILE);
+  }, DEFAULT_USER_PROFILE, {
+    captureProcessingLog: params.captureProcessingLog,
+  });
 
   if (!result.skipped) await saveTarget(params.userId, result.project, target.isGeneral);
 

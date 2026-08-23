@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
+import { buildQuestionWhyExplanation, relevantSourceExcerpt } from '@/lib/questions/whyQuestion';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import type { TodayQuestion } from '@/lib/today/sections';
 
@@ -14,6 +14,31 @@ function question(nodeId: string): TodayQuestion {
 }
 
 describe('question why explanation', () => {
+  it('selects the exact source sentence closest to the graph wording', () => {
+    const source = {
+      id: 'inspection-note',
+      filename: 'Move-out notes',
+      type: 'note' as const,
+      content: 'The landlord has not confirmed the inspection date. I still need to pack the kitchen.',
+      extracted_at: '2026-08-14T10:00:00Z',
+      derived_node_ids: [],
+    };
+    const question = {
+      id: 'inspection-question',
+      type: 'UNKNOWN' as const,
+      text: 'Has the landlord confirmed the inspection date?',
+      status: 'OPEN' as const,
+      confidence: 0.9,
+      impact: 0.9,
+      source_refs: [source.id],
+      created_by: 'agent' as const,
+      created_at: '2026-08-14T10:00:00Z',
+      updated_at: '2026-08-14T10:00:00Z',
+    };
+
+    expect(relevantSourceExcerpt(source, [question])).toBe('The landlord has not confirmed the inspection date.');
+  });
+
   it('translates graph impact into decision value and named evidence', () => {
     const project = createGoldenDemoProject();
     project.title = 'Housing search';
@@ -81,6 +106,8 @@ describe('question why explanation', () => {
     expect(explanation.evidence).toEqual([
       expect.objectContaining({ title: 'Apartment search notes', sourceId: source.id }),
     ]);
+    expect(explanation.evidence[0]?.excerpt).toBe(source.content);
+    expect(explanation.evidence[0]?.fullText).toBe(source.content);
     expect(JSON.stringify(explanation)).not.toContain('src_');
     expect(explanation.reasoningPath?.nodeIds).toEqual([budget.id, decision.id, 'node_goal']);
   });

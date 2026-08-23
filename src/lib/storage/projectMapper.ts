@@ -109,6 +109,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       relevance: source.relevance,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
+      processing_log: source.processing_log,
       status: 'ACTIVE',
       createdAt: source.extracted_at,
       updatedAt: source.extracted_at,
@@ -212,6 +213,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
       relevance: source.relevance,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
+      processing_log: source.processing_log,
     })),
     history: conversations
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -302,6 +304,7 @@ export function collectionsToGeneralContext(collections: GeneralContextCollectio
       relevance: source.relevance,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
+      processing_log: source.processing_log,
     })),
   };
 }

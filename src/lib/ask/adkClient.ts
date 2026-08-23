@@ -103,8 +103,9 @@ const contextPackResponseSchema = z.object({
       retrievedAt: z.string(),
       sources: z.array(askSourceSchema),
       provenance: z.enum(['assistant_web_research_confirmed_by_user', 'user_confirmed_ai_response']).optional(),
-      action: z.enum(['save', 'use_as_answer', 'save_as_context']).optional(),
+      action: z.enum(['save', 'use_as_answer', 'use_as_decision', 'save_as_context']).optional(),
       targetQuestionId: z.string().optional(),
+      targetDecisionId: z.string().optional(),
       answerFingerprint: z.string().optional(),
       status: z.enum(['pending', 'confirmed']).optional(),
     })).default([]),
@@ -382,13 +383,14 @@ function trustedRoutingContext(contextPack: AskContextPack | null, sources: AskS
   const userConfirmedContext = contextPack?.researchEvidence
     .filter((research) => (
       (research.provenance === 'user_confirmed_ai_response' && research.status !== 'pending')
-      || (research.action === 'use_as_answer' && research.status === 'confirmed')
+      || ((research.action === 'use_as_answer' || research.action === 'use_as_decision') && research.status === 'confirmed')
     ))
     .map((research) => ({
       id: research.id,
       text: compactContextText(research.text),
       provenance: research.provenance,
       ...(research.targetQuestionId ? { targetQuestionId: research.targetQuestionId } : {}),
+      ...(research.targetDecisionId ? { targetDecisionId: research.targetDecisionId } : {}),
       sources: research.sources.map((source) => ({
         title: source.title,
         excerpt: compactContextText(source.excerpt),
@@ -605,12 +607,15 @@ function contextPromptForAgent(message: string, contextPack: AskContextPack | nu
     return `${label} [chat ${excerpt.chatId}, message ${excerpt.messageId}, ${excerpt.timestamp}]: ${compactContextText(excerpt.text)}`;
   }));
 
-  const userConfirmedConclusions = contextPack.researchEvidence.filter((r) => r.provenance === 'user_confirmed_ai_response');
+  const userConfirmedConclusions = contextPack.researchEvidence.filter((r) =>
+    (r.provenance === 'user_confirmed_ai_response' && r.status !== 'pending')
+    || ((r.action === 'use_as_answer' || r.action === 'use_as_decision') && r.status === 'confirmed')
+  );
   if (userConfirmedConclusions.length) {
     addSection('User-confirmed context and conclusions', userConfirmedConclusions.map((item) => compactContextText(item.text)));
   }
 
-  const webResearch = contextPack.researchEvidence.filter((r) => r.provenance !== 'user_confirmed_ai_response');
+  const webResearch = contextPack.researchEvidence.filter((research) => !userConfirmedConclusions.some((confirmed) => confirmed.id === research.id));
   if (webResearch.length) {
     addSection('Saved web research (research evidence, not a user-confirmed answer)', webResearch.map((research) => {
       const citations = research.sources.filter((source) => source.url).map((source) => `${source.title} (${source.url})`).join(' · ');
@@ -863,4 +868,3 @@ export async function askGapswise(params: {
     execution: { route: routing.route, agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
   };
 }
-

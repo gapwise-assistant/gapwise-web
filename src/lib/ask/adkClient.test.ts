@@ -93,6 +93,15 @@ describe('determineAskRoute', () => {
         provenance: 'assistant_web_research_confirmed_by_user',
         action: 'use_as_answer',
         status: 'confirmed',
+      }, {
+        id: 'research_decision_answer',
+        text: 'Use a helper for the upstairs windows.',
+        retrievedAt: '2026-08-20T10:00:00.000Z',
+        sources: [],
+        provenance: 'assistant_web_research_confirmed_by_user',
+        action: 'use_as_decision',
+        targetDecisionId: 'decision_windows',
+        status: 'confirmed',
       }],
     } as unknown as Parameters<typeof determineAskRoute>[2];
 
@@ -110,6 +119,11 @@ describe('determineAskRoute', () => {
           id: 'research_web_answer',
           text: 'The confirmed web answer is October 9.',
           provenance: 'assistant_web_research_confirmed_by_user',
+        }, {
+          id: 'research_decision_answer',
+          text: 'Use a helper for the upstairs windows.',
+          provenance: 'assistant_web_research_confirmed_by_user',
+          targetDecisionId: 'decision_windows',
         }],
       },
     });

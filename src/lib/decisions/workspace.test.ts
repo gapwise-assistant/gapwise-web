@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
-import { buildDecisionWorkspace, confirmDecision, findDecisionForNode } from '@/lib/decisions/workspace';
+import { buildDecisionWorkspace, confirmDecision, decisionQuestionForDisplay, findDecisionForNode } from '@/lib/decisions/workspace';
 
 describe('decision workspace', () => {
   it('finds the decision blocked by an unresolved question', () => {
@@ -62,5 +62,17 @@ describe('decision workspace', () => {
     expect(updated.edges.some((edge) => edge.source === 'node_decision_track' && edge.target === 'unknown_target_user' && edge.type === 'resolves')).toBe(true);
     expect(updated.history.at(-1)?.answer).toBe('Build the four-minute persona demo');
     expect(updated.clarity_score).not.toBe(project.clarity_score);
+  });
+
+  it('uses the original decision question as the display title after confirmation', () => {
+    const project = createGoldenDemoProject();
+    const updated = confirmDecision(project, {
+      decisionNodeId: 'node_decision_track',
+      customDecision: 'Ask a helper to act as a spotter.',
+    });
+    const decision = updated.nodes.find((node) => node.id === 'node_decision_track');
+
+    expect(decision).toBeDefined();
+    expect(decisionQuestionForDisplay(updated, decision!)).toBe('Build Gapwise: Find the question that unlocks the next decision');
   });
 });

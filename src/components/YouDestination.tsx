@@ -18,6 +18,8 @@ import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { canonicalOpenQuestions } from '@/lib/questions/canonical';
+import { decisionQuestionForDisplay } from '@/lib/decisions/workspace';
+import type { GapStatusFilter } from '@/components/ProjectQuestionsList';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -38,11 +40,13 @@ interface ScopeDestinationProps {
   onReviewDecision: (nodeId: string) => void;
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToSource: (sourceId: string) => void;
+  gapsNavigationRequest?: { status: GapStatusFilter; key: number } | null;
+  onGapsNavigationHandled?: () => void;
   reasoningPathNodeId?: string | null;
 }
 
 type ScopeSection = 'projects' | 'priorities' | 'unclear' | 'context';
-type ProjectSection = 'overview' | 'questions' | 'graph' | 'context';
+type ProjectSection = 'overview' | 'gaps' | 'graph' | 'context';
 
 function dismissNode(project: Project, nodeId: string): Project {
   const updated: Project = JSON.parse(JSON.stringify(project));
@@ -82,10 +86,13 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onReviewDecision,
   onEditAnsweredQuestion,
   onNavigateToSource,
+  gapsNavigationRequest,
+  onGapsNavigationHandled,
   reasoningPathNodeId,
 }) => {
   const [section, setSection] = useState<ScopeSection>('projects');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
+  const [gapsStatusFilter, setGapsStatusFilter] = useState<GapStatusFilter>('all');
   const [isProjectEditOpen, setIsProjectEditOpen] = useState(false);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -99,6 +106,19 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     [reasoningProject]
   );
   const answeredQuestions = useMemo(() => answeredQuestionHistory(project), [project]);
+  const openDecisions = useMemo(
+    () => reasoningProject.nodes
+      .filter((node) => node.type === 'DECISION' && node.status === 'OPEN')
+      .sort((left, right) => (right.priority ?? right.impact) - (left.priority ?? left.impact)),
+    [reasoningProject],
+  );
+  const resolvedDecisions = useMemo(
+    () => reasoningProject.nodes
+      .filter((node) => node.type === 'DECISION' && node.status === 'RESOLVED')
+      .map((node) => ({ ...node, text: decisionQuestionForDisplay(project, node) }))
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+    [project, reasoningProject],
+  );
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);
   const currentPicture = useMemo(() => buildCurrentPicture(project), [project]);
   const needsAttention = useMemo(() => buildNeedsAttention(project), [project]);
@@ -115,6 +135,14 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       setProjectSection('graph');
     }
   }, [reasoningPathNodeId]);
+
+  useEffect(() => {
+    if (!gapsNavigationRequest) return;
+    setSection('projects');
+    setProjectSection('gaps');
+    setGapsStatusFilter(gapsNavigationRequest.status);
+    onGapsNavigationHandled?.();
+  }, [gapsNavigationRequest, onGapsNavigationHandled]);
 
   useEffect(() => {
     if (!contextEntry) return;
@@ -388,9 +416,14 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     <ProjectQuestionsList
       openQuestions={projectQuestions}
       answeredQuestions={answeredQuestions}
+      openDecisions={openDecisions}
+      resolvedDecisions={resolvedDecisions}
       projectId={project.id}
+      sourceContents={project.sources.map((source) => source.content)}
       onAnswerQuestion={onAnswerQuestion}
       onEditAnsweredQuestion={onEditAnsweredQuestion}
+      onReviewDecision={onReviewDecision}
+      initialStatusFilter={gapsStatusFilter}
     />
   );
 
@@ -513,7 +546,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
         <div className="mt-4 flex flex-wrap gap-2">
           {([
             ['overview', 'Overview'],
-            ['questions', 'Questions'],
+            ['gaps', 'Gaps'],
             ['graph', 'Decision Map'],
             ['context', 'Context'],
           ] as const).map(([id, label]) => (
@@ -531,7 +564,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
         </div>
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
-      {projectSection === 'questions' && renderProjectQuestions()}
+      {projectSection === 'gaps' && renderProjectQuestions()}
       {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />}
       {projectSection === 'context' && (
         <ContextInbox

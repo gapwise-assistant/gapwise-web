@@ -68,6 +68,12 @@ describe('POST /api/context/ingest', () => {
       expect.objectContaining({ challenge_level: DEFAULT_USER_PROFILE.challenge_level }),
       expect.objectContaining({ forceReprocess: false })
     );
+    expect(processContextSource).toHaveBeenCalledWith(
+      project,
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ captureProcessingLog: true })
+    );
     expect(saveProject).toHaveBeenCalledWith('demo-user', updated);
     await expect(response.json()).resolves.toMatchObject({
       project: expect.objectContaining({

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { POST } from './route';
-import { getStorageProvider, listProjects } from '@/lib/storage';
+import { getStorageProvider, listProjects, saveProject } from '@/lib/storage';
 import { StorageProvider } from '@/lib/storage/types';
 import { answerQuestion } from '@/lib/questions/answerQuestion';
+import { confirmDecision } from '@/lib/decisions/workspace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 
 vi.mock('@/lib/auth/server', () => ({
@@ -10,11 +11,14 @@ vi.mock('@/lib/auth/server', () => ({
 }));
 
 vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn() }));
+vi.mock('@/lib/decisions/workspace', () => ({ confirmDecision: vi.fn() }));
 
 vi.mock('@/lib/storage', () => ({
   getStorageProvider: vi.fn(),
   listProjects: vi.fn(),
   loadGeneralContext: vi.fn(),
+  saveProject: vi.fn(),
+  saveGeneralContext: vi.fn(),
 }));
 
 const storage = {
@@ -86,7 +90,9 @@ describe('POST /api/ask/research', () => {
     storage.getAskMessages.mockResolvedValue([webAssistantMessage, nonWebAssistantMessage]);
     storage.getAskResearch.mockResolvedValue([]);
     storage.saveAskResearch.mockResolvedValue(undefined);
+    vi.mocked(saveProject).mockImplementation(async (_userId, project) => project);
     vi.mocked(answerQuestion).mockResolvedValue({} as never);
+    vi.mocked(confirmDecision).mockReturnValue({} as never);
   });
 
   it('persists Save as context with user_confirmed_ai_response for non-web responses', async () => {
@@ -135,6 +141,42 @@ describe('POST /api/ask/research', () => {
       answer: 'Non-web confirmed answer.',
       projectId: 'project_a',
     });
+  });
+
+  it('uses the originating decision target instead of asking the user to choose a question', async () => {
+    const decisionChat = {
+      ...chat,
+      target: { type: 'decision' as const, id: 'decision_1', text: 'Decide how to handle the upstairs windows.' },
+    };
+    storage.getAskChats.mockResolvedValue([decisionChat]);
+    const updatedProject = { id: 'project_a', nodes: [] };
+    vi.mocked(listProjects).mockResolvedValue([{
+      id: 'project_a',
+      nodes: [{ id: 'decision_1', text: 'Decide how to handle the upstairs windows.', type: 'DECISION', status: 'OPEN' }],
+    }] as never);
+    vi.mocked(confirmDecision).mockReturnValue(updatedProject as never);
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      action: 'use_as_decision',
+      chatId: 'chat_1',
+      assistantMessageId: 'assistant_non_web',
+      projectId: 'project_a',
+      text: 'Use a helper as a spotter for the upstairs windows.',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(confirmDecision).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      decisionNodeId: 'decision_1',
+      customDecision: 'Use a helper as a spotter for the upstairs windows.',
+    }));
+    expect(saveProject).toHaveBeenCalledWith('demo-user', updatedProject);
+    expect(storage.saveAskResearch).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
+      action: 'use_as_decision',
+      targetDecisionId: 'decision_1',
+      status: 'confirmed',
+    }));
   });
 
   it('rejects Save research when response has no web sources', async () => {

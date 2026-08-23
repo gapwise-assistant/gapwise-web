@@ -86,6 +86,38 @@ export interface ContextSource {
   relevance?: 'relevant' | 'possibly_not_relevant';
   discarded_at?: string;
   reconciliation_summary?: QuestionReconciliationSummary;
+  /** Full context-processing trace. Captured only for localhost development requests. */
+  processing_log?: ContextProcessingLog;
+}
+
+export interface ContextProcessingLogStage {
+  name: string;
+  status: 'completed' | 'failed' | 'skipped';
+  started_at: string;
+  duration_ms: number;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+}
+
+export interface ContextProcessingLog {
+  version: 1;
+  status: 'completed' | 'failed' | 'skipped';
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  input: {
+    source_id: string;
+    filename: string;
+    type: ContextSource['type'];
+    mime_type?: string;
+    content: string;
+    storage_url?: string;
+    hash?: string;
+    project_snapshot: string;
+  };
+  stages: ContextProcessingLogStage[];
+  error?: string;
 }
 
 export interface QuestionReconciliationSummary {

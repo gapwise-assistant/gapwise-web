@@ -26,6 +26,11 @@ const chatSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   title: z.string().trim().min(1).max(240),
   adkSessionId: z.string().trim().min(1).optional(),
+  target: z.object({
+    type: z.enum(['question', 'decision']),
+    id: z.string().trim().min(1),
+    text: z.string().trim().min(1).max(1000),
+  }).optional(),
   createdAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime().optional(),
 });
@@ -117,6 +122,9 @@ export async function POST(request: Request) {
       }
       if (existingChat.adkSessionId && body.chat.adkSessionId && existingChat.adkSessionId !== body.chat.adkSessionId) {
         throw new StorageError('The Ask chat is bound to a different ADK session.', 'PERMISSION_DENIED');
+      }
+      if (existingChat.target && body.chat.target && (existingChat.target.type !== body.chat.target.type || existingChat.target.id !== body.chat.target.id)) {
+        throw new StorageError('The Ask chat is bound to a different project target.', 'PERMISSION_DENIED');
       }
     }
     const chat = {

@@ -5,7 +5,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { DEMO_PDF_EXTRACTION } from '@/lib/demo/localFixtures';
 import { processContextSource } from '@/lib/context/contextAnalysis';
 import { hashText, ingestContextSource, IngestSourceInput } from '@/lib/context/ingestion';
-import { isDemoMode } from '@/lib/runtime/demoMode';
+import { isDemoMode, isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
 import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
 import { StorageError } from '@/lib/storage/types';
@@ -211,6 +211,7 @@ export async function POST(request: Request) {
 
   const result = await processContextSource(target.project, input, parseProfile(source.profile), {
     forceReprocess,
+    captureProcessingLog: isLocalhostRequest(request),
   });
   if (!result.skipped && !result.error) {
     const refreshed = await refreshProjectGapRuntime({

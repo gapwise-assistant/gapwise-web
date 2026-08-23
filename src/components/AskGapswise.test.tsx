@@ -31,6 +31,7 @@ describe('Ask chat picker', () => {
         id: 'chat_db',
         title: 'Stored chat',
         adkSessionId: 'session_db',
+        target: { type: 'decision', id: 'decision_1', text: 'Choose the release path.' },
         createdAt: '2026-08-17T18:00:00.000Z',
         updatedAt: '2026-08-17T18:01:00.000Z',
       }],
@@ -48,6 +49,7 @@ describe('Ask chat picker', () => {
       id: 'chat_db',
       firstQuestion: 'Restore this question',
       sessionId: 'session_db',
+      target: { type: 'decision', id: 'decision_1', text: 'Choose the release path.' },
       messages: [expect.objectContaining({ id: 'message_db', text: 'Restore this question' })],
     })]);
   });
@@ -58,6 +60,7 @@ describe('Ask research persistence state', () => {
     const status = researchStatusFromRecords([
       { assistantMessageId: 'assistant_saved', action: 'save' },
       { assistantMessageId: 'assistant_confirmed', action: 'use_as_answer', targetQuestionId: 'question_1', status: 'confirmed' },
+      { assistantMessageId: 'assistant_decision', action: 'use_as_decision', targetDecisionId: 'decision_1', status: 'confirmed' },
       { assistantMessageId: 'assistant_pending', action: 'use_as_answer', targetQuestionId: 'question_2', status: 'pending' },
       { assistantMessageId: 'assistant_context', action: 'save_as_context', provenance: 'user_confirmed_ai_response' },
       { assistantMessageId: 'assistant_legacy' },
@@ -66,6 +69,7 @@ describe('Ask research persistence state', () => {
     expect([...status.savedMessageIds]).toEqual(['assistant_saved', 'assistant_legacy']);
     expect([...status.savedContextMessageIds]).toEqual(['assistant_context']);
     expect([...status.confirmedAnswerMessageIds]).toEqual(['assistant_confirmed']);
+    expect([...status.confirmedDecisionMessageIds]).toEqual(['assistant_decision']);
   });
 });
 

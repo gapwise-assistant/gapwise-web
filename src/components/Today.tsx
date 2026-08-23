@@ -1,17 +1,16 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { Check, ChevronDown, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronRight, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
 import { FeedbackEvent, FeedbackRating } from '@/types/feedback';
 import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
 import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
-import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
+import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, openTodayDecisions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import {
   hasUsefulSuggestedAnswer,
-  localQuestionPresentation,
   localQuestionPresentations,
   localQuestionSuggestions,
   parseQuestionPresentations,
@@ -40,7 +39,7 @@ interface TodayProps {
   onUpdateProfile?: (profile: import('@/types/clarity').UserMemoryProfile) => void;
   profile?: import('@/types/clarity').UserMemoryProfile;
   onAnswerQuestion?: (question: TodayQuestion) => void;
-  onReopenQuestion?: (question: TodayQuestion) => Promise<void> | void;
+  onViewResolvedGaps?: () => void;
   onReviewDecision?: (nodeId: string) => void;
   onNavigateToSource?: (sourceId: string) => void;
   onViewReasoningPath?: (nodeId: string) => void;
@@ -106,7 +105,7 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   return 'Resolve these before the next important project decision.';
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onReopenQuestion, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
@@ -120,7 +119,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const [hiddenQuestionsExpanded, setHiddenQuestionsExpanded] = useState(false);
   const [hiddenRemindersExpanded, setHiddenRemindersExpanded] = useState(false);
   const [hiddenOtherExpanded, setHiddenOtherExpanded] = useState(false);
-  const [resolvedQuestionsExpanded, setResolvedQuestionsExpanded] = useState(false);
 
   const localBrief: DailyBrief = useMemo(
     () => generateDailyBrief({ userId, project, memories, feedbackEvents, force: Boolean(refreshCounter) }),
@@ -162,7 +160,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     setHiddenQuestionsExpanded(false);
     setHiddenRemindersExpanded(false);
     setHiddenOtherExpanded(false);
-    setResolvedQuestionsExpanded(false);
   }, [project.id]);
 
   const briefRecommendations = brief.recommendations
@@ -174,6 +171,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     .filter((recommendation) => recommendation.status === 'active' && recommendation.kind !== 'risk' && !hiddenRecommendations[recommendation.id])
     .slice(0, 5);
   const rankedGaps = useMemo(() => rankGaps(project), [project]);
+  const openDecisions = useMemo(() => openTodayDecisions(project), [project]);
   const persistedGap = project.active_question;
   const recalculatedPersistedGap = persistedGap
     ? rankedGaps.find((gap) => gap.node_id === persistedGap.node_id)
@@ -237,17 +235,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     } satisfies OpenQuestionRowItem;
   });
   const answeredItems = useMemo(() => answeredQuestionItems(project), [project]);
-  const answeredItemsWithPresentation = useMemo(() => answeredItems.map((item) => {
-    const presentation = localQuestionPresentation(item.question);
-    return {
-      ...item,
-      question: {
-        ...item.question,
-        presentationTitle: item.question.question,
-        presentationSummary: presentation.summary,
-      },
-    } satisfies OpenQuestionRowItem;
-  }), [answeredItems]);
   const questionItems: OpenQuestionRowItem[] = openQuestionItems;
   const nonQuestionItems = feedItems.filter((item) => item.itemType !== 'QUESTION');
   const hiddenQuestionItems = hiddenFeedItems.filter((item) => item.itemType === 'QUESTION');
@@ -554,54 +541,9 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     );
   };
 
-  const renderResolvedSection = () => answeredItemsWithPresentation.length > 0 ? (
-    <section className="space-y-2" aria-labelledby="resolved-questions-heading">
-      <button
-        type="button"
-        onClick={() => setResolvedQuestionsExpanded((current) => !current)}
-        aria-expanded={resolvedQuestionsExpanded}
-        className="inline-flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-300"
-      >
-        <span id="resolved-questions-heading">Resolved · {answeredItemsWithPresentation.length}</span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${resolvedQuestionsExpanded ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {resolvedQuestionsExpanded && (
-        <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/40">
-          {answeredItemsWithPresentation.map((item) => (
-            <div key={item.id} className="flex items-center gap-3 px-3 py-2.5 sm:px-4">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-slate-300">
-                  <Check className="mr-1 inline h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-                  {item.question.question}
-                </p>
-                <p className="mt-0.5 truncate text-xs text-slate-500" title={item.answer}>{item.answer}</p>
-              </div>
-              {onAnswerQuestion && (
-                <button
-                  type="button"
-                  onClick={() => onAnswerQuestion(item.question)}
-                  className="inline-flex h-8 shrink-0 items-center rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-300 hover:border-cyan-700 hover:bg-cyan-950/30 hover:text-cyan-100"
-                >
-                  Edit
-                </button>
-              )}
-              {onReopenQuestion && (
-                <button
-                  type="button"
-                  onClick={() => void onReopenQuestion(item.question)}
-                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-400 hover:border-amber-700 hover:bg-amber-950/20 hover:text-amber-200"
-                  title="Cancel this response and reopen the question"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                  Reopen
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  ) : null;
+  const hasResolvedGaps = answeredItems.length > 0 || project.nodes.some((node) =>
+    node.status === 'RESOLVED' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(node.type),
+  );
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-5 px-3 py-4 sm:px-6 sm:py-6">
@@ -615,7 +557,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
               <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
               <p className="text-xs text-slate-400">
-                {reminderCount} reminder{reminderCount === 1 ? '' : 's'} · {openQuestionCount} question{openQuestionCount === 1 ? '' : 's'} · {scope.type === 'project' ? project.title : 'Everything'}
+                {reminderCount} reminder{reminderCount === 1 ? '' : 's'} · {openQuestionCount} question{openQuestionCount === 1 ? '' : 's'} · {openDecisions.length} decision{openDecisions.length === 1 ? '' : 's'} · {scope.type === 'project' ? project.title : 'Everything'}
               </p>
             </div>
           </div>
@@ -663,7 +605,38 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         />
       )}
 
-      {(questionItems.length > 0 || answeredItemsWithPresentation.length > 0 || hiddenQuestionItems.length > 0 || Object.keys(hiddenQuestions).length > 0) && (
+      {openDecisions.length > 0 && (
+        <section className="space-y-2" aria-labelledby="today-decisions-heading">
+          <div className="flex items-center justify-between gap-3">
+            <h2 id="today-decisions-heading" className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-indigo-300">
+              Decisions · {openDecisions.length}
+            </h2>
+          </div>
+          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-indigo-900/60 bg-slate-900">
+            {openDecisions.map((decision) => (
+              <article key={decision.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold leading-snug text-slate-100">{decision.text}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    {decision.why_it_matters?.[0] ?? 'This project choice is still open and needs a recorded decision.'}
+                  </p>
+                </div>
+                {onReviewDecision && (
+                  <button
+                    type="button"
+                    onClick={() => onReviewDecision(decision.id)}
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500 hover:bg-indigo-900/40"
+                  >
+                    Decide
+                  </button>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {(questionItems.length > 0 || hasResolvedGaps || hiddenQuestionItems.length > 0 || Object.keys(hiddenQuestions).length > 0) && (
         <OpenQuestions
           items={questionItems}
           summary={questionSectionSummary(questionItems, project)}
@@ -672,12 +645,21 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         />
       )}
 
+      {hasResolvedGaps && onViewResolvedGaps && (
+        <button
+          type="button"
+          onClick={onViewResolvedGaps}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:border-cyan-800 hover:text-cyan-200"
+        >
+          View resolved gaps <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
+
       {renderHiddenQuestionSection()}
       {renderHiddenSection(hiddenReminderItems, 'Hidden reminders', 'hidden-reminders-heading', hiddenRemindersExpanded, () => setHiddenRemindersExpanded((current) => !current))}
       {renderHiddenSection(hiddenOtherItems, 'Hidden items', 'hidden-items-heading', hiddenOtherExpanded, () => setHiddenOtherExpanded((current) => !current))}
-      {renderResolvedSection()}
 
-      {feedItems.length === 0 && questionItems.length === 0 && answeredItemsWithPresentation.length === 0 && hiddenFeedItems.length === 0 && (
+      {feedItems.length === 0 && openDecisions.length === 0 && questionItems.length === 0 && !hasResolvedGaps && hiddenFeedItems.length === 0 && (
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
           <h3 className="text-sm font-bold text-slate-100">Nothing needs your attention right now</h3>
           <p className="mt-2 text-xs text-slate-500">Refresh after adding new context or memory.</p>

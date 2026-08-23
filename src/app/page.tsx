@@ -14,6 +14,7 @@ import { TracePanel } from '@/components/dev/TracePanel';
 import { Project, UserMemoryProfile, CandidateGap } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AskSource } from '@/lib/ask/adkClient';
+import type { AskTarget } from '@/types/ask';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
 import { processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
@@ -305,7 +306,7 @@ export default function Home() {
   const [feedbackEvents, setFeedbackEvents] = useState<FeedbackEvent[]>([]);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [askInitialPrompt, setAskInitialPrompt] = useState('');
-  const [askNewChatPrompt, setAskNewChatPrompt] = useState<{ id: string; text: string } | null>(null);
+  const [askNewChatPrompt, setAskNewChatPrompt] = useState<{ id: string; text: string; target?: AskTarget } | null>(null);
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isLoadingDemo, setIsLoadingDemo] = useState(false);
   const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
@@ -320,6 +321,7 @@ export default function Home() {
   const [storageMessage, setStorageMessage] = useState('');
   const [contextEntry, setContextEntry] = useState<ContextEntry | null>(null);
   const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
+  const [gapsNavigationRequest, setGapsNavigationRequest] = useState<{ status: 'resolved'; key: number } | null>(null);
   const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
   const loadingDemoLabel = isLoadingCareerDemo
@@ -421,6 +423,11 @@ export default function Home() {
       setStorageMessage(savedToApi ? '' : 'Scope saved locally. Persistent storage API was unavailable.');
     });
   }, [userId]);
+
+  const openResolvedGaps = useCallback(() => {
+    setGapsNavigationRequest({ status: 'resolved', key: Date.now() });
+    setActiveTab('scope');
+  }, []);
 
   const handleCreateProject = useCallback(async (input: CreateProjectInput) => {
     const result = await createProjectViaAPI(userId, input);
@@ -759,20 +766,22 @@ export default function Home() {
     }
   }, [generalContext, projects, updateProject, userId]);
 
-  const openChatWithPrompt = useCallback((prompt: string) => {
+  const openChatWithPrompt = useCallback((prompt: string, target?: AskTarget) => {
     setAnswerTarget(null);
     setAskInitialPrompt('');
-    setAskNewChatPrompt({ id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, text: prompt });
+    setAskNewChatPrompt({ id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, text: prompt, ...(target ? { target } : {}) });
     setActiveTab('ask');
   }, []);
 
   const openDontKnowHelp = useCallback(() => {
     if (!idontKnowGap) return;
     const prompt = `Help me figure out this unresolved question: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoff clearly, and suggest one practical next step without answering on my behalf.`;
+    const target: AskTarget = { type: 'question', id: idontKnowGap.node_id, text: idontKnowGap.question };
+    if (idontKnowProjectId && idontKnowProjectId !== GENERAL_CONTEXT_ID) handleSelectProject(idontKnowProjectId);
     setIdontKnowGap(null);
     setIdontKnowProjectId(null);
-    openChatWithPrompt(prompt);
-  }, [idontKnowGap, openChatWithPrompt]);
+    openChatWithPrompt(prompt, target);
+  }, [handleSelectProject, idontKnowGap, idontKnowProjectId, openChatWithPrompt]);
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
@@ -998,7 +1007,7 @@ export default function Home() {
               }
               else setActiveTab('ask');
             }}
-            onReopenQuestion={reopenAnsweredQuestion}
+            onViewResolvedGaps={openResolvedGaps}
             onReviewDecision={openDecisionWorkspace}
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });
@@ -1064,6 +1073,8 @@ export default function Home() {
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });
             }}
+            gapsNavigationRequest={gapsNavigationRequest}
+            onGapsNavigationHandled={() => setGapsNavigationRequest(null)}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
           />
         )}
@@ -1124,6 +1135,11 @@ export default function Home() {
           targetNodeId={decisionTarget.nodeId}
           onClose={() => setDecisionTarget(null)}
           onConfirm={saveDecision}
+          onStartChat={(prompt, target) => {
+            if (decisionProject.id !== GENERAL_CONTEXT_ID) handleSelectProject(decisionProject.id);
+            setDecisionTarget(null);
+            openChatWithPrompt(prompt, target);
+          }}
           onNavigateToSource={(sourceId) => {
             openContext({ sourceId, tab: 'recent' });
             setDecisionTarget(null);
