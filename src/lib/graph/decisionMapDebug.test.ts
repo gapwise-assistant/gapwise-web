@@ -25,7 +25,9 @@ describe('Decision Map debug trace', () => {
       },
       renderer: {
         positions: calculateDecisionMapLayout(project),
-        showSecondaryContext: false,
+        view: 'all',
+        visibleNodeIds: project.nodes.map((node) => node.id),
+        visibleEdgeIds: project.edges.map((edge) => edge.id),
         zoom: 1,
         pan: { x: 0, y: 0 },
         viewport: { width: 1200, height: 700 },
@@ -57,7 +59,7 @@ describe('Decision Map debug trace', () => {
     expect(trace.storyBackboneCandidates.suggestedBackbone.length).toBeLessThanOrEqual(8);
     expect(trace.collapseExpansionAnalysis.possibleSupportingClusters.some((cluster) => cluster.parentNodeId === 'bakery_location_decision')).toBe(true);
     expect(trace.whyThisMattersDebug.find((item) => item.selectedNodeId === 'bakery_location_decision')?.selectedPath?.goalNodeId).toBe('bakery_goal');
-    expect(trace.filterVisibilityTrace.map((item) => item.filter)).toEqual(['all', 'unresolved', 'critical', 'assumptions']);
+    expect(trace.filterVisibilityTrace.map((item) => item.filter)).toEqual(['story', 'focus', 'all']);
     expect(trace.layoutDiagnostics.nodes).toHaveLength(project.nodes.length);
     expect(trace.renderedStoryReadabilitySummary).toMatchObject({
       totalNodes: project.nodes.length,

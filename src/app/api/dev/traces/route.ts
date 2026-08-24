@@ -1,10 +1,16 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listTraces, recordTrace } from '@/lib/observability/trace';
+import { latestDecisionMapActivity, listTraces, recordTrace, updateLatestDecisionMapRenderer } from '@/lib/observability/trace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelPolicy } from '@/lib/agents/modelPolicy';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';
+import {
+  buildDecisionMapActivityFingerprintFromDebug,
+  decisionMapWarningCodes,
+  nodeTextFromDebug,
+  type DecisionMapActivityType,
+} from '@/lib/graph/decisionMapActivity';
 
 export const runtime = 'nodejs';
 
@@ -28,6 +34,9 @@ export async function GET(request: Request) {
 
 const decisionMapTraceSchema = z.object({
   userId: z.string().trim().min(1).optional(),
+  persistActivity: z.boolean().optional(),
+  activityFingerprint: z.string().min(1).optional(),
+  activityTrigger: z.string().trim().max(240).optional(),
   decisionMapDebug: z.object({
     schemaVersion: z.literal(1),
     projectId: z.string().trim().min(1),
@@ -59,6 +68,48 @@ export async function POST(request: Request) {
   try {
     const userId = await requireAuthenticatedUserId(request, parsed.data.userId);
     const decisionMapDebug = parsed.data.decisionMapDebug as unknown as DecisionMapDebugTrace;
+    const warningCodes = decisionMapWarningCodes(decisionMapDebug);
+    const fingerprint = parsed.data.activityFingerprint
+      ?? buildDecisionMapActivityFingerprintFromDebug(decisionMapDebug, warningCodes);
+
+    if (parsed.data.persistActivity === false) {
+      const trace = updateLatestDecisionMapRenderer(userId, decisionMapDebug.projectId, fingerprint, decisionMapDebug);
+      return NextResponse.json({ id: trace?.id ?? null, updated: Boolean(trace) });
+    }
+
+    const previous = latestDecisionMapActivity(userId, decisionMapDebug.projectId);
+    if (previous?.decisionMapActivity?.fingerprint === fingerprint) {
+      return NextResponse.json({ id: previous.id, duplicate: true });
+    }
+
+    const activityType: DecisionMapActivityType = !previous
+      ? 'map_built'
+      : warningCodes.some((warning) => !previous.decisionMapActivity?.warningCodes.includes(warning))
+        ? 'map_debug'
+        : 'map_updated';
+    const previousDebug = previous?.decisionMapDebug;
+    const currentNodes = new Map(decisionMapDebug.rawProjectGraph.nodes.map((node) => [node.id, node]));
+    const previousNodes = new Map(previousDebug?.rawProjectGraph.nodes.map((node) => [node.id, node]) ?? []);
+    const addedNodes = [...currentNodes.keys()].filter((id) => !previousNodes.has(id)).length;
+    const removedNodes = [...previousNodes.keys()].filter((id) => !currentNodes.has(id)).length;
+    const resolvedNodes = [...currentNodes.values()].filter((node) => node.status === 'RESOLVED' && previousNodes.get(node.id)?.status !== 'RESOLVED').length;
+    const currentEdges = new Set(decisionMapDebug.rawProjectGraph.edges.map((edge) => `${edge.source.id}:${edge.relationship}:${edge.target.id}`));
+    const previousEdges = new Set(previousDebug?.rawProjectGraph.edges.map((edge) => `${edge.source.id}:${edge.relationship}:${edge.target.id}`) ?? []);
+    const addedEdges = [...currentEdges].filter((edge) => !previousEdges.has(edge)).length;
+    const removedEdges = [...previousEdges].filter((edge) => !currentEdges.has(edge)).length;
+    const previousFocusId = previousDebug?.rawProjectGraph.focusAssessment?.actionNodeId ?? null;
+    const currentFocusId = decisionMapDebug.rawProjectGraph.focusAssessment?.actionNodeId ?? null;
+    const previousFocus = nodeTextFromDebug(previousDebug, previousFocusId);
+    const currentFocus = nodeTextFromDebug(decisionMapDebug, currentFocusId);
+    const changes = [
+      addedNodes ? `+${addedNodes} node${addedNodes === 1 ? '' : 's'}` : '',
+      removedNodes ? `-${removedNodes} node${removedNodes === 1 ? '' : 's'}` : '',
+      addedEdges ? `+${addedEdges} relationship${addedEdges === 1 ? '' : 's'}` : '',
+      removedEdges ? `-${removedEdges} relationship${removedEdges === 1 ? '' : 's'}` : '',
+      resolvedNodes ? `${resolvedNodes} item${resolvedNodes === 1 ? '' : 's'} resolved` : '',
+      previousFocus !== currentFocus && currentFocus ? `Focus: ${previousFocus ?? 'none'} → ${currentFocus}` : '',
+    ].filter(Boolean);
+
     const trace = recordTrace({
       userId,
       route: '/ui/decision-map',
@@ -69,6 +120,15 @@ export async function POST(request: Request) {
       contextIds: decisionMapDebug.rawProjectGraph.nodes.map((node) => node.id),
       scores: [],
       toolCalls: ['deterministic Decision Map debug instrumentation'],
+      decisionMapActivity: {
+        projectId: decisionMapDebug.projectId,
+        type: activityType,
+        fingerprint,
+        trigger: parsed.data.activityTrigger,
+        change: changes.join(' · ') || (activityType === 'map_built' ? 'Initial semantic graph captured.' : undefined),
+        focus: currentFocus,
+        warningCodes,
+      },
       decisionMapDebug,
     });
     return NextResponse.json({ id: trace.id });

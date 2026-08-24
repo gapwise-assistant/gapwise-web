@@ -1,4 +1,6 @@
 import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
+import type { DecisionMapProjection } from '@/lib/graph/decisionMapProjection';
+import { buildDecisionStoryEdges, isDecisionStoryNode, type DecisionStoryEdge } from '@/lib/graph/decisionStory';
 
 export interface ConstellationPoint {
   x: number;
@@ -198,6 +200,83 @@ export function calculateDecisionMapLayout(
   return Object.fromEntries(positions);
 }
 
+function storyLevels(nodes: ClarityNode[], edges: DecisionStoryEdge[]): Map<string, number> {
+  const incoming = new Map<string, string[]>();
+  edges.forEach((edge) => incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source]));
+  const levels = new Map<string, number>();
+  const visiting = new Set<string>();
+  const levelFor = (nodeId: string): number => {
+    const cached = levels.get(nodeId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(nodeId)) return 0;
+    visiting.add(nodeId);
+    const parents = (incoming.get(nodeId) ?? []).filter((parentId) => !visiting.has(parentId));
+    const level = parents.length > 0 ? Math.max(...parents.map(levelFor)) + 1 : 0;
+    visiting.delete(nodeId);
+    levels.set(nodeId, level);
+    return level;
+  };
+  nodes.forEach((node) => levelFor(node.id));
+  return levels;
+}
+
+/** Deterministic top-to-bottom story layout. Presentation edges are semantic,
+ * so depends_on is already reversed before levels are calculated. */
+export function calculateDecisionStoryLayout(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+  projection: Pick<DecisionMapProjection, 'visibleNodeIds'>,
+): Record<string, ConstellationPoint> {
+  const visible = new Set(projection.visibleNodeIds);
+  const visibleNodes = graph.nodes.filter((node) => visible.has(node.id) && isDecisionStoryNode(node));
+  const visibleEdges = buildDecisionStoryEdges({ ...graph, nodes: visibleNodes }, { visibleNodeIds: visibleNodes.map((node) => node.id) });
+  const levels = storyLevels(visibleNodes, visibleEdges);
+  const groups = new Map<number, ClarityNode[]>();
+  visibleNodes.forEach((node) => {
+    const depth = levels.get(node.id) ?? 0;
+    groups.set(depth, [...(groups.get(depth) ?? []), node]);
+  });
+
+  const positions: Record<string, ConstellationPoint> = {};
+  const maxColumns = Math.max(1, ...[...groups.values()].map((nodes) => nodes.length));
+  const width = Math.max(980, (maxColumns - 1) * 300 + 380);
+  [...groups.entries()].sort(([left], [right]) => left - right).forEach(([level, nodes]) => {
+    nodes.sort((left, right) => {
+      const scoreDifference = (right.impact * right.confidence) - (left.impact * left.confidence);
+      return scoreDifference || left.text.localeCompare(right.text);
+    });
+    const startX = width / 2 - ((nodes.length - 1) * 300) / 2;
+    nodes.forEach((node, index) => {
+      positions[node.id] = {
+        x: startX + index * 300,
+        y: 110 + level * 190,
+        z: 0,
+      };
+    });
+  });
+
+  return positions;
+}
+
+export function calculateDecisionStoryMetrics(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+  projection: Pick<DecisionMapProjection, 'visibleNodeIds'>,
+): { width: number; height: number } {
+  const positions = calculateDecisionStoryLayout(graph, projection);
+  const visibleNodes = graph.nodes.filter((node) => projection.visibleNodeIds.includes(node.id) && isDecisionStoryNode(node));
+  const bounds = visibleNodes.reduce((current, node) => {
+    const point = positions[node.id] ?? { x: 0, y: 0, z: 0 };
+    const dimensions = decisionMapNodeDimensions(node, false);
+    return {
+      maxX: Math.max(current.maxX, point.x + dimensions.width / 2),
+      maxY: Math.max(current.maxY, point.y + dimensions.height / 2),
+    };
+    }, { maxX: 0, maxY: 0 });
+  return {
+    width: Math.max(980, bounds.maxX + 180),
+    height: Math.max(620, bounds.maxY + 180),
+  };
+}
+
 const EDGE_PRIORITY: Record<ClarityEdge['type'], number> = {
   blocks: 0,
   depends_on: 1,
@@ -390,4 +469,62 @@ export function buildDecisionPath(
   }
 
   return { nodeIds, edgeIds };
+}
+
+const EXPLANATION_EDGE_PRIORITY: Record<ClarityEdge['type'], number> = {
+  blocks: 0,
+  depends_on: 0,
+  satisfies: 1,
+  affects: 2,
+  informs: 3,
+  supports: 4,
+  resolves: 4,
+  contradicts: 5,
+  supersedes: 5,
+  derived_from: 6,
+};
+
+function explanationDirection(edge: ClarityEdge): { from: string; to: string } {
+  return edge.type === 'depends_on'
+    ? { from: edge.target, to: edge.source }
+    : { from: edge.source, to: edge.target };
+}
+
+/**
+ * Finds a semantic explanation path without treating the graph as an
+ * undirected adjacency list. Persisted edges remain untouched.
+ */
+export function buildDecisionExplanation(
+  graph: Pick<Project, 'nodes' | 'edges'>,
+  startNodeId: string,
+): DecisionPath {
+  const goalIds = new Set(graph.nodes.filter((node) => node.type === 'GOAL').map((node) => node.id));
+  if (!graph.nodes.some((node) => node.id === startNodeId) || goalIds.has(startNodeId)) {
+    return { nodeIds: [startNodeId], edgeIds: [] };
+  }
+
+  const outgoing = new Map<string, ClarityEdge[]>();
+  graph.edges.forEach((edge) => {
+    const direction = explanationDirection(edge);
+    outgoing.set(direction.from, [...(outgoing.get(direction.from) ?? []), edge]);
+  });
+  outgoing.forEach((edges) => edges.sort((left, right) => (
+    EXPLANATION_EDGE_PRIORITY[left.type] - EXPLANATION_EDGE_PRIORITY[right.type]
+      || left.id.localeCompare(right.id)
+  )));
+
+  const search = (nodeId: string, visited: Set<string>, nodeIds: string[], edgeIds: string[]): DecisionPath | null => {
+    if (goalIds.has(nodeId)) return { nodeIds, edgeIds };
+    if (nodeIds.length >= Math.max(8, graph.nodes.length + 1)) return null;
+    for (const edge of outgoing.get(nodeId) ?? []) {
+      const next = explanationDirection(edge).to;
+      if (visited.has(next)) continue;
+      const result = search(next, new Set([...visited, next]), [...nodeIds, next], [...edgeIds, edge.id]);
+      if (result) return result;
+    }
+    return null;
+  };
+
+  return search(startNodeId, new Set([startNodeId]), [startNodeId], [])
+    ?? { nodeIds: [startNodeId], edgeIds: [] };
 }

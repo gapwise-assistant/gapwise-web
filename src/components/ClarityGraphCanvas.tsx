@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
-  Filter,
   Focus,
   PanelRightClose,
   PanelRightOpen,
@@ -12,12 +11,13 @@ import {
   X,
 } from 'lucide-react';
 import { ClarityNode, NodeType, Project } from '@/types/clarity';
-import { relationshipReasons } from '@/lib/graph/relationshipContext';
-import { buildDecisionPath } from '@/lib/graph/constellation';
+import { buildDecisionExplanation } from '@/lib/graph/constellation';
 import type { GraphViewport } from '@/components/ConstellationGraph';
 import { authFetch } from '@/lib/auth/client';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import { buildDecisionMapDebugTrace, type DecisionMapRendererDiagnostics } from '@/lib/graph/decisionMapDebug';
+import { buildDecisionMapProjection, type DecisionMapView } from '@/lib/graph/decisionMapProjection';
+import { buildDecisionMapActivityFingerprint, decisionMapWarningCodes } from '@/lib/graph/decisionMapActivity';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { DecisionMapActivity } from '@/components/DecisionMapActivity';
 
@@ -82,7 +82,8 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   onSelectSource,
   focusNodeId,
 }) => {
-  const [filter, setFilter] = useState<'all' | 'unresolved' | 'critical' | 'assumptions'>('all');
+  const [view, setView] = useState<DecisionMapView>('story');
+  const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [pathMode, setPathMode] = useState(false);
@@ -93,7 +94,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [rendererDiagnostics, setRendererDiagnostics] = useState<DecisionMapRendererDiagnostics | null>(null);
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const fullscreenPanelRef = useRef<HTMLDivElement | null>(null);
-  const lastDebugTraceKeyRef = useRef<string | null>(null);
+  const lastRendererSnapshotKeyRef = useRef<string | null>(null);
 
   useDismissibleModal(() => setIsFullscreen(false), fullscreenPanelRef, isFullscreen);
 
@@ -122,67 +123,124 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
     return () => controller.abort();
   }, [project.id, project.updated_at, userId]);
 
-  const filteredNodes = useMemo(() => project.nodes.filter((node) => {
-    if (filter === 'unresolved') return node.type === 'UNKNOWN' && node.status === 'OPEN';
-    if (filter === 'critical') return node.type === 'GOAL' || node.type === 'DECISION' || node.type === 'UNKNOWN';
-    if (filter === 'assumptions') return node.type === 'ASSUMPTION';
-    return true;
-  }), [filter, project.nodes]);
-
-  const mapProject: Project = useMemo(() => ({
-    ...project,
-    nodes: filteredNodes,
-    edges: project.edges.filter((edge) => filteredNodes.some((node) => node.id === edge.source) && filteredNodes.some((node) => node.id === edge.target)),
-  }), [filteredNodes, project]);
+  const projection = useMemo(() => buildDecisionMapProjection(
+    project,
+    focusAssessment,
+    view,
+    expandedClusterIds,
+  ), [expandedClusterIds, focusAssessment, project, view]);
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId);
-  const decisionPath = selectedNodeId ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
+  const decisionPath = selectedNodeId ? buildDecisionExplanation(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
+
+  const toggleCluster = useCallback((nodeId: string) => {
+    setExpandedClusterIds((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
 
   const handleLayoutDiagnostics = useCallback((diagnostics: DecisionMapRendererDiagnostics) => {
     setRendererDiagnostics(diagnostics);
   }, []);
 
+  // Renderer state is useful developer detail, but it is not a semantic map
+  // event. Update the latest event in place rather than appending a record.
   useEffect(() => {
     if (!rendererDiagnostics || !userId) return;
     const positions = Object.entries(rendererDiagnostics.positions)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, point]) => [id, point.x, point.y]);
+    const activityWarnings = decisionMapWarningCodes(buildDecisionMapDebugTrace(project, {
+      filter: 'story',
+      selectedNodeId: null,
+      focusMode: false,
+      pathMode: false,
+      focusAssessment,
+      projection: buildDecisionMapProjection(project, focusAssessment, 'story', new Set()),
+    }));
+    const activityFingerprint = buildDecisionMapActivityFingerprint(project, focusAssessment, activityWarnings);
     const traceKey = JSON.stringify({
+      activityFingerprint,
       projectId: project.id,
-      updatedAt: project.updated_at,
-      filter,
+      view,
+      expandedClusterIds: [...expandedClusterIds].sort(),
       selectedNodeId,
       focusMode,
       pathMode,
       focusActionNodeId: focusAssessment?.actionNodeId ?? null,
-      showSecondaryContext: rendererDiagnostics.showSecondaryContext,
+      visibleNodeIds: rendererDiagnostics.visibleNodeIds,
       positions,
       zoom: Number(rendererDiagnostics.zoom.toFixed(3)),
       pan: [Number(rendererDiagnostics.pan.x.toFixed(1)), Number(rendererDiagnostics.pan.y.toFixed(1))],
     });
-    if (lastDebugTraceKeyRef.current === traceKey) return;
+    if (lastRendererSnapshotKeyRef.current === traceKey) return;
     const timer = window.setTimeout(() => {
       const decisionMapDebug = buildDecisionMapDebugTrace(project, {
-        filter,
+        filter: view,
         selectedNodeId,
         focusMode,
         pathMode,
         focusAssessment,
+        projection,
         renderer: rendererDiagnostics,
       });
       void authFetch('/api/dev/traces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, decisionMapDebug }),
+        body: JSON.stringify({
+          userId,
+          persistActivity: false,
+          activityFingerprint,
+          decisionMapDebug,
+        }),
+      }).then(async (response) => {
+        if (!response.ok) return;
+        const body = await response.json().catch(() => null) as { updated?: boolean } | null;
+        if (body?.updated) lastRendererSnapshotKeyRef.current = traceKey;
+      }).catch(() => {
+        // Decision Map instrumentation is intentionally best-effort.
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [expandedClusterIds, focusAssessment, focusMode, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
+
+  // Persist one event for a meaningful project/focus change. This effect does
+  // not depend on selection, view, layout, viewport, or renderer diagnostics.
+  useEffect(() => {
+    if (!userId) return;
+    const timer = window.setTimeout(() => {
+      const semanticProjection = buildDecisionMapProjection(project, focusAssessment, 'story', new Set());
+      const semanticDebug = buildDecisionMapDebugTrace(project, {
+        filter: 'story',
+        selectedNodeId: null,
+        focusMode: false,
+        pathMode: false,
+        focusAssessment,
+        projection: semanticProjection,
+      });
+      const warnings = decisionMapWarningCodes(semanticDebug);
+      const activityFingerprint = buildDecisionMapActivityFingerprint(project, focusAssessment, warnings);
+      void authFetch('/api/dev/traces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          persistActivity: true,
+          activityFingerprint,
+          activityTrigger: project.sources.at(-1)?.filename,
+          decisionMapDebug: semanticDebug,
+        }),
       }).then((response) => {
         if (!response.ok) return;
-        lastDebugTraceKeyRef.current = traceKey;
         setTraceRefreshKey((current) => current + 1);
       }).catch(() => {
         // Decision Map instrumentation is intentionally best-effort.
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [filter, focusAssessment, focusMode, pathMode, project, rendererDiagnostics, selectedNodeId, userId]);
+  }, [project, userId, focusAssessment?.actionNodeId]);
 
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
@@ -198,7 +256,14 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
     onSelectNode(node);
   };
 
-  const renderInspector = () => (
+  const renderInspector = () => {
+    const informingEdges = selectedNode
+      ? project.edges
+        .filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)
+        .map((edge) => ({ edge, other: project.nodes.find((node) => node.id === (edge.source === selectedNode.id ? edge.target : edge.source)) }))
+        .filter(({ other }) => other && ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK'].includes(other.type))
+      : [];
+    return (
     <aside className="min-w-0 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-xl sm:p-5" aria-label="Decision Map node details">
       {selectedNode ? (
         <div className="space-y-4">
@@ -225,10 +290,10 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             </div>
           )}
           <div className="space-y-2 border-t border-slate-800 pt-3">
-            <span className="text-xs font-semibold text-slate-400">Connected relationships</span>
-            {relationshipReasons(project, selectedNode.id).length > 0
-              ? relationshipReasons(project, selectedNode.id).map((relationship) => <p key={relationship} className="text-xs leading-relaxed text-slate-300">{relationship}</p>)
-              : <p className="text-xs text-slate-500">No relationships recorded yet.</p>}
+            <span className="text-xs font-semibold text-slate-400">What informs this</span>
+            {informingEdges.length > 0
+              ? informingEdges.map(({ edge, other }) => <p key={edge.id} className="text-xs leading-relaxed text-slate-300"><span className="text-slate-500">{edge.type.replace('_', ' ')} · </span>{other?.text}</p>)
+              : <p className="text-xs text-slate-500">No supporting context is connected yet.</p>}
           </div>
           {selectedNode.type === 'DECISION' && onReviewDecision && (
             <button type="button" onClick={() => onReviewDecision(selectedNode)} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500">
@@ -258,7 +323,8 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         </div>
       )}
     </aside>
-  );
+    );
+  };
 
   const renderPath = () => (
     pathMode && selectedNode ? (
@@ -266,7 +332,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-rose-300">Why this matters</p>
-            <p className="mt-1 text-xs text-slate-400">The shortest connected reasoning path from this node toward a project goal.</p>
+            <p className="mt-1 text-xs text-slate-400">How this affects the decisions and outcomes that matter next.</p>
           </div>
           <button type="button" onClick={() => setPathMode(false)} className="rounded-md p-2 text-slate-500 hover:text-slate-200" aria-label="Close decision path"><X className="h-4 w-4" /></button>
         </div>
@@ -334,14 +400,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
 
         <div className="touch-scroll flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
-          <Filter className="ml-2 mr-1 h-3.5 w-3.5 shrink-0 text-slate-500" />
           {([
+            ['story', 'Project story'],
+            ['focus', 'Current focus'],
             ['all', `All (${project.nodes.length})`],
-            ['unresolved', 'Unresolved'],
-            ['critical', 'Critical path'],
-            ['assumptions', 'Assumptions'],
           ] as const).map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setFilter(id)} className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${filter === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}>
+            <button key={id} type="button" onClick={() => setView(id)} className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${view === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}>
               {label}
             </button>
           ))}
@@ -351,10 +415,14 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           <div className={isFullscreen ? 'flex min-h-[55dvh] min-w-0 flex-col gap-3 p-2 sm:p-4 lg:min-h-0' : 'min-w-0 space-y-3'}>
             <div className={isFullscreen ? 'relative min-h-0 flex-1' : 'relative'}>
               <LazyConstellationGraph
-                project={mapProject}
+                project={project}
+                projection={projection}
+                expandedClusterIds={expandedClusterIds}
+                onToggleCluster={toggleCluster}
                 selectedNodeId={selectedNodeId}
                 focusMode={focusMode}
                 pathMode={pathMode}
+                focusNodeId={focusAssessment?.actionNodeId ?? null}
                 dimension="2d"
                 expanded={isFullscreen}
                 viewport={viewport}

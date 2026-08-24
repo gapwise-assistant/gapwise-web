@@ -5,8 +5,10 @@ import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { POST } from './route';
 
 vi.mock('@/lib/observability/trace', () => ({
+  latestDecisionMapActivity: vi.fn(),
   listTraces: vi.fn(),
   recordTrace: vi.fn(),
+  updateLatestDecisionMapRenderer: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({

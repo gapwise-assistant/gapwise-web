@@ -7,16 +7,19 @@ import {
   calculateDecisionMapMetrics,
   decisionMapLaneForType,
   decisionMapNodeDimensions,
-  isDecisionMapSecondaryNode,
   type ConstellationPoint,
   type DecisionMapLane,
 } from '@/lib/graph/constellation';
+import { buildDecisionMapProjection, type DecisionMapProjection, type DecisionMapView } from '@/lib/graph/decisionMapProjection';
+import { buildDecisionStoryEdges, isDecisionStoryNode } from '@/lib/graph/decisionStory';
 
-export type DecisionMapFilter = 'all' | 'unresolved' | 'critical' | 'assumptions';
+export type DecisionMapFilter = DecisionMapView;
 
 export interface DecisionMapRendererDiagnostics {
   positions: Record<string, ConstellationPoint>;
-  showSecondaryContext: boolean;
+  view: DecisionMapView;
+  visibleNodeIds: string[];
+  visibleEdgeIds: string[];
   zoom: number;
   pan: { x: number; y: number };
   viewport: { width: number; height: number };
@@ -30,6 +33,7 @@ export interface DecisionMapDebugOptions {
   focusMode: boolean;
   pathMode: boolean;
   focusAssessment?: FocusAssessment | null;
+  projection?: DecisionMapProjection;
   renderer?: DecisionMapRendererDiagnostics;
 }
 
@@ -410,37 +414,34 @@ function isActionableNow(project: Project, node: ClarityNode): boolean {
   return !isNodeBlocked(project, node.id);
 }
 
-function visibleForFilter(project: Project, filter: DecisionMapFilter, showSecondaryContext: boolean): FilterVisibilityTrace {
-  const includedByFilter = (node: ClarityNode): boolean => {
-    if (filter === 'unresolved') return node.type === 'UNKNOWN' && node.status === 'OPEN';
-    if (filter === 'critical') return node.type === 'GOAL' || node.type === 'DECISION' || node.type === 'UNKNOWN';
-    if (filter === 'assumptions') return node.type === 'ASSUMPTION';
-    return true;
-  };
+function visibleForFilter(
+  project: Project,
+  filter: DecisionMapFilter,
+  focusAssessment: FocusAssessment | null,
+  currentProjection?: DecisionMapProjection,
+): FilterVisibilityTrace {
+  const projection = currentProjection ?? buildDecisionMapProjection(project, focusAssessment, filter, new Set());
+  const projectVisibleNodeIds = filter === 'story'
+    ? project.nodes.filter((node) => projection.visibleNodeIds.includes(node.id) && isDecisionStoryNode(node)).map((node) => node.id)
+    : projection.visibleNodeIds;
+  const visibleSet = new Set(projectVisibleNodeIds);
+  const storyEdgeIds = filter === 'story'
+    ? buildDecisionStoryEdges(project, { visibleNodeIds: projectVisibleNodeIds }).map((edge) => edge.id)
+    : projection.visibleEdgeIds;
   const nodeReasons = project.nodes.map((node) => {
-    if (!includedByFilter(node)) {
-      const reason = filter === 'unresolved'
-        ? 'Excluded: the current Unresolved filter keeps only OPEN UNKNOWN nodes.'
-        : filter === 'critical'
-          ? 'Excluded: the current Critical path filter keeps GOAL, DECISION, and UNKNOWN nodes.'
-          : 'Excluded: the current Assumptions filter keeps ASSUMPTION nodes.';
-      return { nodeId: node.id, visible: false, reason };
-    }
-    if (!showSecondaryContext && isDecisionMapSecondaryNode(node, project)) {
-      return { nodeId: node.id, visible: false, reason: 'Collapsed: secondary context is hidden by the renderer default.' };
-    }
-    return { nodeId: node.id, visible: true, reason: 'Included by the current filter and rendered in the default map view.' };
+    return visibleSet.has(node.id)
+      ? { nodeId: node.id, visible: true, reason: `Included in the ${filter} Decision Map view.` }
+      : { nodeId: node.id, visible: false, reason: `Collapsed or excluded from the ${filter} Decision Map view.` };
   });
   const visibleNodeIds = nodeReasons.filter((node) => node.visible).map((node) => node.nodeId);
-  const visibleSet = new Set(visibleNodeIds);
   return {
     filter,
     visibleNodeIds,
     hiddenNodeIds: nodeReasons.filter((node) => !node.visible).map((node) => node.nodeId),
-    visibleEdgeIds: project.edges.filter((edge) => visibleSet.has(edge.source) && visibleSet.has(edge.target)).map((edge) => edge.id),
+    visibleEdgeIds: storyEdgeIds,
     nodeReasons,
     visibleNodeCount: visibleNodeIds.length,
-    visibleEdgeCount: project.edges.filter((edge) => visibleSet.has(edge.source) && visibleSet.has(edge.target)).length,
+    visibleEdgeCount: storyEdgeIds.length,
     reductionFromAllPercent: 0,
     meaningfullyChangesGraph: false,
   };
@@ -486,7 +487,7 @@ function boundsForNodes(
     .filter((node) => visibleNodeIds.has(node.id) && positions[node.id])
     .map((node) => {
       const point = positions[node.id];
-      const dimensions = decisionMapNodeDimensions(node, isDecisionMapSecondaryNode(node, project));
+      const dimensions = decisionMapNodeDimensions(node, false);
       return { minX: point.x - dimensions.width / 2, maxX: point.x + dimensions.width / 2, minY: point.y - dimensions.height / 2, maxY: point.y + dimensions.height / 2 };
     });
   if (boxes.length === 0) return { minX: null, minY: null, maxX: null, maxY: null, width: 0, height: 0 };
@@ -528,7 +529,7 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
   const graphBoundingBox = boundsForNodes(project, visibleSet, positions);
   const layoutNodes = project.nodes.map((node) => {
     const visible = visibleSet.has(node.id);
-    const secondary = isDecisionMapSecondaryNode(node, project);
+    const secondary = false;
     const point = positions[node.id];
     const dimensions = point ? decisionMapNodeDimensions(node, secondary) : null;
     const estimatedLineCount = dimensions ? Math.min(6, Math.max(3, Math.ceil(node.text.length / (secondary ? 24 : 42)))) : null;
@@ -541,7 +542,7 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
       height: dimensions?.height ?? null,
       lane: lane === null ? 'Other context' : `Lane ${lane}: ${['Evidence & known', 'Assumptions & risks', 'Open questions', 'Decisions & actions', 'Goal'][lane]}`,
       visible,
-      collapsed: !visible && secondary && options.renderer?.showSecondaryContext === false,
+      collapsed: !visible,
       label: {
         estimatedWidth: dimensions ? Math.max(0, dimensions.width - 24) : null,
         estimatedHeight: dimensions ? Math.max(0, dimensions.height - 42) : null,
@@ -567,7 +568,7 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
     }
     edgesThroughNodes = visibleEdges.flatMap((edge) => project.nodes.some((node) => {
       if (!visibleSet.has(node.id) || node.id === edge.source || node.id === edge.target || !positions[node.id]) return false;
-      const dimensions = decisionMapNodeDimensions(node, isDecisionMapSecondaryNode(node, project));
+      const dimensions = decisionMapNodeDimensions(node, false);
       return segmentPassesThroughBox(positions[edge.source], positions[edge.target], positions[node.id], dimensions.width, dimensions.height);
     }) ? [edge.id] : []);
   }
@@ -579,8 +580,8 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
       const right = visibleNodes[second];
       const leftPoint = positions[left.id];
       const rightPoint = positions[right.id];
-      const leftDimensions = decisionMapNodeDimensions(left, isDecisionMapSecondaryNode(left, project));
-      const rightDimensions = decisionMapNodeDimensions(right, isDecisionMapSecondaryNode(right, project));
+      const leftDimensions = decisionMapNodeDimensions(left, false);
+      const rightDimensions = decisionMapNodeDimensions(right, false);
       if (Math.abs(leftPoint.x - rightPoint.x) < (leftDimensions.width + rightDimensions.width) / 2 && Math.abs(leftPoint.y - rightPoint.y) < (leftDimensions.height + rightDimensions.height) / 2) overlapPairs.push([left.id, right.id]);
     }
   }
@@ -610,7 +611,7 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
     longestEdge: edgeLengths.sort((left, right) => right.length - left.length || left.edgeId.localeCompare(right.edgeId))[0] ?? null,
     averageEdgeLength: edgeLengths.length ? edgeLengths.reduce((total, edge) => total + edge.length, 0) / edgeLengths.length : 0,
     maximumNodeDensityByLane: maxDensity,
-    emptyLanesOrSections: laneCounts.filter((lane) => lane.count === 0).map((lane) => lane.lane).concat(project.nodes.some((node) => isDecisionMapSecondaryNode(node, project)) ? [] : ['Other context']),
+    emptyLanesOrSections: laneCounts.filter((lane) => lane.count === 0).map((lane) => lane.lane),
   };
 }
 
@@ -624,10 +625,14 @@ export function buildDecisionMapDebugTrace(project: Project, options: DecisionMa
   const focusAssessment = options.focusAssessment ?? null;
   const focusNodeId = focusAssessment?.actionNodeId ?? null;
   const focusPrerequisites = new Set(focusNodeId ? getUnresolvedPrerequisites(project, focusNodeId).map((node) => node.id) : []);
-  const showSecondaryContext = options.renderer?.showSecondaryContext ?? false;
   const rawComponents = components(project);
   const goalPathByNode = new Map(project.nodes.map((node) => [node.id, goalPaths(project, node.id)]));
-  const filterTraces = (['all', 'unresolved', 'critical', 'assumptions'] as DecisionMapFilter[]).map((filter) => visibleForFilter(project, filter, showSecondaryContext));
+  const filterTraces = (['story', 'focus', 'all'] as DecisionMapFilter[]).map((filter) => visibleForFilter(
+    project,
+    filter,
+    focusAssessment,
+    filter === options.filter ? options.projection : undefined,
+  ));
   const allFilter = filterTraces.find((trace) => trace.filter === 'all')!;
   filterTraces.forEach((trace) => {
     trace.reductionFromAllPercent = allFilter.visibleNodeCount === 0 ? 0 : Number((((allFilter.visibleNodeCount - trace.visibleNodeCount) / allFilter.visibleNodeCount) * 100).toFixed(2));
@@ -700,7 +705,6 @@ export function buildDecisionMapDebugTrace(project: Project, options: DecisionMa
     return [{ parentNodeId, supportingNodeIds, count: supportingNodeIds.length, categories }];
   });
   const whyThisMatters = project.nodes
-    .filter((node) => !isDecisionMapSecondaryNode(node, project))
     .map((node) => {
       const paths = goalPathByNode.get(node.id) ?? [];
       const selectedPath = paths[0] ?? null;

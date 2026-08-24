@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Activity, Check, ChevronDown, ChevronUp, Copy, RefreshCw } from 'lucide-react';
 import { authFetch } from '@/lib/auth/client';
 import type { Project } from '@/types/clarity';
 import type { TraceAgentConfig, TraceEvent } from '@/types/observability';
+import { summarizeDecisionMapActivity } from '@/lib/graph/decisionMapActivity';
 
 interface DecisionMapActivityProps {
   userId: string;
@@ -12,23 +13,16 @@ interface DecisionMapActivityProps {
   traceRefreshKey?: number;
 }
 
-function formatTimestamp(value: string): string {
+function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Unknown time';
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-function isDecisionMapTrace(trace: TraceEvent): boolean {
-  return trace.route === '/ui/decision-map'
-    || trace.simulation === true
-    || trace.route === '/api/agents/turn'
-    || trace.route === '/api/context/ingest'
-    || trace.route === '/api/projects/decision-anchor';
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 function sourceActivityDate(source: Project['sources'][number]): string {
@@ -39,32 +33,174 @@ function sourceActivityStatus(source: Project['sources'][number]): string {
   return source.processing_log?.status ?? source.processing_status ?? 'recorded';
 }
 
-function DebugTraceStage({ title, value, open = false }: { title: string; value: unknown; open?: boolean }) {
+function CopyValue({ value }: { value: unknown }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <details className="rounded-md border border-slate-800 bg-slate-950/60 p-2" open={open}>
-      <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{title}</summary>
-      <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words border-t border-slate-800 pt-2 text-[10px] leading-relaxed text-slate-500">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard?.writeText(JSON.stringify(value, null, 2)).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+      className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-700 hover:text-cyan-200"
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
+
+function JsonDetails({ title, value }: { title: string; value: unknown }) {
+  return (
+    <details className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+      <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{title}</summary>
+      <div className="mt-2 flex justify-end border-t border-slate-800 pt-2"><CopyValue value={value} /></div>
+      <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed text-slate-600">{JSON.stringify(value, null, 2)}</pre>
+    </details>
+  );
+}
+
+function ContextProcessingDetails({ project }: { project: Project }) {
+  const sources = project.sources
+    .filter((source) => source.processing_log || source.processing_status || source.processed_at)
+    .slice()
+    .sort((left, right) => Date.parse(sourceActivityDate(right)) - Date.parse(sourceActivityDate(left)))
+    .slice(0, 8);
+  if (sources.length === 0) return <p className="text-[11px] text-slate-600">No saved context-processing logs for this project.</p>;
+  return (
+    <div className="space-y-2">
+      {sources.map((source) => {
+        const log = source.processing_log;
+        return (
+          <details key={source.id} className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+            <summary className="flex cursor-pointer items-center justify-between gap-2 text-[11px] text-slate-400">
+              <span className="truncate">{source.filename}</span>
+              <span className="shrink-0 text-slate-600">{formatDate(sourceActivityDate(source))} · {sourceActivityStatus(source)}</span>
+            </summary>
+            {log ? (
+              <div className="mt-2 space-y-1.5 border-t border-slate-800 pt-2">
+                <p className="text-slate-500">{log.duration_ms}ms · {source.derived_node_ids.length} graph nodes · {log.stages.length} stages</p>
+                {log.stages.map((stage, index) => (
+                  <JsonDetails key={`${source.id}-${stage.name}-${index}`} title={`${stage.name} · ${stage.status} · ${stage.duration_ms}ms`} value={{ input: stage.input, output: stage.output, error: stage.error }} />
+                ))}
+                {log.error && <p className="text-rose-300">{log.error}</p>}
+                <JsonDetails title="Full local processing log" value={log} />
+              </div>
+            ) : <p className="mt-2 border-t border-slate-800 pt-2 text-slate-600">Only processing metadata was saved; no detailed localhost log is available.</p>}
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+function GraphDetails({ trace }: { trace: TraceEvent }) {
+  const debug = trace.decisionMapDebug;
+  const [showIds, setShowIds] = useState(false);
+  if (!debug) return null;
+  const visibleIds = new Set(debug.filterVisibilityTrace.find((item) => item.filter === 'story')?.visibleNodeIds ?? []);
+  const visibleNodes = debug.rawProjectGraph.nodes.filter((node) => visibleIds.has(node.id));
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+      <summary className="cursor-pointer text-xs font-bold text-slate-300">Graph</summary>
+      <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+        <p><span className="text-slate-300">Project graph:</span> {debug.rawProjectGraph.totalNodes} nodes · {debug.rawProjectGraph.totalEdges} relationships</p>
+        <div className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+          <p className="mb-1 font-semibold text-slate-400">Visible story nodes</p>
+          {visibleNodes.length > 0 ? visibleNodes.map((node) => (
+            <p key={node.id} className="leading-relaxed"><span className="text-slate-300">{node.type}</span> · {node.text}{showIds ? ` · ${node.id}` : ''}</p>
+          )) : <p>No visible story nodes.</p>}
+        </div>
+        <button type="button" onClick={() => setShowIds((current) => !current)} className="text-[10px] font-semibold text-cyan-300 hover:text-cyan-200">{showIds ? 'Hide IDs' : 'Show IDs'}</button>
+        <JsonDetails title="Focus analysis" value={debug.currentFocusAnalysis} />
+        <JsonDetails title="Story projection" value={debug.storyBackboneCandidates} />
+        <JsonDetails title="Collapse groups" value={debug.collapseExpansionAnalysis} />
+        <JsonDetails title="Why this matters" value={debug.whyThisMattersDebug} />
+        <JsonDetails title="Visibility and filters" value={debug.filterVisibilityTrace} />
+      </div>
+    </details>
+  );
+}
+
+function AgentDetails({ trace, project, relatedTraces }: { trace: TraceEvent; project: Project; relatedTraces: TraceEvent[] }) {
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+      <summary className="cursor-pointer text-xs font-bold text-slate-300">Agent activity</summary>
+      <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+        {trace.simulation && <p className="rounded-md border border-amber-900/60 bg-amber-950/20 px-2 py-1.5 text-amber-200/80">Simulation only · no model calls executed</p>}
+        {trace.agentConfigs && trace.agentConfigs.length > 0 && (
+          <div className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+            <p className="font-semibold text-slate-400">Configured agents</p>
+            {trace.agentConfigs.map((config: TraceAgentConfig) => <p key={config.agentName}>{config.agentName} · {config.model} · {config.thinkingLevel} thinking · {config.maxOutputTokens.toLocaleString()} tokens · {config.execution}</p>)}
+          </div>
+        )}
+        {trace.agentRuns && trace.agentRuns.length > 0 && <JsonDetails title="Model runs · latency, tokens, cost, validation" value={trace.agentRuns} />}
+        {trace.gapAnalysis && <JsonDetails title="Gap Agent" value={trace.gapAnalysis} />}
+        {trace.gapComparison && <JsonDetails title="Routing comparison" value={trace.gapComparison} />}
+        {trace.handoffs && <JsonDetails title="Handoffs" value={trace.handoffs} />}
+        {trace.contextSummary && <JsonDetails title="Context used" value={trace.contextSummary} />}
+        {trace.pipelineSteps && <JsonDetails title="Pipeline steps" value={trace.pipelineSteps} />}
+        {relatedTraces.length > 0 && <JsonDetails title="Related runtime traces" value={relatedTraces} />}
+        <details className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Context processing</summary>
+          <div className="mt-2"><ContextProcessingDetails project={project} /></div>
+        </details>
+      </div>
+    </details>
+  );
+}
+
+function RendererDetails({ trace }: { trace: TraceEvent }) {
+  const debug = trace.decisionMapDebug;
+  if (!debug) return null;
+  const layout = debug.layoutDiagnostics;
+  return (
+    <details className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+      <summary className="cursor-pointer text-xs font-bold text-slate-300">Renderer</summary>
+      <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+        <p className="text-slate-300">{layout.edgeCrossings.count ?? 0} crossings · {layout.edgesPassingThroughAnotherNode.count ?? 0} edge collisions · {layout.emptyLanesOrSections.length} empty sections</p>
+        <p>Viewport {layout.viewport.width} × {layout.viewport.height} · zoom {layout.currentZoom.toFixed(2)} · {layout.overlappingNodes.count} overlapping node pairs</p>
+        <JsonDetails title="Layout warnings and geometry" value={layout} />
+        <JsonDetails title="Rendered readability summary" value={debug.renderedStoryReadabilitySummary} />
+      </div>
+    </details>
+  );
+}
+
+function ActivityDetails({ trace, project, relatedTraces }: { trace: TraceEvent; project: Project; relatedTraces: TraceEvent[] }) {
+  return (
+    <details className="mt-3 border-t border-slate-800 pt-3">
+      <summary className="cursor-pointer text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">Details</summary>
+      <div className="mt-2 grid gap-2">
+        <GraphDetails trace={trace} />
+        <AgentDetails trace={trace} project={project} relatedTraces={relatedTraces} />
+        <RendererDetails trace={trace} />
+        <details className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <summary className="cursor-pointer text-xs font-bold text-slate-300">Raw data</summary>
+          <div className="mt-3 grid gap-2">
+            <JsonDetails title="Raw trace JSON" value={trace} />
+            {trace.decisionMapDebug && <JsonDetails title="Raw graph JSON" value={trace.decisionMapDebug.rawProjectGraph} />}
+            {trace.decisionMapDebug && <JsonDetails title="Raw renderer JSON" value={trace.decisionMapDebug.layoutDiagnostics} />}
+          </div>
+        </details>
+      </div>
     </details>
   );
 }
 
 export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId, project, traceRefreshKey = 0 }) => {
   const [traces, setTraces] = useState<TraceEvent[]>([]);
+  const [relatedTraces, setRelatedTraces] = useState<TraceEvent[]>([]);
   const [agentPolicy, setAgentPolicy] = useState<TraceAgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(true);
 
-  const contextHistory = project.sources
-    .filter((source) => source.processing_log || source.processing_status || source.processed_at)
-    .slice()
-    .sort((left, right) => Date.parse(sourceActivityDate(right)) - Date.parse(sourceActivityDate(left)))
-    .slice(0, 8);
-
   const load = useCallback(async () => {
     if (!userId) {
       setTraces([]);
+      setRelatedTraces([]);
       setLoading(false);
       return;
     }
@@ -73,18 +209,22 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
       const response = await authFetch(`/api/dev/traces?userId=${encodeURIComponent(userId)}`);
       if (!response.ok) {
         setTraces([]);
+        setRelatedTraces([]);
         setAgentPolicy([]);
         return;
       }
       const data = await response.json() as { traces?: TraceEvent[]; agentPolicy?: TraceAgentConfig[] };
       setTraces((data.traces ?? [])
-        .filter(isDecisionMapTrace)
-        .filter((trace) => !trace.decisionMapDebug || trace.decisionMapDebug.projectId === project.id)
+        .filter((trace) => trace.decisionMapActivity?.projectId === project.id)
         .slice(0, 6));
+      setRelatedTraces((data.traces ?? []).filter((trace) => (
+        trace.contextSummary?.scope === project.id
+        || trace.decisionMapActivity?.projectId === project.id
+      )));
       setAgentPolicy(data.agentPolicy ?? []);
     } catch {
-      // The map remains usable when the optional developer trace endpoint is unavailable.
       setTraces([]);
+      setRelatedTraces([]);
       setAgentPolicy([]);
     } finally {
       setLoading(false);
@@ -100,322 +240,46 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-cyan-400" />
-          <h3 id="decision-map-activity-title" className="text-xs font-extrabold uppercase tracking-[0.16em] text-slate-300">
-            Decision Map activity
-          </h3>
-          <span className="text-[10px] text-slate-600">context history + runtime trace</span>
+          <h3 id="decision-map-activity-title" className="text-xs font-extrabold uppercase tracking-[0.16em] text-slate-300">Decision Map Activity · {traces.length}</h3>
         </div>
         <div className="flex items-center gap-1.5">
-          {open && (
-            <button
-              type="button"
-              onClick={() => void load()}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200 disabled:opacity-50"
-              title="Refresh Decision Map activity"
-            >
-              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            aria-expanded={open}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200"
-          >
-            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            {open ? 'Hide' : 'Show'}
+          {open && <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200 disabled:opacity-50" title="Refresh Decision Map activity"><RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />Refresh</button>}
+          <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-400 hover:border-cyan-800 hover:text-cyan-200">
+            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}{open ? 'Hide' : 'Show'}
           </button>
         </div>
       </div>
-      {open && <>
-        <p className="mt-1 text-[11px] text-slate-500">
-          Shows how saved context was processed into the Decision Map, plus which agent configuration was used (or would be used). Runtime traces are temporary; context-processing history is saved with each source.
-        </p>
-        {traces.some((trace) => trace.simulation) && (
-          <p className="mt-2 rounded-md border border-amber-900/60 bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-200/80">
-            This is a deterministic simulation of initial context processing. No Gemini or ADK call ran; the steps show the agent route that would process an uploaded or changed context source.
-          </p>
-        )}
-
-        {contextHistory.length > 0 && (
-          <section className="mt-3" aria-labelledby="context-processing-history-title">
-            <div className="flex items-center justify-between gap-2">
-              <h4 id="context-processing-history-title" className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">
-                Context processing history · {contextHistory.length}
-              </h4>
-              <span className="text-[10px] text-slate-600">saved with project sources</span>
+      {open && (
+        loading ? <div className="mt-3 h-12 animate-pulse rounded-lg bg-slate-900/80" aria-label="Loading Decision Map activity" />
+          : traces.length === 0 ? (
+            <div className="mt-3 rounded-lg border border-dashed border-slate-800 bg-slate-900/50 px-3 py-2 text-[11px] text-slate-500">
+              No semantic map activity is available yet. Add project context or wait for the map to finish building.
+              {agentPolicy.length > 0 && <span className="ml-1 text-slate-600">Developer agent configuration remains available in the trace panel.</span>}
             </div>
-            <div className="mt-2 space-y-2">
-              {contextHistory.map((source) => {
-                const log = source.processing_log;
+          ) : (
+            <div className="mt-3 space-y-2">
+              {traces.map((trace) => {
+                const summary = summarizeDecisionMapActivity(trace);
+                if (!summary) return null;
                 return (
-                  <article key={source.id} className="rounded-lg border border-cyan-950/70 bg-slate-900/80 px-3 py-2.5 text-[11px]">
+                  <article key={trace.id} className="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-3 text-[11px]">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-200">{source.filename}</p>
-                        <p className="mt-0.5 text-slate-600">
-                          {formatTimestamp(sourceActivityDate(source))} · {log ? `${log.duration_ms}ms` : 'duration unavailable'} · {source.derived_node_ids.length} graph nodes
-                        </p>
+                        <p className="font-semibold text-slate-200">{formatTime(trace.started_at)} · {summary.title}</p>
+                        {summary.trigger && <p className="mt-1 truncate text-slate-400">{summary.type === 'map_built' ? 'Built from' : 'Source'} · {summary.trigger}</p>}
+                        {summary.change && <p className="mt-1 text-slate-300">{summary.change}</p>}
                       </div>
-                      <span className={sourceActivityStatus(source) === 'completed' ? 'text-emerald-300' : sourceActivityStatus(source) === 'failed' ? 'text-rose-300' : 'text-amber-300'}>
-                        {sourceActivityStatus(source)}
-                      </span>
+                      {summary.warningCount ? <span className="shrink-0 text-amber-300">{summary.warningCount} warning{summary.warningCount === 1 ? '' : 's'}</span> : null}
                     </div>
-
-                    {log ? (
-                      <details className="mt-2 border-t border-slate-800 pt-2">
-                        <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">
-                          View processing stages ({log.stages.length})
-                        </summary>
-                        <div className="mt-2 space-y-1.5">
-                          {log.stages.map((stage, index) => (
-                            <details key={`${source.id}-${stage.name}-${index}`} className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
-                              <summary className="flex cursor-pointer items-center justify-between gap-2 text-slate-400">
-                                <span>{stage.name}</span>
-                                <span className={stage.status === 'completed' ? 'text-emerald-300' : stage.status === 'failed' ? 'text-rose-300' : 'text-amber-300'}>
-                                  {stage.status} · {stage.duration_ms}ms
-                                </span>
-                              </summary>
-                              {(stage.input !== undefined || stage.output !== undefined || stage.error) && (
-                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-800 pt-2 text-[10px] leading-relaxed text-slate-600">
-                                  {JSON.stringify({ input: stage.input, output: stage.output, error: stage.error }, null, 2)}
-                                </pre>
-                              )}
-                            </details>
-                          ))}
-                          {log.error && <p className="text-rose-300">{log.error}</p>}
-                        </div>
-                        <details className="mt-2 border-t border-slate-800 pt-2">
-                          <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">View full local processing log</summary>
-                          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950/80 p-2 text-[10px] leading-relaxed text-slate-600">
-                            {JSON.stringify(log, null, 2)}
-                          </pre>
-                        </details>
-                      </details>
-                    ) : (
-                      <p className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
-                        This source has processing metadata, but no detailed localhost processing log was saved.
-                      </p>
-                    )}
+                    {summary.focus && <p className="mt-2"><span className="font-semibold text-slate-400">Current focus</span><span className="mt-0.5 block text-slate-200">{summary.focus}</span></p>}
+                    <p className="mt-2 text-slate-500">{summary.visibleNodes ?? 0} visible · {summary.collapsedNodes ?? 0} collapsed · {summary.relationships ?? 0} relationships</p>
+                    <ActivityDetails trace={trace} project={project} relatedTraces={relatedTraces.filter((related) => related.id !== trace.id)} />
                   </article>
                 );
               })}
             </div>
-          </section>
-        )}
-
-        {loading ? (
-        <div className="mt-3 h-12 animate-pulse rounded-lg bg-slate-900/80" aria-label="Loading Decision Map activity" />
-        ) : traces.length === 0 && contextHistory.length === 0 ? (
-        <div className="mt-3 rounded-lg border border-dashed border-slate-800 bg-slate-900/50 px-3 py-2 text-[11px] text-slate-500">
-          <p>No activity history is available yet. Add project context or run a graph turn to see how the map is built.</p>
-          {agentPolicy.length > 0 && (
-            <div className="mt-2 border-t border-slate-800 pt-2">
-              <p className="font-semibold uppercase tracking-[0.12em] text-slate-500">Configured routing (no call yet)</p>
-              <div className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-2">
-                {agentPolicy.map((config) => (
-                  <p key={config.agentName} className="text-slate-400">
-                    <span className="text-slate-300">{config.agentName}</span>
-                    {' · '}{config.model} · {config.thinkingLevel} thinking · {config.maxOutputTokens.toLocaleString()} tokens
-                    {' · '}{config.execution === 'would_use' ? 'would use' : 'not used locally'}
-                  </p>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        ) : traces.length > 0 ? (
-        <section className="mt-3" aria-labelledby="runtime-trace-history-title">
-          <h4 id="runtime-trace-history-title" className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-            Runtime activity · {traces.length}
-          </h4>
-        <div className="mt-3 grid gap-2 lg:grid-cols-2">
-          {traces.map((trace) => (
-            <article key={trace.id} className="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2.5 text-[11px]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-slate-200">{trace.label}</p>
-                  <p className="mt-0.5 text-slate-600">{formatTimestamp(trace.started_at)} · {trace.duration_ms}ms</p>
-                </div>
-                <span className={trace.error ? 'text-rose-300' : trace.simulation ? 'text-amber-300' : 'text-emerald-300'}>{trace.error ? 'failed' : trace.simulation ? 'simulation' : 'recorded'}</span>
-              </div>
-
-              {trace.agentConfigs && trace.agentConfigs.length > 0 && (
-                <div className="mt-2 border-t border-slate-800 pt-2">
-                  <p className="font-semibold uppercase tracking-[0.12em] text-slate-500">AI routing</p>
-                  <div className="mt-1 space-y-1 text-slate-400">
-                    {trace.agentConfigs.map((config) => (
-                      <p key={config.agentName}>
-                        <span className="text-slate-300">{config.agentName}</span>
-                        {' · '}{config.model}
-                        {' · '}{config.thinkingLevel} thinking
-                        {' · '}{config.maxOutputTokens.toLocaleString()} output tokens
-                        {' · '}{config.execution === 'would_use' ? 'would use' : config.execution}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {trace.agentRuns && trace.agentRuns.length > 0 && (
-                <details className="mt-2 border-t border-slate-800 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Agent run metrics</summary>
-                  <div className="mt-2 space-y-2">
-                    {trace.agentRuns.map((run) => (
-                      <div key={run.runId} className="rounded-md border border-slate-800 bg-slate-950/60 p-2 text-slate-500">
-                        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                          <span className="font-semibold text-slate-300">{run.agent}</span>
-                          <span className={run.execution === 'would_use' ? 'text-amber-300' : run.execution === 'used' ? 'text-emerald-300' : 'text-slate-400'}>{run.execution}</span>
-                        </div>
-                        <p className="mt-1">{run.model} · {run.thinkingLevel} thinking · {run.latencyMs}ms · {run.inputTokens} in / {run.outputTokens} out · {run.estimatedCost === null ? 'cost unavailable' : `$${run.estimatedCost.toFixed(4)} est. cost`}{run.costSource ? ` (${run.costSource.replaceAll('_', ' ')})` : ''}</p>
-                        <p className="mt-1">Validation: {run.validationStatus} · Confidence: {run.confidence === null ? 'n/a' : run.confidence.toFixed(3)} · Escalated: {run.escalated ? 'yes' : 'no'}</p>
-                        {run.escalationReason && <p className="mt-1 text-slate-600">Escalation: {run.escalationReason}</p>}
-                        <p className="mt-1 text-slate-600">Input: {run.inputSummary} · Output: {run.outputSummary}</p>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-
-              {trace.gapAnalysis && (
-                <details className="mt-2 border-t border-slate-800 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Gap Agent detail</summary>
-                  <div className="mt-2 space-y-1 text-slate-500">
-                    <p className="font-semibold text-slate-400">Candidate gaps</p>
-                    {trace.gapAnalysis.candidates.length > 0 ? trace.gapAnalysis.candidates.map((candidate) => (
-                      <div key={candidate.id} className="rounded-md border border-slate-800/80 bg-slate-950/40 p-2">
-                        <p>#{candidate.rank} {candidate.id} · priority {candidate.priority.toFixed(3)} · confidence {candidate.confidence.toFixed(3)} · {candidate.summary}</p>
-                        {candidate.decisionValue && (
-                          <div className="mt-1.5 space-y-1 border-t border-slate-800/70 pt-1.5 text-slate-600">
-                            <p>
-                              Decision value: <span className="text-slate-300">{candidate.decisionValue.level} ({candidate.decisionValue.score.toFixed(3)})</span>
-                              {' · '}expected change: {candidate.decisionValue.expectedActionChange.replaceAll('_', ' ')}
-                            </p>
-                            <p>
-                              Structural leverage {candidate.decisionValue.structuralLeverage.toFixed(3)}
-                              {' · '}urgency contribution {candidate.decisionValue.urgencyContribution.toFixed(3)}
-                              {' · '}answerability contribution {candidate.decisionValue.answerabilityContribution.toFixed(3)}
-                            </p>
-                            <p>
-                              Acquisition: {candidate.decisionValue.acquisitionDifficulty}
-                              {' · '}evidence: {candidate.decisionValue.evidenceStrength}
-                              {' · '}reversibility: {candidate.decisionValue.downstreamReversibility.replaceAll('_', ' ')}
-                            </p>
-                            <p title={candidate.decisionValue.affectedTargets.map((target) => `${target.type}:${target.id}`).join(', ')}>
-                              Affected targets: {candidate.decisionValue.affectedTargets.map((target) => `${target.type} · ${target.id}`).join(' | ') || 'none'}
-                            </p>
-                            <p title={candidate.decisionValue.strongestPathNodeIds.join(' → ')}>
-                              Strongest path: {candidate.decisionValue.strongestPathNodeIds.join(' → ') || 'none'}
-                              {candidate.decisionValue.strongestRelationship ? ` · ${candidate.decisionValue.strongestRelationship}` : ''}
-                            </p>
-                            <p>{candidate.decisionValue.reason}</p>
-                          </div>
-                        )}
-                      </div>
-                    )) : <p>No candidate gaps.</p>}
-                    <p className="mt-1 text-slate-400">Selected gap: <span className="text-cyan-200">{trace.gapAnalysis.selectedGapId ?? 'none'}</span></p>
-                    {typeof trace.gapAnalysis.retrievalAnswered === 'boolean' && (
-                      <p>Retrieved context: <span className={trace.gapAnalysis.retrievalAnswered ? 'text-emerald-300' : 'text-slate-400'}>
-                        {trace.gapAnalysis.retrievalAnswered ? 'already answers the candidates' : 'does not answer the selected gap'}
-                      </span></p>
-                    )}
-                    <p>Reason: {trace.gapAnalysis.selectionReason}</p>
-                    <p>Confidence: {trace.gapAnalysis.confidence === null ? 'n/a' : trace.gapAnalysis.confidence.toFixed(3)} · Evidence IDs: {trace.gapAnalysis.evidenceIds.join(', ') || 'none'}</p>
-                    <p>Escalated: {trace.gapAnalysis.escalated ? 'yes' : 'no'}{trace.gapAnalysis.escalationReason ? ` · ${trace.gapAnalysis.escalationReason}` : ''}</p>
-                    {trace.gapAnalysis.escalationModel && <p>Escalation candidate: {trace.gapAnalysis.escalationModel} · {trace.gapAnalysis.escalationThinkingLevel} thinking · {trace.gapAnalysis.escalationMaxOutputTokens?.toLocaleString()} tokens</p>}
-                  </div>
-                </details>
-              )}
-
-              {trace.gapComparison && (
-                <details className="mt-2 border-t border-slate-800 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Runtime comparison</summary>
-                  <div className="mt-2 space-y-1 text-slate-500">
-                    <p>Mode: <span className="text-slate-300">{trace.gapComparison.mode}</span> · Validation: {trace.gapComparison.validationStatus}</p>
-                    <p>Deterministic: {trace.gapComparison.deterministicGapId ?? 'none'} · Agent: {trace.gapComparison.agentGapId ?? 'none'}</p>
-                    <p>Effective: <span className="text-cyan-200">{trace.gapComparison.effectiveGapId ?? 'none'}</span> · Agreement: {trace.gapComparison.agreement === null ? 'n/a' : trace.gapComparison.agreement ? 'yes' : 'no'} · Fallback: {trace.gapComparison.fallbackUsed ? 'yes' : 'no'}</p>
-                    {trace.gapComparison.failureReason && <p>Safe failure reason: {trace.gapComparison.failureReason.replaceAll('_', ' ')}</p>}
-                  </div>
-                </details>
-              )}
-
-              {trace.handoffs && trace.handoffs.length > 0 && (
-                <details className="mt-2 border-t border-slate-800 pt-2">
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Handoffs</summary>
-                  <div className="mt-2 space-y-1 text-slate-500">
-                    {trace.handoffs.map((handoff) => (
-                      <p key={handoff.id}><span className="text-slate-300">{handoff.from} → {handoff.to}</span> · {handoff.inputCount} in / {handoff.outputCount} out · {handoff.selectedIds.length} selected IDs · {handoff.summary}</p>
-                    ))}
-                  </div>
-                </details>
-              )}
-
-              {trace.decisionAnchoring && (
-                <details className="mt-2 border-t border-slate-800 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">Decision anchoring</summary>
-                  <div className="mt-2 space-y-1 text-slate-500">
-                    <p>Decision: <span className="text-slate-300">{trace.decisionAnchoring.decisionTitle}</span></p>
-                    <p>Linked {trace.decisionAnchoring.linkCount} question IDs · source: {trace.decisionAnchoring.source.replaceAll('_', ' ')}</p>
-                    <p className="truncate" title={trace.decisionAnchoring.questionNodeIds.join(', ')}>
-                      Question IDs: {trace.decisionAnchoring.questionNodeIds.join(', ')}
-                    </p>
-                  </div>
-                </details>
-              )}
-
-              {trace.contextSummary && (
-                <p className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
-                  Context: {trace.contextSummary.includedContextCount} selected · {trace.contextSummary.goalCount} goals · {trace.contextSummary.unresolvedGapCount} open gaps · {trace.contextSummary.evidenceCount} evidence · {trace.contextSummary.preferenceCount} preferences · {trace.contextSummary.decisionCount} decisions
-                  {trace.contextSummary.scope ? ` · ${trace.contextSummary.scope}` : ''}
-                </p>
-              )}
-              {trace.contextIds.length > 0 && (
-                <p className="mt-1 truncate text-slate-600" title={trace.contextIds.join(', ')}>
-                  Context IDs: {trace.contextIds.slice(0, 6).join(', ')}{trace.contextIds.length > 6 ? '…' : ''}
-                </p>
-              )}
-              {trace.pipelineSteps && trace.pipelineSteps.length > 0 && (
-                <details className="mt-2 border-t border-slate-800 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">How this map was built</summary>
-                  <ol className="mt-2 space-y-1.5 border-l border-slate-700 pl-3">
-                    {trace.pipelineSteps.map((step, index) => (
-                      <li key={`${trace.id}-${step.name}`} className="relative text-slate-400">
-                        <span className="absolute -left-[1.05rem] top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-700 bg-slate-950 text-[8px] text-cyan-300">{index + 1}</span>
-                        <span className="text-slate-300">{step.name}</span>
-                        {' · '}{step.execution === 'would_use' ? 'would use' : step.execution === 'not_used' ? 'not used' : step.execution}
-                        <span className="block text-slate-600">{step.summary}{typeof step.contextCount === 'number' ? ` · ${step.contextCount} context items` : ''}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-              )}
-              {trace.decisionMapDebug && (
-                <details className="mt-2 border-t border-cyan-950/80 pt-2" open>
-                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-cyan-300">Decision Map debug trace · v{trace.decisionMapDebug.schemaVersion}</summary>
-                  <p className="mt-1 text-slate-500">
-                    {trace.decisionMapDebug.rawProjectGraph.totalNodes} nodes · {trace.decisionMapDebug.rawProjectGraph.totalEdges} edges · {trace.decisionMapDebug.renderedStoryReadabilitySummary.visibleNodes} visible · focus {trace.decisionMapDebug.renderedStoryReadabilitySummary.currentFocusActionNodeId ?? 'unavailable'}
-                  </p>
-                  <div className="mt-2 grid gap-2">
-                    <DebugTraceStage title="1. Raw project graph" value={trace.decisionMapDebug.rawProjectGraph} />
-                    <DebugTraceStage title="2. Semantic graph interpretation" value={trace.decisionMapDebug.semanticGraphInterpretation} />
-                    <DebugTraceStage title="3. Current focus analysis" value={trace.decisionMapDebug.currentFocusAnalysis} open />
-                    <DebugTraceStage title="4. Story backbone candidates" value={trace.decisionMapDebug.storyBackboneCandidates} />
-                    <DebugTraceStage title="5. Collapse / expansion analysis" value={trace.decisionMapDebug.collapseExpansionAnalysis} />
-                    <DebugTraceStage title="6. Why this matters debug" value={trace.decisionMapDebug.whyThisMattersDebug} />
-                    <DebugTraceStage title="7. Filter / visibility trace" value={trace.decisionMapDebug.filterVisibilityTrace} />
-                    <DebugTraceStage title="8. Layout diagnostics" value={trace.decisionMapDebug.layoutDiagnostics} />
-                    <DebugTraceStage title="9. Rendered story / readability summary" value={trace.decisionMapDebug.renderedStoryReadabilitySummary} open />
-                  </div>
-                </details>
-              )}
-            </article>
-          ))}
-        </div>
-        </section>
-        ) : null}
-      </>}
+          )
+      )}
     </section>
   );
 };

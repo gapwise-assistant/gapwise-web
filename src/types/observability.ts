@@ -138,6 +138,8 @@ export interface TraceEvent {
   decisionAnchoring?: TraceDecisionAnchoring;
   /** Client-rendered, deterministic Decision Map instrumentation. */
   decisionMapDebug?: DecisionMapDebugTrace;
+  /** Semantic event metadata used by the compact Decision Map Activity feed. */
+  decisionMapActivity?: import('@/lib/graph/decisionMapActivity').PersistedDecisionMapActivity;
   /** True when the event describes a deterministic demo simulation, not an AI call. */
   simulation?: boolean;
   error?: string;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDecisionPath,
+  buildDecisionExplanation,
   calculateConstellationLayout,
   calculateDecisionMapMetrics,
   calculateDecisionMapLayout,
@@ -33,6 +34,15 @@ describe('constellation graph view model', () => {
 
     expect(path.nodeIds).toEqual(['unknown_target_user', 'node_decision_track', 'node_goal']);
     expect(path.edgeIds).toEqual(['e5', 'e3']);
+  });
+
+  it('builds a directed explanation that prefers dependency steps before a direct goal support edge', () => {
+    const project = createGoldenDemoProject();
+    const path = buildDecisionExplanation(project, 'unknown_target_user');
+
+    expect(path.nodeIds[0]).toBe('unknown_target_user');
+    expect(path.nodeIds.at(-1)).toBe('node_goal');
+    expect(path.nodeIds.length).toBeGreaterThan(1);
   });
 
   it('places the decision map in a readable semantic hierarchy', () => {
