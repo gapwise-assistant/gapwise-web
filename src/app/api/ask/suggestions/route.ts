@@ -65,6 +65,7 @@ export async function POST(request: Request) {
       userId,
       projectId: parsed.data.projectId,
       message: buildSuggestionRequestMessage(parsed.data.scopeLabel),
+      structuredResponse: false,
     });
     const suggestions = parseSuggestedQuestions(result.answer);
     if (!suggestions.top.length && !suggestions.other.length) {

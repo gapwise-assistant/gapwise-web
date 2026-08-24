@@ -11,6 +11,7 @@ import {
   CAREER_CONFLICT_RECRUITER_SOURCE_ID,
 } from '@/lib/demo/careerConflict';
 import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 function includesAny(text: string, terms: string[]): boolean {
   const lower = text.toLowerCase();
@@ -88,6 +89,7 @@ export function generateAttentionCandidates(params: {
 
   params.contextPack?.upcomingCommitments
     .filter(isCalendarCommitment)
+    .filter((commitment) => !isNextActionSatisfied(reasoningProject, commitment))
     .forEach((commitment) => {
       const startTime = nodeTimestamp(commitment.text, 'Starts');
       const endTime = nodeTimestamp(commitment.text, 'Ends') || startTime;
@@ -109,6 +111,7 @@ export function generateAttentionCandidates(params: {
             : `Review what you need before ${title}.`,
           source_node_ids: [commitment.id],
           source_ids: sourceRef ? [sourceRef] : [],
+          action_node_id: commitment.id,
           context_pack: params.contextPack!,
           status: 'active',
           factors: {
@@ -275,6 +278,7 @@ export function generateAttentionCandidates(params: {
           : gap.question,
         source_node_ids: [gap.node_id, ...gap.blocked_decision_ids],
         source_ids: node?.source_refs ?? [],
+        action_node_id: gap.node_id,
         context_pack: contextPack,
         status: 'active',
         factors: {
@@ -290,6 +294,52 @@ export function generateAttentionCandidates(params: {
       })
     );
   });
+
+  reasoningProject.nodes
+    .filter((node) => node.status === 'OPEN'
+      && (node.type === 'DECISION' || node.type === 'NEXT_ACTION')
+      && (node.type !== 'NEXT_ACTION' || !isNextActionSatisfied(reasoningProject, node)))
+    .forEach((node) => {
+      const isDecision = node.type === 'DECISION';
+      const contextPack = params.contextPack ?? buildContextPack({
+        userId,
+        query: node.text,
+        project: reasoningProject,
+        profile: {
+          answer_density: 'concise',
+          question_frequency: 'moderate',
+          challenge_level: 'high',
+          evidence_preference: 'research_first',
+          brainstorm_style: 'diverge_then_converge',
+          uncertainty_style: 'explicit',
+        },
+        durableMemories: memories,
+      });
+      candidates.push(withAttentionScore({
+        id: `rec_${isDecision ? 'decision' : 'action'}_${node.id}`,
+        kind: isDecision ? 'gap' : 'preparation',
+        title: node.text,
+        reason: node.why_it_matters?.[0] ?? (isDecision
+          ? 'This project decision is still open.'
+          : 'This is an available next step in the project.'),
+        next_action: isDecision ? `Make and record the decision: ${node.text}` : node.text,
+        source_node_ids: [node.id],
+        source_ids: node.source_refs,
+        action_node_id: node.id,
+        context_pack: contextPack,
+        status: 'active',
+        factors: {
+          goal_alignment: 0.78,
+          impact: node.impact,
+          urgency: dueSoon(project) ? 0.82 : 0.45,
+          actionability: isDecision ? 0.65 : 0.9,
+          evidence_confidence: node.confidence,
+          unresolved_risk: isDecision ? 0.65 : 0.35,
+          momentum: project.history.length ? 0.72 : 0.55,
+          estimated_effort: isDecision ? 0.45 : 0.3,
+        },
+      }));
+    });
 
   // Risks remain in the graph and Context Pack as evidence. They are not
   // emitted as standalone Today recommendations because a raw risk has no

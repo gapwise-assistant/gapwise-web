@@ -220,6 +220,17 @@ export async function POST(request: Request) {
     if (isDecisionAction && !targetDecisionId) {
       throw new StorageError('This decision chat is missing its target.', 'VALIDATION_ERROR');
     }
+    if (isQuestionAction) {
+      if (assistantMessage.outcome !== 'conclusion' || !assistantMessage.conclusion?.trim()) {
+        throw new StorageError('Only a structured conclusion can be used as a question answer.', 'VALIDATION_ERROR');
+      }
+      if (assistantMessage.resolvesQuestionId !== targetQuestionId) {
+        throw new StorageError('This conclusion targets a different open question.', 'VALIDATION_ERROR');
+      }
+    }
+    if (isDecisionAction && (assistantMessage.outcome !== 'conclusion' || !assistantMessage.conclusion?.trim())) {
+      throw new StorageError('Only a structured conclusion can be used as a decision.', 'VALIDATION_ERROR');
+    }
     if (isQuestionAction) await assertTargetQuestion(userId, chat.projectId, targetQuestionId!);
     if (isDecisionAction) await assertTargetDecision(userId, chat.projectId, targetDecisionId!);
 
@@ -236,7 +247,9 @@ export async function POST(request: Request) {
     const retrievedAt = webSources.map((source) => source.retrievedAt).filter((value): value is string => Boolean(value)).sort()[0]
       ?? new Date().toISOString();
     const now = new Date().toISOString();
-    const text = body.text;
+    const text = (isQuestionAction || isDecisionAction)
+      ? assistantMessage.conclusion!.trim()
+      : body.text;
 
     const research: AskResearchEvidence = {
       id: existingUseAsAnswer?.id ?? stableId(`${body.assistantMessageId}:${text}:${body.action}`),

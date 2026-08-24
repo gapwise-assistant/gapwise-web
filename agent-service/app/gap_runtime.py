@@ -86,11 +86,23 @@ Rules:
   user-facing fields: focus, whyNow, nextStep, and whatCouldChange.
 - Start focus with an action verb such as Decide, Confirm, Clarify, Find out,
   or Verify. Make each recommendation field one short sentence.
-- whyNow may use a supplied project deadline or related Context Pack commitment
-  after structural selection; timing must never change which gap you select.
-- nextStep must be the smallest concrete way to acquire the missing answer.
-- whatCouldChange must name the downstream decision, action, scope, sequence,
-  or risk that a different answer could alter.
+- Ground whyNow in the selected gap's exact text, its supplied why-it-matters
+  rationale, and the strongest graph target. Prefer a concrete decision, goal,
+  constraint, risk, next action, or supplied Context Pack commitment over
+  generic descriptions of importance.
+- whyNow may mention the supplied project deadline only when one exists; never
+  invent a date or say "before the project deadline" when no date was supplied.
+  Timing must never change which gap you select.
+- nextStep must be one concrete way to acquire the missing answer. Name the
+  smallest relevant test, check, question to ask, owner to contact, or supplied
+  source to consult. Do not say only "review the linked evidence", "verify the
+  remaining uncertainty", or "record the answer".
+- whatCouldChange must explain the actual downstream consequence using a
+  conditional when possible: "If X, then Y; if not, Z." Name the decision,
+  action, scope, sequence, risk, or goal that a different answer could alter.
+  Do not use filler such as "this could change the scope of the plan" or
+  "this could change confidence in the decision" without naming the project
+  consequence.
 - recommendation.supportingIds must contain only identifiers already attached
   to the selected candidate: its source unknowns, evidence, decision paths, or
   affected decisions. Never cite unrelated context.

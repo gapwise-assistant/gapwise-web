@@ -148,6 +148,37 @@ describe('POST /api/ask', () => {
     }));
   });
 
+  it('persists user context but does not promote the assistant exploration into context', async () => {
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: 'Would a monthly gathering feel more manageable for a first trial run?',
+      outcome: 'exploration',
+      sessionId: 'session_breakfast',
+      sources: [],
+    });
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'I am unsure whether the Sunday community breakfast should be weekly or monthly. What should I focus on first?',
+      chatId: 'chat_breakfast',
+      userMessageId: 'message_breakfast',
+      projectId: 'project_breakfast',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(persistAskConversationContext).toHaveBeenCalledOnce();
+    expect(persistAskConversationContext).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'message_breakfast',
+      text: expect.stringContaining('Sunday community breakfast'),
+    }));
+    expect(persistAskConversationContext).not.toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Would a monthly gathering'),
+    }));
+    expect(askStorage.saveAskMessage).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
+      role: 'assistant',
+      outcome: 'exploration',
+      text: expect.stringContaining('Would a monthly gathering'),
+    }));
+  });
+
   it('persists the originating Ask target on a new chat', async () => {
     vi.mocked(askGapswise).mockResolvedValue({
       answer: 'Let us compare the options.',

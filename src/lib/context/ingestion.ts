@@ -1,7 +1,7 @@
 import { ClarityNode, ContextProcessingLog, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
-import { linkOpenDecisionQuestions, matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
+import { matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
 import {
   questionIdentityKey,
   questionsShareSubject,
@@ -669,6 +669,9 @@ function relationshipRoleCompatible(
     case 'resolves':
       return hasConclusiveResultEvidence(source)
         && (question(target) || target.type === 'DECISION');
+    case 'satisfies':
+      return source.type === 'NEXT_ACTION'
+        && (question(target) || target.type === 'DECISION');
     case 'supersedes':
       return evidence(source) && (evidence(target) || question(target) || target.type === 'DECISION');
     case 'blocks':
@@ -949,7 +952,9 @@ export async function ingestContextSource(
           confidence,
         });
       }
-      if (targetNode) applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
+      if (targetNode && relationship.type !== 'satisfies') {
+        applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
+      }
     });
 
     // In the zero-cost/local path, a conclusive test or approval statement can
@@ -981,7 +986,6 @@ export async function ingestContextSource(
       });
     }
 
-    linkOpenDecisionQuestions(updated, sourceId, content, nodeIds, now);
   }
 
   const reasoningProject = projectForReasoning(updated);

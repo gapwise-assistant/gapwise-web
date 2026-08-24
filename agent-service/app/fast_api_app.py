@@ -288,8 +288,14 @@ async def route_ask(
         raise HTTPException(status_code=503, detail="Ask routing is unavailable.")
     prompt = (
         "Classify this request according to your routing policy. Return only the structured output.\n\n"
-        f"Request:\n{request.message}\n\n"
-        f"Trusted context supplied by Gapwise:\n{request.trusted_context}"
+        "The current user message is first-class context and may itself contain the project goal, "
+        "preferences, constraints, unresolved decisions, or facts needed for a useful response. "
+        "Do not treat an empty or sparse saved context as proof that the user has provided no context.\n\n"
+        f"Current user message:\n{request.message}\n\n"
+        f"Saved trusted context supplied by Gapwise (may be empty):\n{request.trusted_context}\n\n"
+        "Use both inputs. Choose internal_context when the current message contains useful project material "
+        "that the Partner Agent can analyze or use to ask one focused follow-up question. "
+        "Choose web_research only when current or external information must be verified outside Gapswise."
     )
     try:
         _, events = await _run_private_agent(

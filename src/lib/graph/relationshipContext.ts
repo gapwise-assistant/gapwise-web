@@ -5,6 +5,7 @@ const relationshipLabels: Record<ClarityEdge['type'], { outgoing: string; incomi
   contradicts: { outgoing: 'Contradicts', incoming: 'Contradicted by' },
   supersedes: { outgoing: 'Supersedes', incoming: 'Superseded by' },
   resolves: { outgoing: 'Resolves', incoming: 'Resolved by' },
+  satisfies: { outgoing: 'Completes', incoming: 'Completed by' },
   depends_on: { outgoing: 'Depends on', incoming: 'Dependency' },
   blocks: { outgoing: 'Blocks', incoming: 'Blocked by' },
   affects: { outgoing: 'Affects', incoming: 'Affected by' },

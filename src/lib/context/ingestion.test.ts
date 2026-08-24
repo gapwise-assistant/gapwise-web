@@ -272,6 +272,71 @@ describe('context ingestion', () => {
     expect(updated.edges.some((edge) => edge.type === 'informs')).toBe(false);
   });
 
+  it('persists satisfies for an intended action without resolving its target', async () => {
+    const project = createProjectFromInput({ name: 'Venue plan', goal: 'Choose and book a suitable venue.' }, '2026-08-20T09:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'satisfies-note',
+      filename: 'satisfies-note.txt',
+      type: 'text',
+      content: 'The next action is to select the venue for the workshop.',
+      derivedNodes: [
+        {
+          type: 'NEXT_ACTION',
+          text: 'Select the workshop venue.',
+          confidence: 0.9,
+          impact: 0.8,
+          relationship: 'satisfies',
+          relatedNodeIds: ['new:1'],
+        },
+        {
+          type: 'DECISION',
+          text: 'Choose the workshop venue.',
+          confidence: 0.9,
+          impact: 0.9,
+          status: 'OPEN',
+        },
+      ],
+    }, DEFAULT_USER_PROFILE);
+
+    const action = updated.nodes.find((node) => node.text === 'Select the workshop venue.');
+    const decision = updated.nodes.find((node) => node.text === 'Choose the workshop venue.');
+    expect(updated.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: action?.id, target: decision?.id, type: 'satisfies' }),
+    ]));
+    expect(action?.status).toBe('OPEN');
+    expect(decision?.status).toBe('OPEN');
+    expect(decision?.why_it_matters ?? []).not.toContain(expect.stringContaining('Resolved by newer evidence'));
+  });
+
+  it('rejects resolves from an unfinished action even when the target is a decision', async () => {
+    const project = createProjectFromInput({ name: 'Venue plan', goal: 'Choose and book a suitable venue.' }, '2026-08-20T09:00:00Z');
+    const updated = await ingestContextSource(project, {
+      sourceId: 'invalid-resolves-note',
+      filename: 'invalid-resolves-note.txt',
+      type: 'text',
+      content: 'The next action is to select the venue for the workshop.',
+      derivedNodes: [
+        {
+          type: 'NEXT_ACTION',
+          text: 'Select the workshop venue.',
+          confidence: 0.9,
+          impact: 0.8,
+          relationship: 'resolves',
+          relatedNodeIds: ['new:1'],
+        },
+        {
+          type: 'DECISION',
+          text: 'Choose the workshop venue.',
+          confidence: 0.9,
+          impact: 0.9,
+          status: 'OPEN',
+        },
+      ],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.edges.some((edge) => edge.type === 'resolves')).toBe(false);
+  });
+
   it('does not let negative evidence resolve an open question even when the model supplies resolves', async () => {
     const project = createProjectFromInput({ name: 'Release check', goal: 'Verify the release path.' }, '2026-08-20T09:00:00Z');
     project.nodes.push({
@@ -385,7 +450,7 @@ describe('context ingestion', () => {
     expect(restored.nodes.find((node) => node.id === nodeId)?.source_refs).toContain(source?.id);
   });
 
-  it('preserves an explicitly open decision and links same-source unknowns to it', async () => {
+  it('preserves an explicitly open decision without linking same-source unknowns automatically', async () => {
     const project = createGoldenDemoProject();
     const updated = await ingestContextSource(project, {
       sourceId: 'clinic-decision-source',
@@ -412,7 +477,7 @@ describe('context ingestion', () => {
     const decision = updated.nodes.find((node) => node.type === 'DECISION' && node.source_refs.includes('clinic-decision-source'));
     const question = updated.nodes.find((node) => node.type === 'UNKNOWN' && node.source_refs.includes('clinic-decision-source'));
     expect(decision?.status).toBe('OPEN');
-    expect(updated.edges).toEqual(expect.arrayContaining([
+    expect(updated.edges).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ source: question?.id, target: decision?.id, type: 'blocks' }),
     ]));
   });
@@ -434,8 +499,7 @@ describe('context ingestion', () => {
     const questionIds = updated.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('multi-decision-source')).map((node) => node.id);
     const questionEdges = updated.edges.filter((edge) => questionIds.includes(edge.source) && (edge.type === 'blocks' || edge.type === 'informs'));
     expect(decisions).toHaveLength(2);
-    expect(questionEdges).toHaveLength(2);
-    expect(new Set(questionEdges.map((edge) => edge.source)).size).toBe(2);
+    expect(questionEdges).toHaveLength(0);
   });
 
   it('does not mark every decision in a source open when only one decision is explicit', async () => {
@@ -454,7 +518,7 @@ describe('context ingestion', () => {
     expect(decisions.find((node) => node.text.startsWith('The billing'))?.status).toBe('RESOLVED');
   });
 
-  it('preserves every explicit ClinicFlow launch question and links them to the pending decision', async () => {
+  it('preserves every explicit ClinicFlow launch question without linking them automatically', async () => {
     let project = createProjectFromInput({ name: 'ClinicFlow', goal: 'Make a safe pilot decision.', deadline: '2026-09-04' }, '2026-08-20T12:00:00Z');
     project = await ingestContextSource(project, {
       sourceId: 'clinic-brief',
@@ -478,7 +542,7 @@ describe('context ingestion', () => {
       'Can one coordinator safely handle exception review during the Monday peak?',
     ]));
     expect(questions).toHaveLength(4);
-    expect(project.edges.filter((edge) => edge.type === 'blocks')).toHaveLength(4);
+    expect(project.edges.filter((edge) => edge.type === 'blocks')).toHaveLength(0);
 
     project = await ingestContextSource(project, {
       sourceId: 'clinic-steering',

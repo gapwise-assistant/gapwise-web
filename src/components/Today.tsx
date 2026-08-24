@@ -5,10 +5,9 @@ import { ChevronDown, ChevronRight, RefreshCw, RotateCcw, Sparkles } from 'lucid
 import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
-import { FeedbackEvent, FeedbackRating } from '@/types/feedback';
+import { FeedbackEvent } from '@/types/feedback';
 import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
-import { adaptProfileFromFeedback, applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
-import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, openTodayDecisions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
+import { buildComingUp, buildTodayQuestions, openTodayDecisions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import {
   hasUsefulSuggestedAnswer,
   localQuestionPresentations,
@@ -18,19 +17,18 @@ import {
   TodayQuestionSuggestion,
 } from '@/lib/today/questionPlans';
 import { buildTodayFeed, compactQuestionContext, compactQuestionReason } from '@/lib/today/feed';
-import { RecommendationCard, SnoozeOption } from '@/components/RecommendationCard';
-import { RecommendationWhy } from '@/components/RecommendationWhy';
 import { AppScope } from '@/types/scope';
 import { authFetch } from '@/lib/auth/client';
-import { calendarTimestampFromText, formatCalendarSchedule } from '@/lib/google/calendarFormatting';
 import { OpenQuestions, OpenQuestionRowItem } from '@/components/OpenQuestions';
 import { RecommendedFocus } from '@/components/RecommendedFocus';
-import { rankGaps } from '@/lib/tools/graphTools';
 import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
+import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import { focusAssessmentToGuidance } from '@/lib/focus/presentation';
 
 interface TodayProps {
   userId: string;
   project: Project;
+  projectRefreshVersion: number;
   scope: AppScope;
   memories: DurableMemory[];
   feedbackEvents: FeedbackEvent[];
@@ -105,20 +103,17 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   return 'Resolve these before the next important project decision.';
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVersion, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
-  const [selectedRecommendation, setSelectedRecommendation] = useState<AttentionCandidate | null>(null);
+  const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
   const [questionSuggestions, setQuestionSuggestions] = useState<Record<string, TodayQuestionSuggestion>>({});
   const [questionPresentations, setQuestionPresentations] = useState<Record<string, TodayQuestionPresentation>>({});
-  const [questionSuggestionSource, setQuestionSuggestionSource] = useState<'gapswise-agent' | 'local-context' | 'local-fallback'>('local-context');
   const [questionSuggestionWarning, setQuestionSuggestionWarning] = useState('');
   const [hiddenStatuses, setHiddenStatuses] = useState<Record<string, RecommendationStatus>>({});
   const [hiddenRecommendations, setHiddenRecommendations] = useState<Record<string, AttentionCandidate>>({});
   const [hiddenQuestions, setHiddenQuestions] = useState<Record<string, TodayQuestion>>({});
   const [hiddenQuestionsExpanded, setHiddenQuestionsExpanded] = useState(false);
-  const [hiddenRemindersExpanded, setHiddenRemindersExpanded] = useState(false);
-  const [hiddenOtherExpanded, setHiddenOtherExpanded] = useState(false);
 
   const localBrief: DailyBrief = useMemo(
     () => generateDailyBrief({ userId, project, memories, feedbackEvents, force: Boolean(refreshCounter) }),
@@ -131,7 +126,8 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     // show the locally recalculated brief immediately while the fresh server
     // brief is fetched below.
     setServerBrief(null);
-  }, [project.updated_at, memories]);
+    setFocusAssessment(null);
+  }, [project.updated_at, projectRefreshVersion, memories]);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -145,21 +141,23 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         if (!response.ok) throw new Error('Attention brief unavailable');
         return response.json();
       })
-      .then((body) => setServerBrief(body.brief as DailyBrief))
+      .then((body) => {
+        setServerBrief(body.brief as DailyBrief);
+        setFocusAssessment((body.focusAssessment as FocusAssessment | null) ?? null);
+      })
       .catch((error) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         setServerBrief(null);
+        setFocusAssessment(null);
       });
 
     return () => controller.abort();
-  }, [userId, scope, refreshCounter, project.updated_at]);
+  }, [userId, scope, refreshCounter, project.updated_at, projectRefreshVersion]);
 
   React.useEffect(() => {
     setHiddenRecommendations({});
     setHiddenQuestions({});
     setHiddenQuestionsExpanded(false);
-    setHiddenRemindersExpanded(false);
-    setHiddenOtherExpanded(false);
   }, [project.id]);
 
   const briefRecommendations = brief.recommendations
@@ -170,20 +168,21 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const recommendations = briefRecommendations
     .filter((recommendation) => recommendation.status === 'active' && recommendation.kind !== 'risk' && !hiddenRecommendations[recommendation.id])
     .slice(0, 5);
-  const rankedGaps = useMemo(() => rankGaps(project), [project]);
   const openDecisions = useMemo(() => openTodayDecisions(project), [project]);
-  const persistedGap = project.active_question;
-  const recalculatedPersistedGap = persistedGap
-    ? rankedGaps.find((gap) => gap.node_id === persistedGap.node_id)
-    : undefined;
-  const focusGap = persistedGap
-    ? { ...recalculatedPersistedGap, ...persistedGap, guidance: persistedGap.guidance ?? recalculatedPersistedGap?.guidance }
-    : rankedGaps[0];
-  const focusNode = focusGap ? project.nodes.find((node) => node.id === focusGap.node_id) : undefined;
+  const focusActionNode = focusAssessment?.actionNodeId
+    ? project.nodes.find((node) => node.id === focusAssessment.actionNodeId) ?? null
+    : null;
+  const canDecideFocus = focusActionNode?.type === 'DECISION'
+    && focusActionNode.status === 'OPEN';
+  const canResolveFocus = (
+    focusActionNode?.type === 'UNKNOWN'
+    || focusActionNode?.type === 'ASSUMPTION'
+  ) && focusActionNode.status === 'OPEN';
+  const focusGuidance = focusAssessment ? focusAssessmentToGuidance(focusAssessment) : undefined;
   const questions = buildTodayQuestions({
     project,
     brief,
-    excludedQuestionNodeIds: focusNode ? [focusNode.id] : [],
+    excludedQuestionNodeIds: canResolveFocus ? [focusActionNode.id] : [],
   });
   const feedItems = useMemo(() => buildTodayFeed(recommendations, questions, project), [recommendations, questions, project]);
   const hiddenCandidates = [
@@ -236,48 +235,35 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   });
   const answeredItems = useMemo(() => answeredQuestionItems(project), [project]);
   const questionItems: OpenQuestionRowItem[] = openQuestionItems;
-  const nonQuestionItems = feedItems.filter((item) => item.itemType !== 'QUESTION');
+  const recommendedFocusId = focusActionNode?.id;
+  const visibleDecisions = openDecisions.filter((node) => node.id !== recommendedFocusId);
+  const visibleQuestions = questionItems.filter((item) =>
+    !recommendedFocusId || !item.question.sourceNodeIds.includes(recommendedFocusId),
+  );
   const hiddenQuestionItems = hiddenFeedItems.filter((item) => item.itemType === 'QUESTION');
-  const hiddenReminderItems = hiddenFeedItems.filter((item) => item.itemType === 'REMINDER');
-  const hiddenOtherItems = hiddenFeedItems.filter((item) => item.itemType !== 'QUESTION' && item.itemType !== 'REMINDER');
-  const reminderCount = nonQuestionItems.filter((item) => item.itemType === 'REMINDER').length;
-  const reminderItems = nonQuestionItems.filter((item) => item.itemType === 'REMINDER');
-  const otherNonQuestionItems = nonQuestionItems.filter((item) => item.itemType !== 'REMINDER');
-  const hiddenCanonicalQuestionNodeIds = new Set([
-    ...hiddenQuestionNodeIds,
-    ...Object.values(hiddenQuestions).flatMap((question) => question.sourceNodeIds),
-    ...Object.values(hiddenRecommendations).flatMap((recommendation) => recommendation.source_node_ids),
-  ]);
-  const openQuestionCount = countTodayOpenQuestions(project, hiddenCanonicalQuestionNodeIds);
   const feedQuestions = questionItems.map(({ question, context }) => ({
     ...question,
     reason: question.reason || context,
   }));
-  const focusQuestionItem = focusGap
-    ? questionItems.find((item) => item.question.sourceNodeIds.includes(focusGap.node_id))
+  const focusQuestionItem = canResolveFocus
+    ? questionItems.find((item) => item.question.sourceNodeIds.includes(focusActionNode.id))
     : undefined;
   const focusQuestion = focusQuestionItem?.question
-    ?? (focusNode ? todayQuestionFromNode(project, focusNode) : undefined);
-  const focusHidden = focusGap
-    ? hiddenQuestionItems.some((item) => item.question?.sourceNodeIds.includes(focusGap.node_id))
-      || Boolean(hiddenRecommendations[`rec_gap_${focusGap.node_id}`])
+    ?? (focusActionNode ? todayQuestionFromNode(project, focusActionNode) : undefined);
+  const focusHidden = focusActionNode
+    ? hiddenQuestionItems.some((item) => item.question?.sourceNodeIds.includes(focusActionNode.id))
+      || Boolean(hiddenRecommendations[`rec_gap_${focusActionNode.id}`])
     : false;
   const showRecommendedFocus = Boolean(
-    focusGap?.guidance && focusNode?.status === 'OPEN' && !focusHidden,
+    focusGuidance && (!focusActionNode || focusActionNode.status === 'OPEN') && !focusHidden,
   );
-  const promotedCommitmentIds = new Set(
-    [...feedItems, ...hiddenFeedItems]
-      .filter((item) => item.itemType === 'REMINDER' && item.calendarCommitmentId)
-      .map((item) => item.calendarCommitmentId as string)
-  );
-  const comingUp = buildComingUp(brief, new Date(), 4, promotedCommitmentIds);
+  const comingUp = buildComingUp(brief, new Date(), 4);
   const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })));
 
   React.useEffect(() => {
     if (!feedQuestions.length) {
       setQuestionSuggestions({});
       setQuestionPresentations({});
-      setQuestionSuggestionSource('local-context');
       setQuestionSuggestionWarning('');
       return;
     }
@@ -286,7 +272,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     const fallbackPresentations = Object.fromEntries(localQuestionPresentations(feedQuestions).map((presentation) => [presentation.questionId, presentation]));
     setQuestionSuggestions(fallbackSuggestions);
     setQuestionPresentations(fallbackPresentations);
-    setQuestionSuggestionSource('local-context');
     setQuestionSuggestionWarning('');
     const controller = new AbortController();
     const scopeProjectId = scope.type === 'project' ? scope.projectId : undefined;
@@ -314,13 +299,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
           ? parseQuestionPresentations(JSON.stringify({ presentations: body.presentations }), feedQuestions)
           : localQuestionPresentations(feedQuestions);
         setQuestionPresentations(Object.fromEntries(presentations.map((presentation) => [presentation.questionId, presentation])));
-        setQuestionSuggestionSource(
-          body.generatedBy === 'gapswise-agent'
-            ? 'gapswise-agent'
-            : body.generatedBy === 'local-fallback'
-              ? 'local-fallback'
-              : 'local-context'
-        );
         setQuestionSuggestionWarning(typeof body.warning === 'string' ? body.warning : '');
       })
       .catch((error) => {
@@ -329,58 +307,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       });
 
     return () => controller.abort();
-  }, [userId, project.id, project.title, project.updated_at, scope.type, scope.type === 'project' ? scope.projectId : '', questionPlanKey]);
-
-  const handleFeedback = (
-    recommendationId: string,
-    rating: FeedbackRating,
-    status: RecommendationStatus | null,
-    explanation?: string
-  ) => {
-    const event = createFeedbackEvent({
-      userId,
-      targetType: 'recommendation',
-      targetId: recommendationId,
-      rating,
-      explanation,
-      suppressDays: rating === 'not_now' ? 3 : rating === 'already_done' ? 365 : undefined,
-    });
-    onFeedbackEvent(event);
-    if (status) {
-      updateRecommendationStatus(recommendationId, status);
-      setHiddenStatuses((current) => ({ ...current, [recommendationId]: status }));
-    }
-    if (rating === 'wrong_assumption' && explanation) {
-      onUpdateMemories(applyCorrectionToMemories({ memories, explanation }));
-    }
-    if (profile && onUpdateProfile) {
-      onUpdateProfile(adaptProfileFromFeedback(profile, event));
-    }
-  };
-
-  const handleSnooze = (recommendation: AttentionCandidate, option: SnoozeOption) => {
-    const now = new Date();
-    const commitment = recommendation.context_pack.upcomingCommitments.find((node) =>
-      recommendation.source_node_ids.includes(node.id)
-    );
-    const startValue = commitment ? calendarTimestampFromText(commitment.text, 'Starts') : undefined;
-    const startTime = startValue ? new Date(startValue).getTime() : Number.NaN;
-    const suppressUntil = option === 'before_event' && Number.isFinite(startTime)
-      ? new Date(Math.max(now.getTime() + 60 * 1000, startTime - 10 * 60 * 1000)).toISOString()
-      : undefined;
-    const event = createFeedbackEvent({
-      userId,
-      targetType: 'recommendation',
-      targetId: recommendation.id,
-      rating: 'not_now',
-      suppressUntil,
-      suppressMinutes: suppressUntil ? undefined : option === 'before_event' ? 15 : option,
-      metadata: { snooze: option },
-    });
-    onFeedbackEvent(event);
-    updateRecommendationStatus(recommendation.id, 'not_now');
-    setHiddenStatuses((current) => ({ ...current, [recommendation.id]: 'not_now' }));
-  };
+  }, [userId, project.id, project.title, project.updated_at, projectRefreshVersion, scope.type, scope.type === 'project' ? scope.projectId : '', questionPlanKey]);
 
   const handleHide = (recommendation: AttentionCandidate) => {
     setHiddenRecommendations((current) => ({
@@ -416,77 +343,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     updateRecommendationStatus(recommendation.id, 'active');
     setHiddenStatuses((current) => ({ ...current, [recommendation.id]: 'active' }));
   };
-
-  const renderRecommendationCard = (item: typeof nonQuestionItems[number]) => (
-    <RecommendationCard
-      key={item.recommendation.id}
-      recommendation={item.recommendation}
-      itemType={item.itemType}
-      title={item.title}
-      description={item.description}
-      calendarStart={item.calendarStart}
-      calendarEnd={item.calendarEnd}
-      calendarSource={item.calendarSource}
-      question={item.question}
-      decisionNodeId={item.decisionNodeId}
-      questionSuggestion={item.question ? questionSuggestions[item.question.id] : undefined}
-      questionSuggestionSource={questionSuggestionSource}
-      onOpenWhy={setSelectedRecommendation}
-      onAnswerQuestion={onAnswerQuestion}
-      onReviewDecision={onReviewDecision}
-      onFeedback={handleFeedback}
-      onSnooze={handleSnooze}
-      onHide={handleHide}
-    />
-  );
-
-  const renderHiddenSection = (
-    items: typeof hiddenFeedItems,
-    label: string,
-    headingId: string,
-    expanded: boolean,
-    onToggle: () => void,
-  ) => items.length > 0 ? (
-    <section className="space-y-2" aria-labelledby={headingId}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="inline-flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-300"
-      >
-        <span id={headingId}>{label} · {items.length}</span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {expanded && (
-        <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/40">
-          {items.map((item) => {
-            const schedule = item.calendarStart
-              ? formatCalendarSchedule(item.calendarStart, item.calendarEnd, new Date())
-              : undefined;
-            return (
-              <div key={item.recommendation.id} className="flex items-center gap-3 px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-300">{item.title}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {schedule ?? item.description}
-                    {item.calendarSource ? ` · ${item.calendarSource}` : ''}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleRestore(item.recommendation)}
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-300 hover:border-cyan-700 hover:bg-cyan-950/30 hover:text-cyan-100"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                  Restore
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  ) : null;
 
   const renderHiddenQuestionSection = () => {
     const entries = [
@@ -556,9 +412,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
               <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
-              <p className="text-xs text-slate-400">
-                {reminderCount} reminder{reminderCount === 1 ? '' : 's'} · {openQuestionCount} question{openQuestionCount === 1 ? '' : 's'} · {openDecisions.length} decision{openDecisions.length === 1 ? '' : 's'} · {scope.type === 'project' ? project.title : 'Everything'}
-              </p>
             </div>
           </div>
 
@@ -574,46 +427,28 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         </div>
       </div>
 
-      <section className="space-y-2" aria-labelledby="reminders-heading">
-        <p id="reminders-heading" className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Reminders · {reminderCount}</p>
-        {reminderItems.length > 0 ? (
-          <div className="space-y-2">
-            {reminderItems.map(renderRecommendationCard)}
-          </div>
-        ) : (
-          <p className="border-y border-slate-800 py-3 text-xs text-slate-500">No reminders scheduled for today.</p>
-        )}
-      </section>
-
-      {otherNonQuestionItems.length > 0 && (
-        <section className="space-y-2">
-          <div className="space-y-2">
-            {otherNonQuestionItems.map(renderRecommendationCard)}
-          </div>
-        </section>
-      )}
-
       {questionSuggestionWarning && (
         <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
       )}
 
-      {showRecommendedFocus && focusGap?.guidance && (
+      {showRecommendedFocus && focusGuidance && (
         <RecommendedFocus
-          guidance={focusGap.guidance}
-          onResolve={focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
-          onViewDecisionMap={focusGap && onViewReasoningPath ? () => onViewReasoningPath(focusGap.node_id) : undefined}
+          guidance={focusGuidance}
+          onResolve={canResolveFocus && focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
+          onDecide={canDecideFocus && onReviewDecision ? () => onReviewDecision(focusActionNode.id) : undefined}
+          onViewDecisionMap={focusActionNode && onViewReasoningPath ? () => onViewReasoningPath(focusActionNode.id) : undefined}
         />
       )}
 
-      {openDecisions.length > 0 && (
+      {visibleDecisions.length > 0 && (
         <section className="space-y-2" aria-labelledby="today-decisions-heading">
           <div className="flex items-center justify-between gap-3">
             <h2 id="today-decisions-heading" className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-indigo-300">
-              Decisions · {openDecisions.length}
+              Decisions · {visibleDecisions.length}
             </h2>
           </div>
           <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-indigo-900/60 bg-slate-900">
-            {openDecisions.map((decision) => (
+            {visibleDecisions.map((decision) => (
               <article key={decision.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
                 <div className="min-w-0">
                   <p className="text-sm font-bold leading-snug text-slate-100">{decision.text}</p>
@@ -636,10 +471,10 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         </section>
       )}
 
-      {(questionItems.length > 0 || hasResolvedGaps || hiddenQuestionItems.length > 0 || Object.keys(hiddenQuestions).length > 0) && (
+      {visibleQuestions.length > 0 && (
         <OpenQuestions
-          items={questionItems}
-          summary={questionSectionSummary(questionItems, project)}
+          items={visibleQuestions}
+          summary={questionSectionSummary(visibleQuestions, project)}
           onAnswer={(question) => onAnswerQuestion?.(question)}
           onHide={handleHideQuestion}
         />
@@ -656,10 +491,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       )}
 
       {renderHiddenQuestionSection()}
-      {renderHiddenSection(hiddenReminderItems, 'Hidden reminders', 'hidden-reminders-heading', hiddenRemindersExpanded, () => setHiddenRemindersExpanded((current) => !current))}
-      {renderHiddenSection(hiddenOtherItems, 'Hidden items', 'hidden-items-heading', hiddenOtherExpanded, () => setHiddenOtherExpanded((current) => !current))}
-
-      {feedItems.length === 0 && openDecisions.length === 0 && questionItems.length === 0 && !hasResolvedGaps && hiddenFeedItems.length === 0 && (
+      {!showRecommendedFocus && visibleDecisions.length === 0 && visibleQuestions.length === 0 && !hasResolvedGaps && hiddenFeedItems.length === 0 && (
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
           <h3 className="text-sm font-bold text-slate-100">Nothing needs your attention right now</h3>
           <p className="mt-2 text-xs text-slate-500">Refresh after adding new context or memory.</p>
@@ -695,10 +527,6 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         )}
       </section>
 
-      <RecommendationWhy
-        recommendation={selectedRecommendation}
-        onClose={() => setSelectedRecommendation(null)}
-      />
     </div>
   );
 };

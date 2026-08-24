@@ -198,6 +198,7 @@ export async function askGapswiseLocally(params: {
   const contextUsed = contextUsedFromPack(pack, project.title);
   return {
     answer: deterministicAnswer(params.message, pack, project.title, project.goal),
+    outcome: 'exploration',
     sessionId: params.sessionId?.trim() || `demo_${params.projectId ?? 'everything'}_${Date.now()}`,
     sources: sourcesFromPack(pack),
     promptUsed: promptUsedFromContext(params.message, contextUsed),

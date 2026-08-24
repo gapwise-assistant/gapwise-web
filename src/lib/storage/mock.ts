@@ -14,6 +14,7 @@ import {
   FirestoreFeedback,
   FirestoreNode,
   FirestoreSource,
+  FocusAssessmentCacheRecord,
   StorageProvider,
 } from '@/lib/storage/types';
 
@@ -29,11 +30,12 @@ interface MockDatabase {
       askChats: AskChatSession[];
       askMessages: AskChatMessage[];
       askResearch: AskResearchEvidence[];
+      focusAssessments: FocusAssessmentCacheRecord[];
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments';
 
 const EMPTY_USER = {
   contexts: [],
@@ -49,6 +51,7 @@ const EMPTY_USER = {
   askChats: [],
   askMessages: [],
   askResearch: [],
+  focusAssessments: [],
 };
 
 export class MockStorageProvider implements StorageProvider {
@@ -89,6 +92,7 @@ export class MockStorageProvider implements StorageProvider {
       askChats: current.askChats ?? [],
       askMessages: current.askMessages ?? [],
       askResearch: current.askResearch ?? [],
+      focusAssessments: current.focusAssessments ?? [],
     };
     await this.writeDb(db);
   }
@@ -204,6 +208,14 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'askResearch', { ...research, userId });
   }
 
+  async getFocusAssessment(userId: string, cacheId: string): Promise<FocusAssessmentCacheRecord | null> {
+    return (await this.getUser(userId)).focusAssessments?.find((record) => record.id === cacheId) ?? null;
+  }
+
+  async saveFocusAssessment(userId: string, record: FocusAssessmentCacheRecord): Promise<void> {
+    await this.upsert(userId, 'focusAssessments', { ...record, userId });
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return (await this.getUser(userId)).feedback;
   }
@@ -252,6 +264,7 @@ export class MockStorageProvider implements StorageProvider {
       askChats: [],
       askMessages: [],
       askResearch: [],
+      focusAssessments: [],
     };
     await this.writeDb(db);
   }

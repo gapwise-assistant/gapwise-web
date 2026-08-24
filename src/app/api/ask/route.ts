@@ -158,7 +158,11 @@ async function persistAssistantAskMessage(params: {
   sources: AskChatMessage['sources'];
   openQuestionIds: string[];
   openQuestions: AskOpenQuestion[];
+  outcome?: AskChatMessage['outcome'];
+  resolvesQuestionId?: AskChatMessage['resolvesQuestionId'];
+  conclusion?: AskChatMessage['conclusion'];
   searchSuggestions?: AskSearchSuggestions;
+  execution?: AskChatMessage['execution'];
   sessionId?: string;
 }): Promise<string> {
   const now = new Date().toISOString();
@@ -175,7 +179,11 @@ async function persistAssistantAskMessage(params: {
     createdAt: now,
     openQuestionIds: params.openQuestionIds,
     openQuestions: params.openQuestions,
+    ...(params.outcome ? { outcome: params.outcome } : {}),
+    ...(params.resolvesQuestionId ? { resolvesQuestionId: params.resolvesQuestionId } : {}),
+    ...(params.conclusion ? { conclusion: params.conclusion } : {}),
     ...(params.searchSuggestions ? { searchSuggestions: params.searchSuggestions } : {}),
+    ...(params.execution ? { execution: params.execution } : {}),
   });
   const boundSessionId = params.chat.adkSessionId ?? params.sessionId;
   await storage.saveAskChat(params.userId, {
@@ -248,15 +256,27 @@ export async function POST(request: Request) {
     }
   }
 
+  const askOpenQuestions = persistedTurn
+    ? Array.from(new Map([
+        ...persistedTurn.context.openQuestions,
+        ...(persistedTurn.chat.target?.type === 'question'
+          ? [{ id: persistedTurn.chat.target.id, text: persistedTurn.chat.target.text }]
+          : []),
+      ].map((question) => [question.id, question] as const)).values())
+    : [];
   const askInput = {
     ...askInputBase,
     ...(parsed.data.userMessageId ? { excludeMessageId: parsed.data.userMessageId } : {}),
     ...(persistedTurn ? { excludeSourceId: persistedTurn.context.sourceId } : {}),
+    ...(persistedTurn ? { openQuestions: askOpenQuestions } : {}),
   };
 
   const withPersistedTurn = async (result: Awaited<ReturnType<typeof askGapswise>>): Promise<typeof result> => {
     if (!persistedTurn || !parsed.data.chatId || !parsed.data.userMessageId) return result;
-    const openQuestionIds = persistedTurn.context.openQuestionIds;
+    const openQuestions = result.openQuestions?.length ? result.openQuestions : askOpenQuestions;
+    const openQuestionIds = result.openQuestionIds?.length
+      ? result.openQuestionIds
+      : openQuestions.map((question) => question.id);
     const boundSessionId = persistedTurn.chat.adkSessionId ?? result.sessionId;
     const assistantId = await persistAssistantAskMessage({
       userId,
@@ -265,8 +285,12 @@ export async function POST(request: Request) {
       answer: result.answer,
       sources: result.sources,
       openQuestionIds,
-      openQuestions: persistedTurn.context.openQuestions,
+      openQuestions,
+      outcome: result.outcome,
+      resolvesQuestionId: result.resolvesQuestionId,
+      conclusion: result.conclusion,
       searchSuggestions: result.searchSuggestions,
+      execution: result.execution,
       sessionId: boundSessionId,
     });
     return {
@@ -274,7 +298,7 @@ export async function POST(request: Request) {
       ...(boundSessionId ? { sessionId: boundSessionId } : {}),
       assistantMessageId: assistantId,
       openQuestionIds,
-      openQuestions: persistedTurn.context.openQuestions,
+      openQuestions,
     };
   };
 

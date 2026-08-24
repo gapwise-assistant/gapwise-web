@@ -5,22 +5,27 @@ import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 
 describe('DecisionWorkspace presentation', () => {
-  it('keeps review focused while making guidance and decision wording available immediately', () => {
+  it('keeps the decision review compact and preserves the decision controls', () => {
     const html = renderToStaticMarkup(
       <DecisionWorkspace
         project={createGoldenDemoProject()}
         targetNodeId="unknown_target_user"
         onClose={vi.fn()}
         onConfirm={vi.fn()}
-        onResolveQuestion={vi.fn()}
         onViewGraph={vi.fn()}
         onStartChat={vi.fn()}
       />,
     );
 
-    expect(html).toContain('Needs answer');
-    expect(html).toContain('Need help shaping this decision?');
-    expect(html).toContain('Talk it through with Gapwise');
+    expect(html).toContain('What could change this decision');
+    expect(html).toContain('Where this comes from');
+    expect(html).toContain('Sources');
+    expect(html).toContain('Edit previous decision');
+    expect(html).toContain('I don');
+    expect(html).not.toContain('Current picture');
+    expect(html).not.toContain('Gapwise analysis');
+    expect(html).not.toContain('Talk it through with Gapwise');
+    expect(html).not.toContain('Needs answer');
     expect(html).toContain('Resolved decision');
     expect(html).toContain('Previous decision');
     expect(html).toContain('Edit previous decision');

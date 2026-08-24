@@ -22,6 +22,8 @@ export interface AttentionCandidate {
   next_action: string;
   source_node_ids: string[];
   source_ids: string[];
+  /** Existing project node the user should act on for this recommendation. */
+  action_node_id?: string;
   context_pack: ContextPack;
   factors: AttentionScoreFactors;
   score: number;

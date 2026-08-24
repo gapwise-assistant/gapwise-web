@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Filter,
@@ -15,6 +15,9 @@ import { ClarityNode, NodeType, Project } from '@/types/clarity';
 import { relationshipReasons } from '@/lib/graph/relationshipContext';
 import { buildDecisionPath } from '@/lib/graph/constellation';
 import type { GraphViewport } from '@/components/ConstellationGraph';
+import { authFetch } from '@/lib/auth/client';
+import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import { buildDecisionMapDebugTrace, type DecisionMapRendererDiagnostics } from '@/lib/graph/decisionMapDebug';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { DecisionMapActivity } from '@/components/DecisionMapActivity';
 
@@ -86,7 +89,11 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isInspectorCollapsed, setIsInspectorCollapsed] = useState(false);
   const [viewport, setViewport] = useState<GraphViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
+  const [rendererDiagnostics, setRendererDiagnostics] = useState<DecisionMapRendererDiagnostics | null>(null);
+  const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const fullscreenPanelRef = useRef<HTMLDivElement | null>(null);
+  const lastDebugTraceKeyRef = useRef<string | null>(null);
 
   useDismissibleModal(() => setIsFullscreen(false), fullscreenPanelRef, isFullscreen);
 
@@ -98,6 +105,22 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       document.body.style.overflow = previousOverflow;
     };
   }, [isFullscreen]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setFocusAssessment(null);
+    authFetch(`/api/internal/focus-assessment?userId=${encodeURIComponent(userId)}&projectId=${encodeURIComponent(project.id)}`, {
+      signal: controller.signal,
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((body: { focusAssessment?: FocusAssessment | null } | null) => {
+        if (body) setFocusAssessment(body.focusAssessment ?? null);
+      })
+      .catch(() => {
+        // Focus is optional instrumentation. The map never generates focus from this read-only lookup.
+      });
+    return () => controller.abort();
+  }, [project.id, project.updated_at, userId]);
 
   const filteredNodes = useMemo(() => project.nodes.filter((node) => {
     if (filter === 'unresolved') return node.type === 'UNKNOWN' && node.status === 'OPEN';
@@ -113,6 +136,53 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   }), [filteredNodes, project]);
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId);
   const decisionPath = selectedNodeId ? buildDecisionPath(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
+
+  const handleLayoutDiagnostics = useCallback((diagnostics: DecisionMapRendererDiagnostics) => {
+    setRendererDiagnostics(diagnostics);
+  }, []);
+
+  useEffect(() => {
+    if (!rendererDiagnostics || !userId) return;
+    const positions = Object.entries(rendererDiagnostics.positions)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, point]) => [id, point.x, point.y]);
+    const traceKey = JSON.stringify({
+      projectId: project.id,
+      updatedAt: project.updated_at,
+      filter,
+      selectedNodeId,
+      focusMode,
+      pathMode,
+      focusActionNodeId: focusAssessment?.actionNodeId ?? null,
+      showSecondaryContext: rendererDiagnostics.showSecondaryContext,
+      positions,
+      zoom: Number(rendererDiagnostics.zoom.toFixed(3)),
+      pan: [Number(rendererDiagnostics.pan.x.toFixed(1)), Number(rendererDiagnostics.pan.y.toFixed(1))],
+    });
+    if (lastDebugTraceKeyRef.current === traceKey) return;
+    const timer = window.setTimeout(() => {
+      const decisionMapDebug = buildDecisionMapDebugTrace(project, {
+        filter,
+        selectedNodeId,
+        focusMode,
+        pathMode,
+        focusAssessment,
+        renderer: rendererDiagnostics,
+      });
+      void authFetch('/api/dev/traces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, decisionMapDebug }),
+      }).then((response) => {
+        if (!response.ok) return;
+        lastDebugTraceKeyRef.current = traceKey;
+        setTraceRefreshKey((current) => current + 1);
+      }).catch(() => {
+        // Decision Map instrumentation is intentionally best-effort.
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [filter, focusAssessment, focusMode, pathMode, project, rendererDiagnostics, selectedNodeId, userId]);
 
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
@@ -261,7 +331,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </div>
         </header>
 
-        <DecisionMapActivity userId={userId} />
+        <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
 
         <div className="touch-scroll flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
           <Filter className="ml-2 mr-1 h-3.5 w-3.5 shrink-0 text-slate-500" />
@@ -291,6 +361,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                 onViewportChange={setViewport}
                 isFullscreen={isFullscreen}
                 onToggleFullscreen={() => setIsFullscreen((current) => !current)}
+                onLayoutDiagnostics={handleLayoutDiagnostics}
                 onSelectNode={selectNode}
               />
             </div>

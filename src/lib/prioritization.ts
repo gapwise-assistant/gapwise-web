@@ -63,6 +63,28 @@ export function selectTopGap(project: Project, profile: UserMemoryProfile): Cand
     .sort((left, right) => right.priority - left.priority || left.node_id.localeCompare(right.node_id))[0];
 }
 
+/** Selects the highest-impact open uncertainty or decision for Today. */
+export function selectTopAttentionItem(
+  project: Project,
+  _profile?: UserMemoryProfile,
+): ClarityNode | null {
+  const candidates = project.nodes.filter((node) =>
+    node.status === 'OPEN' &&
+    (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION' || node.type === 'DECISION')
+  );
+
+  if (candidates.length === 0) return null;
+
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      const leftScore = left.impact * left.confidence;
+      const rightScore = right.impact * right.confidence;
+
+      return rightScore - leftScore || left.id.localeCompare(right.id);
+    })[0] ?? null;
+}
+
 /** Overall project Clarity Score 0–100 */
 export function calculateClarityScore(project: Project): number {
   const reasoningProject = projectForReasoning(project);

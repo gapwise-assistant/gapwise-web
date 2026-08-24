@@ -29,6 +29,7 @@ import {
 } from '@/lib/demo/careerConflict';
 import { HACKATHON_DEMO_ID } from '@/lib/demo/hackathon';
 import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
+import { BAKERY_DEMO_ID } from '@/lib/demo/bakery';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import type { TodayQuestion } from '@/lib/today/sections';
@@ -42,7 +43,7 @@ import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
 import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
-import { buildDecisionWorkspace, findDecisionForNode } from '@/lib/decisions/workspace';
+import { buildDecisionWorkspace, decisionQuestionForDisplay, findDecisionForNode } from '@/lib/decisions/workspace';
 import { calculateGapPriority } from '@/lib/prioritization';
 
 type AppTab = AppDestination;
@@ -217,6 +218,31 @@ async function loadKintaGenDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadBakeryDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/bakery-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The bakery pop-up demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -300,6 +326,7 @@ export default function Home() {
   const [project, setProject] = useState<Project>(() => emptyGeneralContext());
   const [projects, setProjects] = useState<Project[]>([]);
   const [scope, setScope] = useState<AppScope>(EVERYTHING_SCOPE);
+  const [projectRefreshVersion, setProjectRefreshVersion] = useState(0);
   const [generalContext, setGeneralContext] = useState<Project>(() => emptyGeneralContext());
   const [profile, setProfile] = useState<UserMemoryProfile>(DEFAULT_USER_PROFILE);
   const [memories, setMemories] = useState<DurableMemory[]>([]);
@@ -312,6 +339,7 @@ export default function Home() {
   const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
   const [isLoadingHackathonDemo, setIsLoadingHackathonDemo] = useState(false);
   const [isLoadingKintaGenDemo, setIsLoadingKintaGenDemo] = useState(false);
+  const [isLoadingBakeryDemo, setIsLoadingBakeryDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -330,6 +358,8 @@ export default function Home() {
       ? 'Voluntary demo'
       : isLoadingKintaGenDemo
         ? 'Scientific AI assistant'
+        : isLoadingBakeryDemo
+          ? 'Bakery pop-up demo'
         : isLoadingDemo
           ? 'demo'
           : null;
@@ -377,16 +407,16 @@ export default function Home() {
   );
 
   // Auto-persist whenever project changes
-  const updateProject = useCallback((updated: Project) => {
+  const updateProject = useCallback(async (updated: Project): Promise<boolean> => {
     setProject((current) => (current.id === updated.id ? updated : current));
     setProjects((current) => {
       const existingIndex = current.findIndex((item) => item.id === updated.id);
       if (existingIndex < 0) return [updated, ...current];
       return current.map((item) => (item.id === updated.id ? updated : item));
     });
-    persistProjectToAPI(userId, updated).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Saved locally. Persistent storage API was unavailable.');
-    });
+    const savedToApi = await persistProjectToAPI(userId, updated);
+    setStorageMessage(savedToApi ? '' : 'Saved locally. Persistent storage API was unavailable.');
+    return savedToApi;
   }, [userId]);
 
   const refreshProjectData = useCallback(async () => {
@@ -400,6 +430,7 @@ export default function Home() {
       setProject((current) => current.id === GENERAL_CONTEXT_ID
         ? loadedGeneralContext
         : loadedProjects.projects.find((item) => item.id === current.id) ?? current);
+      setProjectRefreshVersion((current) => current + 1);
     } catch {
       // The answer is already persisted; keep the current view if a refresh is unavailable.
     }
@@ -564,6 +595,40 @@ export default function Home() {
     }
   }, [userId]);
 
+  const handleLoadBakeryDemo = useCallback(async () => {
+    setIsLoadingBakeryDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadBakeryDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, BAKERY_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery pop-up demo could not be loaded.');
+    } finally {
+      setIsLoadingBakeryDemo(false);
+    }
+  }, [userId]);
+
   const handleResetDemo = async () => {
     try {
       await authFetch('/api/storage', {
@@ -669,16 +734,30 @@ export default function Home() {
     return projects.find((candidate) => candidate.id === decisionTarget.projectId) ?? null;
   }, [decisionTarget, generalContext, projects]);
 
-  const saveDecision = useCallback((updated: Project) => {
+  const handleDecisionDontKnow = useCallback(() => {
+    if (!decisionTarget || !decisionProject) return;
+    const decision = decisionProject.nodes.find((node) => node.id === decisionTarget.nodeId);
+    if (!decision || decision.type !== 'DECISION' || decision.status !== 'OPEN') return;
+    const gap = calculateGapPriority(decision, decisionProject, profile);
+    setIdontKnowProjectId(decisionProject.id);
+    setIdontKnowGap({
+      ...gap,
+      question: decisionQuestionForDisplay(decisionProject, decision),
+    });
+    setDecisionTarget(null);
+  }, [decisionProject, decisionTarget, profile]);
+
+  const saveDecision = useCallback(async (updated: Project) => {
+    let savedToApi: boolean;
     if (updated.id === GENERAL_CONTEXT_ID) {
       setGeneralContext(updated);
-      persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
-        setStorageMessage(savedToApi ? '' : 'Decision saved locally. General context API was unavailable.');
-      });
-      return;
+      savedToApi = await persistGeneralContextToAPI(userId, updated);
+      setStorageMessage(savedToApi ? '' : 'Decision saved locally. General context API was unavailable.');
+    } else {
+      savedToApi = await updateProject(updated);
     }
-    updateProject(updated);
-  }, [updateProject, userId]);
+    if (savedToApi) await refreshProjectData();
+  }, [refreshProjectData, updateProject, userId]);
 
   const viewDecisionGraph = useCallback((nodeId: string) => {
     const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
@@ -775,13 +854,20 @@ export default function Home() {
 
   const openDontKnowHelp = useCallback(() => {
     if (!idontKnowGap) return;
-    const prompt = `Help me figure out this unresolved question: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoff clearly, and suggest one practical next step without answering on my behalf.`;
-    const target: AskTarget = { type: 'question', id: idontKnowGap.node_id, text: idontKnowGap.question };
+    const owner = idontKnowProjectId === GENERAL_CONTEXT_ID
+      ? generalContext
+      : projects.find((candidate) => candidate.id === idontKnowProjectId) ?? project;
+    const node = owner.nodes.find((candidate) => candidate.id === idontKnowGap.node_id);
+    const isDecision = node?.type === 'DECISION';
+    const prompt = isDecision
+      ? `Help me think through this project decision: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoffs clearly, identify what information is missing, and suggest one practical next step without making the decision for me.`
+      : `Help me figure out this unresolved question: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoff clearly, and suggest one practical next step without answering on my behalf.`;
+    const target: AskTarget = { type: isDecision ? 'decision' : 'question', id: idontKnowGap.node_id, text: idontKnowGap.question };
     if (idontKnowProjectId && idontKnowProjectId !== GENERAL_CONTEXT_ID) handleSelectProject(idontKnowProjectId);
     setIdontKnowGap(null);
     setIdontKnowProjectId(null);
     openChatWithPrompt(prompt, target);
-  }, [handleSelectProject, idontKnowGap, idontKnowProjectId, openChatWithPrompt]);
+  }, [generalContext, handleSelectProject, idontKnowGap, idontKnowProjectId, openChatWithPrompt, project, projects]);
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
@@ -916,6 +1002,7 @@ export default function Home() {
           isLoadingCareerDemo={isLoadingCareerDemo}
           isLoadingHackathonDemo={isLoadingHackathonDemo}
           isLoadingKintaGenDemo={isLoadingKintaGenDemo}
+          isLoadingBakeryDemo={isLoadingBakeryDemo}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
@@ -925,6 +1012,7 @@ export default function Home() {
           onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
           onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
           onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
+          onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -953,6 +1041,8 @@ export default function Home() {
         isLoadingHackathonDemo={isLoadingHackathonDemo}
         onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
         isLoadingKintaGenDemo={isLoadingKintaGenDemo}
+        onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
+        isLoadingBakeryDemo={isLoadingBakeryDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
@@ -976,6 +1066,7 @@ export default function Home() {
           <Today
             userId={userId}
             project={scopedProject}
+            projectRefreshVersion={projectRefreshVersion}
             scope={scope}
             profile={profile}
             memories={memories}
@@ -1032,6 +1123,7 @@ export default function Home() {
             onInitialPromptSent={() => setAskInitialPrompt('')}
             newChatPrompt={askNewChatPrompt}
             onNewChatPromptOpened={() => setAskNewChatPrompt(null)}
+            onProjectContextChanged={refreshProjectData}
             onProjectUpdated={refreshProjectData}
             onViewSource={(source: AskSource) => {
               if (source.kind === 'source') {
@@ -1144,14 +1236,8 @@ export default function Home() {
             openContext({ sourceId, tab: 'recent' });
             setDecisionTarget(null);
           }}
-          onResolveQuestion={(nodeId) => {
-            const owner = projects.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
-            const node = owner?.nodes.find((candidate) => candidate.id === nodeId);
-            if (!node) return;
-            setDecisionTarget(null);
-            openGraphQuestion(node);
-          }}
           onViewGraph={viewDecisionGraph}
+          onDontKnow={handleDecisionDontKnow}
         />
       )}
       <TracePanel userId={userId} />

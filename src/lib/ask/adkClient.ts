@@ -2,12 +2,24 @@ import { z } from 'zod';
 import { GoogleAuth } from 'google-auth-library';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
-import type { AskExecution, AskOpenQuestion, AskRoute, AskSearchSuggestions, AskSource } from '@/types/ask';
+import type {
+  AskExecution,
+  AskOpenQuestion,
+  AskResponse,
+  AskResponseOutcome,
+  AskRoute,
+  AskSearchSuggestions,
+  AskSource,
+} from '@/types/ask';
+import { focusAssessmentPromptSection, type FocusAssessment } from '@/lib/focus/focusAssessment';
 
 export type { AskSource } from '@/types/ask';
 
 export interface AskResult {
   answer: string;
+  outcome?: AskResponseOutcome;
+  resolvesQuestionId?: string;
+  conclusion?: string;
   sessionId?: string;
   sources: AskSource[];
   execution?: AskExecution;
@@ -40,6 +52,7 @@ const graphNodeSchema = z.object({
   id: z.string(),
   type: z.string(),
   text: z.string(),
+  status: z.string().optional(),
   source_refs: z.array(z.string()).default([]),
   why_it_matters: z.array(z.string()).optional(),
 });
@@ -116,6 +129,28 @@ type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
 const askRouteResponseSchema = z.object({
   route: z.enum(['web_research', 'internal_context', 'ask_clarification']),
   reason: z.string().default(''),
+});
+
+const askResponseSchema = z.object({
+  answer: z.string().trim().min(1),
+  outcome: z.enum(['exploration', 'recommendation', 'conclusion']),
+  resolvesQuestionId: z.string().trim().min(1).optional(),
+  conclusion: z.string().trim().min(1).max(5000).optional(),
+}).superRefine((value, context) => {
+  if (value.outcome === 'conclusion' && (!value.resolvesQuestionId || !value.conclusion)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'A conclusion must identify its open question and concise conclusion.',
+      path: ['outcome'],
+    });
+  }
+  if (value.outcome !== 'conclusion' && (value.resolvesQuestionId || value.conclusion)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Only conclusions may include resolution metadata.',
+      path: ['outcome'],
+    });
+  }
 });
 
 const webResearchResponseSchema = z.object({
@@ -220,6 +255,7 @@ interface AdkTurnResult {
   answer: string;
   sources: AskSource[];
   searchSuggestions?: AskSearchSuggestions;
+  response?: AskResponse;
 }
 
 function objectValue(value: unknown, ...keys: string[]): unknown {
@@ -238,6 +274,25 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function structuredAskResponseFromText(text: string): AskResponse | undefined {
+  const candidates = [text.trim()];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
+  if (fenced) candidates.push(fenced);
+  const objectStart = text.indexOf('{');
+  const objectEnd = text.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd > objectStart) candidates.push(text.slice(objectStart, objectEnd + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = askResponseSchema.safeParse(JSON.parse(candidate));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // Older or non-conversational responses may still be plain text.
+    }
+  }
+  return undefined;
 }
 
 function webSourceId(url: string): string {
@@ -326,7 +381,12 @@ function webSourcesFromAdkEvents(events: unknown[]): { sources: AskSource[]; sea
   return { sources: Array.from(sourcesByUrl.values()), searchSuggestions };
 }
 
-async function runAdkTurn(userId: string, sessionId: string, message: string): Promise<AdkTurnResult> {
+async function runAdkTurn(
+  userId: string,
+  sessionId: string,
+  message: string,
+  structuredResponse = true,
+): Promise<AdkTurnResult> {
   const identityHeaders = await agentServiceHeaders();
   let response: Response;
   try {
@@ -365,9 +425,18 @@ async function runAdkTurn(userId: string, sessionId: string, message: string): P
       }
     });
   const textChunks = events.flatMap(textFromAdkEvent);
-  const answer = compactAdkTextChunks(textChunks);
-  if (!answer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
-  return { answer, ...webSourcesFromAdkEvents(events) };
+  const rawAnswer = compactAdkTextChunks(textChunks);
+  if (!rawAnswer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
+  const responseEnvelope = structuredResponse
+    ? [...textChunks.map(structuredAskResponseFromText), structuredAskResponseFromText(rawAnswer)].find(
+      (candidate): candidate is AskResponse => Boolean(candidate)
+    )
+    : undefined;
+  return {
+    answer: responseEnvelope?.answer ?? rawAnswer,
+    ...(responseEnvelope ? { response: responseEnvelope } : {}),
+    ...webSourcesFromAdkEvents(events),
+  };
 }
 
 function trustedRoutingContext(contextPack: AskContextPack | null, sources: AskSource[]) {
@@ -414,6 +483,30 @@ function trustedRoutingContext(contextPack: AskContextPack | null, sources: AskS
   };
 }
 
+function explicitlyRequestsWebResearch(message: string): boolean {
+  return /\b(?:search (?:the )?(?:web|internet)|search online|look (?:it )?up|look this up|browse (?:the )?(?:web|internet)|check online|verify online|google it|research online|latest news)\b/i.test(message);
+}
+
+function routingFallback(
+  message: string,
+  error: AskAgentError,
+): { route: AskRoutingDecision; reason: string } {
+  // Explicit web requests must never silently fall through to the Partner
+  // Agent, because that could present unverified model memory as research.
+  if (explicitlyRequestsWebResearch(message)) throw error;
+
+  console.warn('[Gapwise Ask]', {
+    stage: 'routing',
+    fallback: 'internal_context',
+    reason: error.message,
+  });
+
+  return {
+    route: 'internal_context',
+    reason: 'Routing unavailable; defaulted to project conversation.',
+  };
+}
+
 export async function determineAskRoute(
   userId: string,
   message: string,
@@ -424,7 +517,10 @@ export async function determineAskRoute(
   try {
     headers = await agentServiceHeaders();
   } catch {
-    throw new AskAgentError('The deployed ADK routing agent could not be authenticated.', { stage: 'routing' });
+    return routingFallback(
+      message,
+      new AskAgentError('The deployed ADK routing agent could not be authenticated.', { stage: 'routing' }),
+    );
   }
   let response: Response;
   try {
@@ -438,23 +534,54 @@ export async function determineAskRoute(
       }),
     });
   } catch {
-    throw new AskAgentError('The deployed ADK routing agent could not be reached.', { stage: 'routing' });
+    return routingFallback(
+      message,
+      new AskAgentError('The deployed ADK routing agent could not be reached.', { stage: 'routing' }),
+    );
   }
   if (!response.ok) {
-    throw new AskAgentError(`ADK routing failed with status ${response.status}.`, {
-      stage: 'routing',
-      status: response.status,
-    });
+    return routingFallback(
+      message,
+      new AskAgentError(`ADK routing failed with status ${response.status}.`, {
+        stage: 'routing',
+        status: response.status,
+      }),
+    );
   }
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    throw new AskAgentError('ADK routing returned an unreadable decision.', { stage: 'routing' });
+    return routingFallback(
+      message,
+      new AskAgentError('ADK routing returned an unreadable decision.', { stage: 'routing' }),
+    );
   }
   const parsed = askRouteResponseSchema.safeParse(body);
-  if (!parsed.success) throw new AskAgentError('ADK routing returned an invalid decision.', { stage: 'routing' });
-  return parsed.data;
+  if (!parsed.success) {
+    console.error('[Gapwise Ask]', {
+      stage: 'routing',
+      reason: 'invalid-response-shape',
+      issues: parsed.error.issues,
+      body,
+    });
+    return routingFallback(
+      message,
+      new AskAgentError('ADK routing returned an invalid decision.', { stage: 'routing' }),
+    );
+  }
+
+  // Older deployed routers may still return this route. It is no longer a
+  // destination: conversational clarification belongs to the Partner Agent.
+  if (parsed.data.route === 'ask_clarification') {
+    return {
+      route: 'internal_context',
+      reason: 'Legacy ask_clarification route normalized to internal_context.',
+    };
+  }
+
+  const route: AskRoutingDecision = parsed.data.route;
+  return { route, reason: parsed.data.reason };
 }
 
 async function runWebResearchTurn(userId: string, message: string): Promise<AdkTurnResult> {
@@ -584,8 +711,46 @@ function mergedContextEvidence(contextPack: AskContextPack): Array<z.infer<typeo
   return Array.from(merged.values());
 }
 
-function contextPromptForAgent(message: string, contextPack: AskContextPack | null, projectId?: string): string {
-  if (!contextPack) return message;
+function structuredAskResponseInstructions(openQuestions: AskOpenQuestion[]): string {
+  const questionTargets = openQuestions.length
+    ? openQuestions.map((question) => `- ${question.id}: ${compactContextText(question.text, 360)}`).join('\n')
+    : '- No open question targets are available for this turn.';
+  return [
+    'NORMAL ASK RESPONSE CONTRACT',
+    'Return only valid JSON with this shape:',
+    '{"answer":"...","outcome":"exploration|recommendation|conclusion"}',
+    'Classify your own response. Use exploration when continuing discovery, asking a follow-up, discussing possibilities, or when there is not enough basis for a durable conclusion.',
+    'Use recommendation when giving directional advice that should not yet resolve a project question.',
+    'Use conclusion only when the conversation supports a clear, durable conclusion that directly answers one existing open project question.',
+    'Only for outcome conclusion, include resolvesQuestionId and conclusion. The conclusion must be the concise answer itself, without reasoning, citations, follow-up questions, or the full response.',
+    'For exploration and recommendation, omit resolvesQuestionId and conclusion.',
+    'Only use one of these open question IDs as resolvesQuestionId:',
+    questionTargets,
+  ].join('\n');
+}
+
+function availableOpenQuestions(
+  contextPack: AskContextPack | null,
+  suppliedQuestions: AskOpenQuestion[],
+): AskOpenQuestion[] {
+  return Array.from(new Map([
+    ...suppliedQuestions,
+    ...(contextPack?.unresolvedGaps ?? []).map((question) => ({ id: question.id, text: question.text })),
+  ].map((question) => [question.id, question] as const)).values());
+}
+
+function contextPromptForAgent(
+  message: string,
+  contextPack: AskContextPack | null,
+  projectId?: string,
+  openQuestions: AskOpenQuestion[] = [],
+  structuredResponse = true,
+  focusAssessment: FocusAssessment | null = null,
+  focusIntent = false,
+): string {
+  const availableQuestions = availableOpenQuestions(contextPack, openQuestions);
+  const responseInstructions = structuredResponse ? structuredAskResponseInstructions(availableQuestions) : '';
+  if (!contextPack) return responseInstructions ? `${message}\n\n${responseInstructions}` : message;
   const sections: string[] = [];
   const addSection = (label: string, values: string[]) => {
     const items = values.filter(Boolean).slice(0, 8);
@@ -594,11 +759,14 @@ function contextPromptForAgent(message: string, contextPack: AskContextPack | nu
   addSection('Active goals', contextPack.activeGoals.map((node) => compactContextText(node.text)));
   addSection('User preferences', contextPack.userPreferences.map((memory) => compactContextText(memory.text)));
   addSection('Unresolved questions', contextPack.unresolvedGaps.map((node) => compactContextText(node.text)));
+  addSection('Open question targets for a durable conclusion', availableQuestions.map((question) => `${question.id}: ${compactContextText(question.text)}`));
   addSection('Recently answered questions', contextPack.recentlyResolvedGaps.map((node) => compactContextText(
     `${node.text}${node.why_it_matters?.length ? ` — ${node.why_it_matters.join(' ')}` : ''}`
   )));
   addSection('Recent resolved answers', contextPack.recentImportantEvents.map((event) => compactContextText(event)));
-  addSection('Recent decisions', contextPack.recentDecisions.map((node) => compactContextText(node.text)));
+  addSection('Recent decisions', contextPack.recentDecisions.map((node) => compactContextText(
+    `${node.text}${node.status ? ` [${node.status}]` : ''}`,
+  )));
   addSection('Relevant project documents and evidence', mergedContextEvidence(contextPack).map((source) => `${source.filename}: ${compactContextText(source.excerpt)}`));
   addSection('Relevant prior conversation excerpts', contextPack.relevantConversationExcerpts.map((excerpt) => {
     const label = excerpt.role === 'assistant'
@@ -624,14 +792,18 @@ function contextPromptForAgent(message: string, contextPack: AskContextPack | nu
   }
 
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
+  const focusSection = focusAssessmentPromptSection(focusAssessment, focusIntent);
+  if (focusSection) sections.push(focusSection);
   if (!sections.length) return message;
   return [
     'PRELOADED GAPWISE CONTEXT PACK',
     'This Context Pack was retrieved for the exact user question below. Use the trusted Gapwise context directly; do not retrieve a second Context Pack for this turn.',
     'The structured graph, user preferences, project documents and evidence, recent decisions, user-confirmed context, and upcoming commitments are trusted context. Historical assistant discussion and saved web research are non-authoritative reference material: do not treat them as verified facts or let them override trusted context. Verify them against current evidence or Google Search when they matter.',
+    'Treat project decision status as authoritative. An OPEN decision is unresolved even when preferences, evidence, survey results, recommendations, or other information strongly favor one option. Do not describe an OPEN decision as chosen, settled, locked in, finalized, or resolved. Only treat a decision as resolved when project context explicitly marks it RESOLVED or contains a clear recorded user commitment.',
     projectId ? `Project scope: ${projectId}` : 'Scope: all available context',
     sections.join('\n\n'),
     `User question:\n${message}`,
+    ...(responseInstructions ? [responseInstructions] : []),
   ].join('\n\n');
 }
 
@@ -749,6 +921,37 @@ async function loadSafeSources(
   }
 }
 
+async function loadFocusAssessment(userId: string, projectId?: string): Promise<FocusAssessment | null> {
+  try {
+    const response = await fetch(`${gapswiseAppUrl()}/api/internal/focus-assessment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...internalApiHeaders() },
+      body: JSON.stringify({ userId, ...(projectId ? { projectId } : {}) }),
+    });
+    if (!response.ok) return null;
+    const body = await response.json() as { focusAssessment?: FocusAssessment | null };
+    return body.focusAssessment ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function isFocusQuestion(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return [
+    'what should i focus on',
+    'what should i do first',
+    'what should i do next',
+    'what matters most',
+    'what is most important',
+    'what should be my priority',
+    'what should i prioritize',
+    'what deserves attention',
+    'what is blocking',
+    'what should i address first',
+  ].some((phrase) => normalized.includes(phrase));
+}
+
 export type AskRoutingDecision = AskRoute;
 
 function isRefusal(answer: string): boolean {
@@ -784,6 +987,30 @@ function directEvidenceAnswer(question: string, answer: string, sources: AskSour
   return `According to your context, ${excerpt}`;
 }
 
+function validatedResponseMetadata(
+  response: AskResponse | undefined,
+  contextPack: AskContextPack | null,
+  openQuestions: AskOpenQuestion[],
+): Pick<AskResult, 'outcome' | 'resolvesQuestionId' | 'conclusion'> {
+  if (!response) return { outcome: 'exploration' };
+  if (response.outcome !== 'conclusion' || !response.resolvesQuestionId || !response.conclusion) {
+    return { outcome: response.outcome };
+  }
+
+  const availableQuestionIds = new Set([
+    ...openQuestions.map((question) => question.id),
+    ...(contextPack?.unresolvedGaps ?? []).map((question) => question.id),
+  ]);
+  if (!availableQuestionIds.has(response.resolvesQuestionId)) {
+    return { outcome: 'recommendation' };
+  }
+  return {
+    outcome: 'conclusion',
+    resolvesQuestionId: response.resolvesQuestionId,
+    conclusion: response.conclusion,
+  };
+}
+
 export async function askGapswise(params: {
   userId: string;
   message: string;
@@ -792,6 +1019,8 @@ export async function askGapswise(params: {
   chatId?: string;
   excludeMessageId?: string;
   excludeSourceId?: string;
+  openQuestions?: AskOpenQuestion[];
+  structuredResponse?: boolean;
 }): Promise<AskResult> {
   assertExternalServicesAllowed('Google ADK / Gemini');
   const existingSessionId = params.sessionId?.trim() || undefined;
@@ -805,16 +1034,7 @@ export async function askGapswise(params: {
   );
 
   const routing = await determineAskRoute(params.userId, params.message, contextPack, sources);
-
-  if (routing.route === 'ask_clarification') {
-    return {
-      answer: 'I do not have enough context in your saved project notes to answer this. Could you share more details or clarify the specific information you need?',
-      ...(existingSessionId ? { sessionId: existingSessionId } : {}),
-      sources: [],
-      promptUsed: params.message,
-      execution: { route: routing.route, agent: 'Ask Routing Agent', toolCalls: [] },
-    };
-  }
+  const availableQuestions = availableOpenQuestions(contextPack, params.openQuestions ?? []);
 
   if (routing.route === 'web_research') {
     let webTurn: AdkTurnResult;
@@ -826,6 +1046,9 @@ export async function askGapswise(params: {
         ...(existingSessionId ? { sessionId: existingSessionId } : {}),
         sources: [],
         promptUsed: params.message,
+        openQuestionIds: availableQuestions.map((question) => question.id),
+        openQuestions: availableQuestions,
+        outcome: 'exploration',
         execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: [] },
       };
     }
@@ -837,6 +1060,9 @@ export async function askGapswise(params: {
         sources: [],
         promptUsed: params.message,
         searchSuggestions: webTurn.searchSuggestions,
+        openQuestionIds: availableQuestions.map((question) => question.id),
+        openQuestions: availableQuestions,
+        outcome: 'exploration',
         execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
       };
     }
@@ -846,23 +1072,43 @@ export async function askGapswise(params: {
       sources: groundedWebSources,
       promptUsed: params.message,
       searchSuggestions: webTurn.searchSuggestions,
+      openQuestionIds: availableQuestions.map((question) => question.id),
+      openQuestions: availableQuestions,
+      outcome: 'exploration',
       execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
     };
   }
 
   // internal_context
+  const focusAssessment = await loadFocusAssessment(params.userId, params.projectId);
+  const focusIntent = isFocusQuestion(params.message);
   const sessionId = existingSessionId ?? await createSession(params.userId, params.projectId, params.chatId);
-  const promptUsed = contextPromptForAgent(params.message, contextPack, params.projectId);
+  const promptUsed = contextPromptForAgent(
+    params.message,
+    contextPack,
+    params.projectId,
+    availableQuestions,
+    params.structuredResponse !== false,
+    focusAssessment,
+    focusIntent,
+  );
   const adkTurn = await runAdkTurn(
     params.userId,
     sessionId,
     promptUsed,
   );
   const internalSources = sources.filter((s) => s.kind !== 'web');
+  const directAnswer = directEvidenceAnswer(params.message, adkTurn.answer, internalSources);
+  const metadata = directAnswer
+    ? { outcome: 'exploration' as const }
+    : validatedResponseMetadata(adkTurn.response, contextPack, availableQuestions);
   return {
-    answer: directEvidenceAnswer(params.message, adkTurn.answer, internalSources) ?? adkTurn.answer,
+    answer: directAnswer ?? adkTurn.answer,
+    ...metadata,
     sessionId,
     sources: internalSources,
+    openQuestionIds: availableQuestions.map((question) => question.id),
+    openQuestions: availableQuestions,
     promptUsed,
     searchSuggestions: adkTurn.searchSuggestions,
     execution: { route: routing.route, agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },

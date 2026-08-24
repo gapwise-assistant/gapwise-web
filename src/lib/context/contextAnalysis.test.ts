@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { calculateClarityScore } from '@/lib/prioritization';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
-import { analyzeContextItem, processContextSource } from '@/lib/context/contextAnalysis';
+import { analyzeContextItem, processContextSource, sanitizeCanonicalReconciliationTargets } from '@/lib/context/contextAnalysis';
 import { ingestContextSource } from '@/lib/context/ingestion';
 import { rankGaps } from '@/lib/tools/graphTools';
 import { Project } from '@/types/clarity';
@@ -38,6 +38,87 @@ describe('AI context graph analysis', () => {
   afterEach(() => {
     if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
     else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
+  });
+
+  it('keeps meta-level recommendation questions out of project state but extracts missing facts', async () => {
+    const metaQuestionModel = mockGenAI({
+      summary: 'The user is asking Gapwise to explain its recommendation.',
+      nodes: [],
+      reconciliation: [],
+    });
+    const metaResult = await processContextSource(projectWithGoal('Deliver the project reliably.'), input({
+      sourceId: 'src_meta_question',
+      content: 'Why is that the most important thing right now?',
+    }), DEFAULT_USER_PROFILE, { genAI: metaQuestionModel });
+    const metaSource = metaResult.project.sources.find((source) => source.id === 'src_meta_question');
+
+    expect(metaResult.project.nodes.filter((node) => metaSource?.derived_node_ids.includes(node.id))).toHaveLength(0);
+    expect(metaSource?.reconciliation_summary?.candidate_count).toBe(0);
+    const contextPrompt = JSON.stringify(metaQuestionModel.models.generateContent.mock.calls[0]);
+    expect(contextPrompt).toContain('For A depends_on B, A is the dependent source and B is the prerequisite target.');
+    expect(contextPrompt).toContain('For B blocks A, B is the prerequisite source and A is the blocked dependent target.');
+
+    const factualModel = mockGenAI({
+      summary: 'Supplier delivery timing is not confirmed.',
+      nodes: [{
+        type: 'UNKNOWN',
+        text: 'Can the supplier deliver by Friday?',
+        confidence: 0.9,
+        impact: 0.85,
+      }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'NEW_UNCERTAINTY',
+        confidence: 0.9,
+        reason: 'The supplier delivery date is missing.',
+      }],
+    });
+    const factualResult = await processContextSource(projectWithGoal('Deliver the project reliably.'), input({
+      sourceId: 'src_supplier_delivery',
+      content: "I don't know whether the supplier can deliver by Friday.",
+    }), DEFAULT_USER_PROFILE, { genAI: factualModel });
+
+    expect(factualResult.project.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'UNKNOWN',
+        text: 'Can the supplier deliver by Friday?',
+        source_refs: ['src_supplier_delivery'],
+      }),
+    ]));
+  });
+
+  it('only allows canonical targets for classifications that can reference them', () => {
+    const sanitized = sanitizeCanonicalReconciliationTargets([
+      {
+        candidate_index: 0,
+        classification: 'NEW_UNCERTAINTY',
+        canonical_question_id: 'existing-question',
+        canonical_candidate_index: 1,
+        confidence: 0.9,
+        reason: 'New uncertainty.',
+      },
+      {
+        candidate_index: 1,
+        classification: 'RELATED_BUT_DISTINCT',
+        canonical_question_id: 'existing-question',
+        canonical_candidate_index: 0,
+        confidence: 0.9,
+        reason: 'Related but distinct.',
+      },
+      {
+        candidate_index: 2,
+        classification: 'PARAPHRASE',
+        canonical_question_id: 'existing-question',
+        confidence: 0.9,
+        reason: 'Same question.',
+      },
+    ]);
+
+    expect(sanitized[0].canonical_question_id).toBeUndefined();
+    expect(sanitized[0].canonical_candidate_index).toBeUndefined();
+    expect(sanitized[1].canonical_question_id).toBeUndefined();
+    expect(sanitized[1].canonical_candidate_index).toBeUndefined();
+    expect(sanitized[2].canonical_question_id).toBe('existing-question');
   });
 
   it('creates multiple source-backed UNKNOWN nodes from explicit uncertainty', async () => {
@@ -79,10 +160,14 @@ describe('AI context graph analysis', () => {
     expect(result.project.nodes.find((node) => node.source_refs.includes('src_move_notes'))?.text).toBe('Have I booked the elevator reservation yet?');
   });
 
-  it('rejects a combined unfinished-action question and keeps separate grounded actions', async () => {
+  it('keeps model-provided actions separate from unresolved questions', async () => {
     const genAI = mockGenAI({
       summary: 'The move has two unfinished tasks.',
-      nodes: [{ type: 'UNKNOWN', text: 'Have I booked the to pack everything yet?', confidence: 0.9, impact: 0.8 }],
+      nodes: [
+        { type: 'EVIDENCE', text: 'The building requires elevator reservations for large moves.', confidence: 0.9, impact: 0.8 },
+        { type: 'NEXT_ACTION', text: 'Book the elevator reservation.', confidence: 0.9, impact: 0.8 },
+        { type: 'NEXT_ACTION', text: 'Pack everything.', confidence: 0.9, impact: 0.8 },
+      ],
     });
     const result = await processContextSource(projectWithGoal('Move out before the apartment deadline.'), input({
       sourceId: 'src_move_actions',
@@ -90,7 +175,7 @@ describe('AI context graph analysis', () => {
     }), DEFAULT_USER_PROFILE, { genAI });
 
     const derived = result.project.nodes.filter((node) => node.source_refs.includes('src_move_actions'));
-    expect(derived.some((node) => node.type === 'UNKNOWN' && /booked the to pack/i.test(node.text))).toBe(false);
+    expect(derived.some((node) => node.type === 'UNKNOWN')).toBe(false);
     expect(derived).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'NEXT_ACTION', text: 'Book the elevator reservation.' }),
       expect.objectContaining({ type: 'NEXT_ACTION', text: 'Pack everything.' }),
@@ -178,6 +263,13 @@ describe('AI context graph analysis', () => {
         confidence: 0.9,
         impact: 0.7,
       }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'PARAPHRASE',
+        canonical_question_id: 'q_wifi',
+        confidence: 0.9,
+        reason: 'The source wording asks the same networking question.',
+      }],
     });
 
     const result = await processContextSource(project, input({
@@ -226,7 +318,7 @@ describe('AI context graph analysis', () => {
     });
   });
 
-  it('adds a missing-contingency question when the model returns only the risk', async () => {
+  it('does not invent a contingency question when the model returns only the risk', async () => {
     const genAI = mockGenAI({
       summary: 'The demo has no fallback for slow matching.',
       nodes: [
@@ -241,9 +333,11 @@ describe('AI context graph analysis', () => {
       content: 'If matching takes longer than five seconds, we do not have a fallback screen.',
     }), DEFAULT_USER_PROFILE, { genAI });
 
-    expect(result.project.nodes.map((node) => node.text)).toContain(
-      'What fallback is available if matching takes longer than five seconds?'
+    const sourceNodes = result.project.nodes.filter((node) =>
+      node.source_refs.includes('src_demo_risk')
     );
+    expect(sourceNodes.some((node) => node.type === 'RISK')).toBe(true);
+    expect(sourceNodes.some((node) => node.type === 'UNKNOWN')).toBe(false);
   });
 
   it('merges duplicate decisions and keeps a high-value risk within the final node budget', async () => {
@@ -288,16 +382,140 @@ describe('AI context graph analysis', () => {
     expect(derived.some((node) => node.type === 'UNKNOWN' && /tables/i.test(node.text))).toBe(true);
   });
 
+  it('keeps a user-controlled choice as a DECISION and only keeps factual unknowns', async () => {
+    const genAI = mockGenAI({
+      summary: 'The venue choice is open, while availability is still unknown.',
+      nodes: [
+        {
+          type: 'DECISION',
+          text: 'I am unsure whether to use a café or community room.',
+          status: 'OPEN',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          type: 'UNKNOWN',
+          text: 'I am unsure whether to use a café or community room.',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          type: 'UNKNOWN',
+          text: 'I do not know whether the café is available Friday.',
+          confidence: 0.9,
+          impact: 0.85,
+        },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Organize the first community breakfast.'), input({
+      sourceId: 'src_venue_choice',
+      content: 'I am unsure whether to use a café or community room. I do not know whether the café is available Friday.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((item) => item.id === 'src_venue_choice');
+    const derived = result.project.nodes.filter((node) => source?.derived_node_ids.includes(node.id));
+    expect(derived.filter((node) => node.type === 'DECISION')).toHaveLength(1);
+    expect(derived.filter((node) => node.type === 'UNKNOWN').map((node) => node.text)).toEqual([
+      'I do not know whether the café is available Friday.',
+    ]);
+    expect(derived.some((node) => node.type === 'UNKNOWN' && /café or community room/i.test(node.text))).toBe(false);
+  });
+
+  it('classifies explicit unresolved choice language as an OPEN DECISION, not a PREFERENCE', async () => {
+    const genAI = mockGenAI({
+      summary: 'The choice remains unresolved.',
+      nodes: [
+        {
+          type: 'DECISION',
+          text: 'Decide X.',
+          status: 'OPEN',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          type: 'DECISION',
+          text: 'Determine Y.',
+          status: 'OPEN',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Complete the project.'), input({
+      sourceId: 'src_explicit_unresolved_choice',
+      content: 'I still need to decide X. I also need to determine Y.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const derived = result.project.nodes.filter((node) =>
+      node.source_refs.includes('src_explicit_unresolved_choice')
+    );
+    expect(derived).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'DECISION', text: 'Decide X.', status: 'OPEN' }),
+      expect.objectContaining({ type: 'DECISION', text: 'Determine Y.', status: 'OPEN' }),
+    ]));
+    expect(derived.some((node) => node.type === 'PREFERENCE')).toBe(false);
+
+    const contextPrompt = JSON.stringify(genAI.models.generateContent.mock.calls[0]);
+    expect(contextPrompt).toContain('Explicit unresolved choice language such as needing to decide, choose, determine, select, or settle something represents an OPEN DECISION.');
+    expect(contextPrompt).toContain('Do not classify the subject of an explicit unresolved choice as a PREFERENCE merely because the source also contains preferences, constraints, or supporting evidence.');
+    expect(contextPrompt).toContain('A PREFERENCE expresses what the user favors; a DECISION represents a choice the user still needs to make.');
+  });
+
+  it('does not turn an attractive or preferred option into a committed decision', async () => {
+    const genAI = mockGenAI({
+      summary: 'The courtyard is attractive, but the venue choice remains open.',
+      nodes: [
+        {
+          type: 'DECISION',
+          text: 'Use the free courtyard for the first event.',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Organize the first community breakfast.'), input({
+      sourceId: 'src_venue_preference',
+      content: 'I have access to a free courtyard and would rather avoid paying. I am leaning toward the courtyard, but I have not chosen the venue yet.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const derived = result.project.nodes.filter((node) => node.source_refs.includes('src_venue_preference'));
+    expect(derived.some((node) => node.type === 'DECISION')).toBe(false);
+    expect(derived.some((node) => node.type === 'PREFERENCE')).toBe(true);
+  });
+
+  it('keeps an explicitly committed option as a decision', async () => {
+    const genAI = mockGenAI({
+      summary: 'The venue has been selected.',
+      nodes: [{ type: 'DECISION', text: 'Use the courtyard for the first event.', confidence: 0.9, impact: 0.9 }],
+    });
+
+    const result = await processContextSource(projectWithGoal('Organize the first community breakfast.'), input({
+      sourceId: 'src_venue_commitment',
+      content: "We'll use the courtyard for the first event.",
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.some((node) =>
+      node.source_refs.includes('src_venue_commitment') && node.type === 'DECISION'
+    )).toBe(true);
+  });
+
   it('keeps an upload prerequisite actionable when the model returns it as a statement', async () => {
     const genAI = mockGenAI({
       summary: 'The upload credentials have not been verified together.',
       nodes: [
         {
           type: 'UNKNOWN',
-          text: 'NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are mismatched because they were copied from different Supabase projects and have not been tested together.',
+          text: 'What test result will confirm that the corrected configuration resolves the upload endpoint 401 failure?',
           confidence: 0.9,
           impact: 0.95,
         },
+        { type: 'EVIDENCE', text: 'I have not tested both values from the same project.', confidence: 0.9, impact: 0.8 },
+        { type: 'NEXT_ACTION', text: 'Test both values from the same project.', confidence: 0.9, impact: 0.8 },
+        { type: 'EVIDENCE', text: 'I have not replaced it with fake data.', confidence: 0.9, impact: 0.7 },
+        { type: 'NEXT_ACTION', text: 'Replace a real phone number with fake data.', confidence: 0.9, impact: 0.7 },
       ],
     });
 
@@ -332,7 +550,9 @@ describe('AI context graph analysis', () => {
         text: 'What error occurs when both values from the same project are tested together?',
         confidence: 0.9,
         impact: 0.9,
-      }],
+      },
+      { type: 'EVIDENCE', text: 'I have not tested both values from the same project.', confidence: 0.9, impact: 0.8 },
+      { type: 'NEXT_ACTION', text: 'Test both values from the same project.', confidence: 0.9, impact: 0.8 }],
     });
 
     const result = await processContextSource(projectWithGoal('Complete the project reliably.'), input({
@@ -356,10 +576,12 @@ describe('AI context graph analysis', () => {
       summary: 'The configuration has not been verified after the failure.',
       nodes: [{
         type: 'UNKNOWN',
-        text: 'The two configuration values are inconsistent and the endpoint has not been tested after correction.',
+        text: 'What result will confirm that the corrected configuration resolves the endpoint failure?',
         confidence: 0.9,
         impact: 0.9,
-      }],
+      },
+      { type: 'EVIDENCE', text: 'I have not tested the two configuration values together after correction.', confidence: 0.9, impact: 0.8 },
+      { type: 'NEXT_ACTION', text: 'Test the two configuration values together after correction.', confidence: 0.9, impact: 0.8 }],
     });
 
     const result = await processContextSource(projectWithGoal('Ship a reliable service.'), input({
@@ -381,11 +603,13 @@ describe('AI context graph analysis', () => {
     const genAI = mockGenAI({
       summary: 'The endpoint failure has not been checked through either corrective action.',
       nodes: [{
-        type: 'UNKNOWN',
+        type: 'EVIDENCE',
         text: 'The endpoint is failing and the corrected configuration has not been tested or reviewed.',
         confidence: 0.9,
         impact: 0.9,
-      }],
+      },
+      { type: 'NEXT_ACTION', text: 'Test the corrected configuration.', confidence: 0.9, impact: 0.8 },
+      { type: 'NEXT_ACTION', text: 'Review the corrected configuration.', confidence: 0.9, impact: 0.8 }],
     });
 
     const result = await processContextSource(projectWithGoal('Ship a reliable service.'), input({
@@ -426,6 +650,10 @@ describe('AI context graph analysis', () => {
       nodes: [
         { type: 'KNOWN', text: 'The pilot has a September go/no-go deadline.', confidence: 0.95, impact: 0.85 },
         { type: 'RISK', text: 'Duplicate records would be unsafe.', confidence: 0.9, impact: 0.9 },
+        { type: 'UNKNOWN', text: 'Who owns clinical accountability for medication corrections?', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'Can offline retries avoid duplicate EHR records?', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'Is SMS consent approved for PHI intake?', confidence: 0.9, impact: 0.8 },
+        { type: 'UNKNOWN', text: 'Can one coordinator handle peak exception review?', confidence: 0.9, impact: 0.8 },
       ],
     });
     const result = await processContextSource(projectWithGoal('Make a safe ClinicFlow pilot decision.'), input({
@@ -439,7 +667,8 @@ describe('AI context graph analysis', () => {
       ].join('\n'),
     }), DEFAULT_USER_PROFILE, { genAI });
 
-    const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes('src_japan_notes'));
+    const sourceId = 'src_japan_notes';
+    const questions = result.project.nodes.filter((node) => node.type === 'UNKNOWN' && node.source_refs.includes(sourceId));
     expect(questions.map((node) => node.text)).toEqual(expect.arrayContaining([
       'Who owns clinical accountability for medication corrections?',
       'Can offline retries avoid duplicate EHR records?',
@@ -655,7 +884,7 @@ describe('AI context graph analysis', () => {
     const stages = source?.processing_log?.stages ?? [];
     expect(stages.map((stage) => stage.name)).toEqual([
       'Context Agent model analysis',
-      'Candidate finalization and canonical question selection',
+      'Model normalization and deduplication',
       'Goal relevance filtering',
       'Graph persistence',
       'Graph persistence result',
@@ -691,6 +920,7 @@ describe('AI context graph analysis', () => {
       nodes: [
         { type: 'UNKNOWN', text: modelQuestion, confidence: 0.4, impact: 0.96 },
         { type: 'UNKNOWN', text: 'What does the user need to know before the surgery?', confidence: 0.86, impact: 0.72 },
+        { type: 'UNKNOWN', text: 'What should I confirm before the surgery?', confidence: 0.86, impact: 0.72 },
       ],
     });
     const result = await processContextSource(projectWithGoal('Complete my surgery preparation by October 9.'), input({
@@ -786,5 +1016,31 @@ describe('AI context graph analysis', () => {
         }),
       ]),
     }));
+  });
+
+  it('preserves separate atomic workshop constraints from one source', async () => {
+    const genAI = mockGenAI({
+      summary: 'The workshop has separate capacity, supervision, safety, and cancellation constraints.',
+      nodes: [
+        { type: 'CONSTRAINT', text: 'The workshop capacity is 24 people.', confidence: 0.95, impact: 0.9 },
+        { type: 'CONSTRAINT', text: 'One supervisor is required per 12 participants.', confidence: 0.95, impact: 0.9 },
+        { type: 'CONSTRAINT', text: 'Safety glasses are required for groups over 10.', confidence: 0.95, impact: 0.85 },
+        { type: 'CONSTRAINT', text: 'Cancellations within 72 hours lose 50% of the fee.', confidence: 0.95, impact: 0.8 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Run a safe and reliable pottery workshop.'), input({
+      sourceId: 'src_workshop_rules',
+      filename: 'workshop-rules.txt',
+      content: 'Capacity is 24 people and one supervisor is required per 12 participants. Safety glasses are required for groups over 10, drinks must stay away from workbenches, and cancellations within 72 hours lose 50% of the fee.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const derived = result.project.nodes.filter((node) => node.source_refs.includes('src_workshop_rules'));
+    expect(derived.map((node) => node.text)).toEqual(expect.arrayContaining([
+      'The workshop capacity is 24 people.',
+      'One supervisor is required per 12 participants.',
+      'Safety glasses are required for groups over 10.',
+      'Cancellations within 72 hours lose 50% of the fee.',
+    ]));
+    expect(derived.filter((node) => node.type === 'CONSTRAINT')).toHaveLength(4);
   });
 });

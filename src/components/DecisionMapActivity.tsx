@@ -3,10 +3,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { authFetch } from '@/lib/auth/client';
+import type { Project } from '@/types/clarity';
 import type { TraceAgentConfig, TraceEvent } from '@/types/observability';
 
 interface DecisionMapActivityProps {
   userId: string;
+  project: Project;
+  traceRefreshKey?: number;
 }
 
 function formatTimestamp(value: string): string {
@@ -21,17 +24,43 @@ function formatTimestamp(value: string): string {
 }
 
 function isDecisionMapTrace(trace: TraceEvent): boolean {
-  return trace.simulation === true
+  return trace.route === '/ui/decision-map'
+    || trace.simulation === true
     || trace.route === '/api/agents/turn'
     || trace.route === '/api/context/ingest'
     || trace.route === '/api/projects/decision-anchor';
 }
 
-export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId }) => {
+function sourceActivityDate(source: Project['sources'][number]): string {
+  return source.processing_log?.completed_at ?? source.processed_at ?? source.extracted_at;
+}
+
+function sourceActivityStatus(source: Project['sources'][number]): string {
+  return source.processing_log?.status ?? source.processing_status ?? 'recorded';
+}
+
+function DebugTraceStage({ title, value, open = false }: { title: string; value: unknown; open?: boolean }) {
+  return (
+    <details className="rounded-md border border-slate-800 bg-slate-950/60 p-2" open={open}>
+      <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{title}</summary>
+      <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words border-t border-slate-800 pt-2 text-[10px] leading-relaxed text-slate-500">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </details>
+  );
+}
+
+export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId, project, traceRefreshKey = 0 }) => {
   const [traces, setTraces] = useState<TraceEvent[]>([]);
   const [agentPolicy, setAgentPolicy] = useState<TraceAgentConfig[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+
+  const contextHistory = project.sources
+    .filter((source) => source.processing_log || source.processing_status || source.processed_at)
+    .slice()
+    .sort((left, right) => Date.parse(sourceActivityDate(right)) - Date.parse(sourceActivityDate(left)))
+    .slice(0, 8);
 
   const load = useCallback(async () => {
     if (!userId) {
@@ -48,7 +77,10 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
         return;
       }
       const data = await response.json() as { traces?: TraceEvent[]; agentPolicy?: TraceAgentConfig[] };
-      setTraces((data.traces ?? []).filter(isDecisionMapTrace).slice(0, 6));
+      setTraces((data.traces ?? [])
+        .filter(isDecisionMapTrace)
+        .filter((trace) => !trace.decisionMapDebug || trace.decisionMapDebug.projectId === project.id)
+        .slice(0, 6));
       setAgentPolicy(data.agentPolicy ?? []);
     } catch {
       // The map remains usable when the optional developer trace endpoint is unavailable.
@@ -57,11 +89,11 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [project.id, userId]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, traceRefreshKey]);
 
   return (
     <section className="border-b border-slate-800 bg-slate-950/70 px-4 py-3 sm:px-5" aria-labelledby="decision-map-activity-title">
@@ -71,7 +103,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
           <h3 id="decision-map-activity-title" className="text-xs font-extrabold uppercase tracking-[0.16em] text-slate-300">
             Decision Map activity
           </h3>
-          <span className="text-[10px] text-slate-600">sanitized routing log</span>
+          <span className="text-[10px] text-slate-600">context history + runtime trace</span>
         </div>
         <div className="flex items-center gap-1.5">
           {open && (
@@ -99,7 +131,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
       </div>
       {open && <>
         <p className="mt-1 text-[11px] text-slate-500">
-          Shows which agent configuration was used (or would be used) and how much project context was selected. Prompts and private content are never shown.
+          Shows how saved context was processed into the Decision Map, plus which agent configuration was used (or would be used). Runtime traces are temporary; context-processing history is saved with each source.
         </p>
         {traces.some((trace) => trace.simulation) && (
           <p className="mt-2 rounded-md border border-amber-900/60 bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-200/80">
@@ -107,11 +139,78 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
           </p>
         )}
 
+        {contextHistory.length > 0 && (
+          <section className="mt-3" aria-labelledby="context-processing-history-title">
+            <div className="flex items-center justify-between gap-2">
+              <h4 id="context-processing-history-title" className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">
+                Context processing history · {contextHistory.length}
+              </h4>
+              <span className="text-[10px] text-slate-600">saved with project sources</span>
+            </div>
+            <div className="mt-2 space-y-2">
+              {contextHistory.map((source) => {
+                const log = source.processing_log;
+                return (
+                  <article key={source.id} className="rounded-lg border border-cyan-950/70 bg-slate-900/80 px-3 py-2.5 text-[11px]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-200">{source.filename}</p>
+                        <p className="mt-0.5 text-slate-600">
+                          {formatTimestamp(sourceActivityDate(source))} · {log ? `${log.duration_ms}ms` : 'duration unavailable'} · {source.derived_node_ids.length} graph nodes
+                        </p>
+                      </div>
+                      <span className={sourceActivityStatus(source) === 'completed' ? 'text-emerald-300' : sourceActivityStatus(source) === 'failed' ? 'text-rose-300' : 'text-amber-300'}>
+                        {sourceActivityStatus(source)}
+                      </span>
+                    </div>
+
+                    {log ? (
+                      <details className="mt-2 border-t border-slate-800 pt-2">
+                        <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">
+                          View processing stages ({log.stages.length})
+                        </summary>
+                        <div className="mt-2 space-y-1.5">
+                          {log.stages.map((stage, index) => (
+                            <details key={`${source.id}-${stage.name}-${index}`} className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+                              <summary className="flex cursor-pointer items-center justify-between gap-2 text-slate-400">
+                                <span>{stage.name}</span>
+                                <span className={stage.status === 'completed' ? 'text-emerald-300' : stage.status === 'failed' ? 'text-rose-300' : 'text-amber-300'}>
+                                  {stage.status} · {stage.duration_ms}ms
+                                </span>
+                              </summary>
+                              {(stage.input !== undefined || stage.output !== undefined || stage.error) && (
+                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-800 pt-2 text-[10px] leading-relaxed text-slate-600">
+                                  {JSON.stringify({ input: stage.input, output: stage.output, error: stage.error }, null, 2)}
+                                </pre>
+                              )}
+                            </details>
+                          ))}
+                          {log.error && <p className="text-rose-300">{log.error}</p>}
+                        </div>
+                        <details className="mt-2 border-t border-slate-800 pt-2">
+                          <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-slate-500">View full local processing log</summary>
+                          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950/80 p-2 text-[10px] leading-relaxed text-slate-600">
+                            {JSON.stringify(log, null, 2)}
+                          </pre>
+                        </details>
+                      </details>
+                    ) : (
+                      <p className="mt-2 border-t border-slate-800 pt-2 text-slate-500">
+                        This source has processing metadata, but no detailed localhost processing log was saved.
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {loading ? (
         <div className="mt-3 h-12 animate-pulse rounded-lg bg-slate-900/80" aria-label="Loading Decision Map activity" />
-        ) : traces.length === 0 ? (
+        ) : traces.length === 0 && contextHistory.length === 0 ? (
         <div className="mt-3 rounded-lg border border-dashed border-slate-800 bg-slate-900/50 px-3 py-2 text-[11px] text-slate-500">
-          <p>No map activity in this running session yet. Run a graph turn or ingest project context, then refresh this section.</p>
+          <p>No activity history is available yet. Add project context or run a graph turn to see how the map is built.</p>
           {agentPolicy.length > 0 && (
             <div className="mt-2 border-t border-slate-800 pt-2">
               <p className="font-semibold uppercase tracking-[0.12em] text-slate-500">Configured routing (no call yet)</p>
@@ -127,7 +226,11 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
             </div>
           )}
         </div>
-        ) : (
+        ) : traces.length > 0 ? (
+        <section className="mt-3" aria-labelledby="runtime-trace-history-title">
+          <h4 id="runtime-trace-history-title" className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
+            Runtime activity · {traces.length}
+          </h4>
         <div className="mt-3 grid gap-2 lg:grid-cols-2">
           {traces.map((trace) => (
             <article key={trace.id} className="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2.5 text-[11px]">
@@ -288,10 +391,30 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                   </ol>
                 </details>
               )}
+              {trace.decisionMapDebug && (
+                <details className="mt-2 border-t border-cyan-950/80 pt-2" open>
+                  <summary className="cursor-pointer font-semibold uppercase tracking-[0.12em] text-cyan-300">Decision Map debug trace · v{trace.decisionMapDebug.schemaVersion}</summary>
+                  <p className="mt-1 text-slate-500">
+                    {trace.decisionMapDebug.rawProjectGraph.totalNodes} nodes · {trace.decisionMapDebug.rawProjectGraph.totalEdges} edges · {trace.decisionMapDebug.renderedStoryReadabilitySummary.visibleNodes} visible · focus {trace.decisionMapDebug.renderedStoryReadabilitySummary.currentFocusActionNodeId ?? 'unavailable'}
+                  </p>
+                  <div className="mt-2 grid gap-2">
+                    <DebugTraceStage title="1. Raw project graph" value={trace.decisionMapDebug.rawProjectGraph} />
+                    <DebugTraceStage title="2. Semantic graph interpretation" value={trace.decisionMapDebug.semanticGraphInterpretation} />
+                    <DebugTraceStage title="3. Current focus analysis" value={trace.decisionMapDebug.currentFocusAnalysis} open />
+                    <DebugTraceStage title="4. Story backbone candidates" value={trace.decisionMapDebug.storyBackboneCandidates} />
+                    <DebugTraceStage title="5. Collapse / expansion analysis" value={trace.decisionMapDebug.collapseExpansionAnalysis} />
+                    <DebugTraceStage title="6. Why this matters debug" value={trace.decisionMapDebug.whyThisMattersDebug} />
+                    <DebugTraceStage title="7. Filter / visibility trace" value={trace.decisionMapDebug.filterVisibilityTrace} />
+                    <DebugTraceStage title="8. Layout diagnostics" value={trace.decisionMapDebug.layoutDiagnostics} />
+                    <DebugTraceStage title="9. Rendered story / readability summary" value={trace.decisionMapDebug.renderedStoryReadabilitySummary} open />
+                  </div>
+                </details>
+              )}
             </article>
           ))}
         </div>
-        )}
+        </section>
+        ) : null}
       </>}
     </section>
   );

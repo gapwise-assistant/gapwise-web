@@ -14,20 +14,17 @@ const guidance: GapGuidance = {
 };
 
 describe('RecommendedFocus', () => {
-  it('renders the four-part Gap Agent recommendation without scores or internal identifiers', () => {
+  it('renders only the focus and available actions without internal guidance details', () => {
     const html = renderToStaticMarkup(
       <RecommendedFocus guidance={guidance} onResolve={vi.fn()} onViewDecisionMap={vi.fn()} />,
     );
 
     expect(html).toContain('Recommended focus');
-    expect(html).toContain('Gap Agent');
     expect(html).toContain(guidance.focus);
-    expect(html).toContain('Why now');
-    expect(html).toContain(guidance.whyNow);
-    expect(html).toContain('Next step');
-    expect(html).toContain(guidance.nextStep);
-    expect(html).toContain('What could change');
-    expect(html).toContain(guidance.whatCouldChange);
+    expect(html).not.toContain('Gap Agent');
+    expect(html).not.toContain(guidance.whyNow);
+    expect(html).not.toContain(guidance.nextStep);
+    expect(html).not.toContain(guidance.whatCouldChange);
     expect(html).toContain('Resolve question');
     expect(html).toContain('View in Decision Map');
     expect(html).not.toContain('unknown_role_fit');
@@ -36,12 +33,22 @@ describe('RecommendedFocus', () => {
     expect(html).not.toContain('confidence');
   });
 
-  it('labels deterministic fallback guidance honestly', () => {
+  it('does not expose the guidance generator in the compact view', () => {
     const html = renderToStaticMarkup(
       <RecommendedFocus guidance={{ ...guidance, generatedBy: 'deterministic' }} />,
     );
 
-    expect(html).toContain('Project analysis');
     expect(html).not.toContain('Gap Agent');
+    expect(html).not.toContain('Project analysis');
+  });
+
+  it('renders a Decide action for an open decision focus', () => {
+    const html = renderToStaticMarkup(
+      <RecommendedFocus guidance={guidance} onDecide={vi.fn()} onViewDecisionMap={vi.fn()} />,
+    );
+
+    expect(html).toContain('Decide');
+    expect(html).not.toContain('Resolve question');
+    expect(html).toContain('View in Decision Map');
   });
 });

@@ -57,3 +57,20 @@ def test_web_research_and_routing_apps_use_registered_app_names() -> None:
     assert agent.routing_agent.output_schema is agent.AskRouteDecision
     assert agent.routing_agent.generate_content_config.response_mime_type == "application/json"
     assert agent.google_search in agent.web_research_agent.tools
+
+
+def test_routing_policy_uses_current_message_when_saved_context_is_sparse() -> None:
+    instruction = agent.routing_agent.instruction.lower()
+
+    assert "do not request clarification." in instruction
+    assert "the current user message is always first-class context." in instruction
+    assert "choose web_research only when" in instruction
+
+
+def test_partner_policy_keeps_sparse_project_discovery_concise() -> None:
+    instruction = agent.root_agent.instruction.lower()
+
+    assert "keep the response concise and conversational." in instruction
+    assert "one high-value follow-up question." in instruction
+    assert "do not turn early project discovery into a full plan." in instruction
+    assert "your exploration and recommendations are conversational output" in instruction

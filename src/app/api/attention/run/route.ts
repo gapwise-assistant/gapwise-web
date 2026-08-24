@@ -8,6 +8,7 @@ import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
+import { getCachedFocusAssessment } from '@/lib/focus/focusCache';
 
 export const runtime = 'nodejs';
 
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
       contextPack,
       now,
     });
+    const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE);
 
     recordTrace({
       userId,
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
       }],
     });
 
-    return NextResponse.json({ brief });
+    return NextResponse.json({ brief, focusAssessment });
   } catch (error) {
     recordTrace({
       userId,

@@ -10,7 +10,7 @@ describe('decision workspace', () => {
 
     expect(decision?.id).toBe('node_decision_track');
     expect(workspace?.decision.id).toBe('node_decision_track');
-    expect(workspace?.remainingQuestions.map((item) => item.node.id)).toContain('unknown_target_user');
+    expect(workspace?.decisionInputs.map((item) => item.node.id)).toContain('unknown_target_user');
   });
 
   it('shows a recommendation only when explicit options have separated evidence', () => {
@@ -74,5 +74,31 @@ describe('decision workspace', () => {
 
     expect(decision).toBeDefined();
     expect(decisionQuestionForDisplay(updated, decision!)).toBe('Build Gapwise: Find the question that unlocks the next decision');
+  });
+
+  it('closes a NEXT_ACTION whose explicitly linked decision is confirmed', () => {
+    const project = createGoldenDemoProject();
+    const decision = project.nodes.find((node) => node.id === 'node_decision_track')!;
+    decision.status = 'OPEN';
+    project.nodes.push({
+      ...decision,
+      id: 'action_choose_track',
+      type: 'NEXT_ACTION',
+      text: 'Choose the project track.',
+      status: 'OPEN',
+    });
+    project.edges.push({
+      id: 'edge_action_choose_track',
+      source: 'action_choose_track',
+      target: decision.id,
+      type: 'satisfies',
+    });
+
+    const updated = confirmDecision(project, {
+      decisionNodeId: decision.id,
+      customDecision: 'Build the Gapwise collaborative partner.',
+    });
+
+    expect(updated.nodes.find((item) => item.id === 'action_choose_track')?.status).toBe('RESOLVED');
   });
 });

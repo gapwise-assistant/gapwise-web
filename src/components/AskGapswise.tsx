@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Globe, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
-import { AskOpenQuestion, AskResearchEvidence, AskResult, AskSearchSuggestions, AskSource, AskTarget } from '@/types/ask';
+import { AskExecution, AskOpenQuestion, AskResearchEvidence, AskResponseOutcome, AskSearchSuggestions, AskSource, AskTarget } from '@/types/ask';
 import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
@@ -21,6 +21,7 @@ interface AskGapswiseProps {
   newChatPrompt?: { id: string; text: string; target?: AskTarget } | null;
   onNewChatPromptOpened?: () => void;
   onViewSource?: (source: AskSource) => void;
+  onProjectContextChanged?: () => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
 }
 
@@ -28,10 +29,14 @@ interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  outcome?: AskResponseOutcome;
+  resolvesQuestionId?: string;
+  conclusion?: string;
   sources?: AskSource[];
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  execution?: AskExecution;
   responseDetails?: {
     promptUsed?: string;
     systemPrompt?: string;
@@ -186,10 +191,14 @@ export function restoreChatSessions(
       id: message.id,
       role: message.role,
       text: message.text,
+      outcome: message.outcome,
+      resolvesQuestionId: message.resolvesQuestionId,
+      conclusion: message.conclusion,
       sources: message.sources,
       openQuestionIds: message.openQuestionIds,
       openQuestions: message.openQuestions,
       searchSuggestions: message.searchSuggestions,
+      execution: message.execution,
     });
     messagesByChat.set(message.chatId, messages);
   });
@@ -207,6 +216,33 @@ export function restoreChatSessions(
       messages,
     };
   });
+}
+
+export function canUseAskConclusion(
+  message: Pick<ChatMessage, 'outcome' | 'resolvesQuestionId' | 'conclusion' | 'openQuestionIds'>,
+): boolean {
+  return message.outcome === 'conclusion'
+    && Boolean(message.resolvesQuestionId)
+    && Boolean(message.conclusion?.trim())
+    && Boolean(message.openQuestionIds?.includes(message.resolvesQuestionId as string));
+}
+
+export function askResponseAction(
+  message: Pick<ChatMessage, 'outcome' | 'resolvesQuestionId' | 'conclusion' | 'openQuestionIds'>,
+): 'use_as_answer' | null {
+  return canUseAskConclusion(message) ? 'use_as_answer' : null;
+}
+
+export function canUseAskDecisionConclusion(
+  message: Pick<ChatMessage, 'outcome' | 'conclusion'>,
+): boolean {
+  return message.outcome === 'conclusion' && Boolean(message.conclusion?.trim());
+}
+
+export function isClarificationResponse(message: Pick<ChatMessage, 'text' | 'execution'>): boolean {
+  // Keep older persisted clarification messages safe when they predate the
+  // two-route contract and do not have route metadata.
+  return /^i\s+(?:do\s+not|don't)\s+have\s+enough\s+context\b[\s\S]*\b(?:clarif(?:y|ication)|more details|specific information)\b/i.test(message.text.trim());
 }
 
 export function researchStatusFromRecords(records: Array<Partial<AskResearchEvidence>>): {
@@ -258,6 +294,7 @@ export function AskGapswise({
   newChatPrompt,
   onNewChatPromptOpened,
   onViewSource,
+  onProjectContextChanged,
   onProjectUpdated,
 }: AskGapswiseProps) {
   const [chats, setChats] = useState<ChatSession[]>([]);
@@ -433,13 +470,18 @@ export function AskGapswise({
     const target = activeChat?.target;
     const isDecision = mode === 'use_as_decision' || target?.type === 'decision';
     const actionMode = isDecision && mode === 'use_as_answer' ? 'use_as_decision' : mode;
+    const modelQuestionTarget = canUseAskConclusion(message)
+      ? message.resolvesQuestionId
+      : undefined;
     setResearchError('');
     setResearchAction({
       message,
       mode: actionMode,
-      text: actionMode === 'use_as_decision' ? '' : message.text.trim(),
+      text: actionMode === 'use_as_answer' || actionMode === 'use_as_decision'
+        ? message.conclusion?.trim() ?? ''
+        : message.text.trim(),
       targetQuestionId: !isDecision
-        ? target?.type === 'question' ? target.id : questions.length === 1 ? questions[0].id : ''
+        ? modelQuestionTarget ?? (target?.type === 'question' ? target.id : questions.length === 1 ? questions[0].id : '')
         : '',
       ...(target?.type === 'question' ? { targetQuestionText: target.text } : {}),
       targetDecisionId: isDecision && target?.type === 'decision' ? target.id : '',
@@ -455,6 +497,16 @@ export function AskGapswise({
     }
     if (researchAction.mode === 'use_as_decision' && !researchAction.targetDecisionId) {
       setResearchError('This decision chat is missing its target. Reopen the decision and start the discussion again.');
+      return;
+    }
+    if (researchAction.mode === 'use_as_answer'
+      && (!canUseAskConclusion(researchAction.message)
+        || researchAction.targetQuestionId !== researchAction.message.resolvesQuestionId)) {
+      setResearchError('Only a conclusion that targets an open question can be used as its answer.');
+      return;
+    }
+    if (researchAction.mode === 'use_as_decision' && !canUseAskDecisionConclusion(researchAction.message)) {
+      setResearchError('Only a conclusion can be used as a decision.');
       return;
     }
     setResearchBusy(true);
@@ -541,15 +593,20 @@ export function AskGapswise({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Ask failed.');
+      await onProjectContextChanged?.();
 
       const assistantMsg: ChatMessage = {
         id: data.assistantMessageId ?? `assistant_${Date.now()}`,
         role: 'assistant',
         text: data.answer,
+        outcome: data.outcome,
+        resolvesQuestionId: data.resolvesQuestionId,
+        conclusion: data.conclusion,
         sources: data.sources,
         openQuestionIds: data.openQuestionIds,
         openQuestions: data.openQuestions,
         searchSuggestions: data.searchSuggestions,
+        execution: data.execution,
         responseDetails: {
           promptUsed: data.promptUsed,
           systemPrompt: data.fallbackSystemPrompt,
@@ -670,10 +727,8 @@ export function AskGapswise({
       <div className="flex-1 space-y-4 overflow-y-auto py-6">
         {activeChat?.messages.map((message) => {
           const hasWebSources = Boolean(message.sources?.some((s) => s.kind === 'web' && s.url));
-          const hasOpenQuestions = Boolean(message.openQuestions && message.openQuestions.length > 0);
-          const activeDecisionTarget = activeChat?.target?.type === 'decision' ? activeChat.target : undefined;
-          const activeQuestionTarget = activeChat?.target?.type === 'question' ? activeChat.target : undefined;
-          const hasActionTarget = Boolean(activeDecisionTarget || activeQuestionTarget || hasOpenQuestions);
+          const isClarification = message.role === 'assistant' && isClarificationResponse(message);
+          const responseAction = message.role === 'assistant' ? askResponseAction(message) : null;
 
           return (
             <div
@@ -726,51 +781,23 @@ export function AskGapswise({
                       </div>
                     )}
 
-                    {/* Distinct Actions */}
-                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
-                      {/* Action 1: Save as context (Always available) */}
-                      {savedContextMessageIds.has(message.id) ? (
-                        <span className="text-xs font-semibold text-emerald-300">Saved as context.</span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => openResearchAction(message, 'save_as_context')}
-                          className="min-h-10 rounded-lg border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs font-bold text-slate-200 hover:border-cyan-700"
-                        >
-                          Save as context
-                        </button>
-                      )}
-
-                      {/* Action 2: Use as my answer (Available when open questions exist) */}
-                      {activeDecisionTarget && confirmedDecisionMessageIds.has(message.id) ? (
-                        <span className="text-xs font-semibold text-emerald-300">Decision confirmed.</span>
-                      ) : !activeDecisionTarget && confirmedAnswerMessageIds.has(message.id) ? (
-                        <span className="text-xs font-semibold text-emerald-300">Answer confirmed.</span>
-                      ) : hasActionTarget ? (
-                        <button
-                          type="button"
-                          onClick={() => openResearchAction(message, activeDecisionTarget ? 'use_as_decision' : 'use_as_answer')}
-                          className="min-h-10 rounded-lg border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-600"
-                        >
-                          {activeDecisionTarget ? 'Use as my decision' : 'Use as my answer'}
-                        </button>
-                      ) : null}
-
-                      {/* Action 3: Save research (Available only when genuine web sources exist) */}
-                      {hasWebSources && (
-                        savedResearchMessageIds.has(message.id) ? (
-                          <span className="text-xs font-semibold text-emerald-300">Research saved for this conversation.</span>
+                    {/* Exploration and recommendations stay conversational. Only a
+                        structured conclusion can enter the existing answer flow. */}
+                    {!isClarification && responseAction === 'use_as_answer' && (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
+                        {confirmedAnswerMessageIds.has(message.id) ? (
+                          <span className="text-xs font-semibold text-emerald-300">Answer confirmed.</span>
                         ) : (
                           <button
                             type="button"
-                            onClick={() => openResearchAction(message, 'save')}
-                            className="min-h-10 rounded-lg border border-cyan-800 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600"
+                            onClick={() => openResearchAction(message, 'use_as_answer')}
+                            className="min-h-10 rounded-lg border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-600"
                           >
-                            Save research
+                            Use as my answer
                           </button>
-                        )
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    )}
 
                     {message.searchSuggestions && (
                       <details className="mt-3 border-t border-slate-800 pt-3">

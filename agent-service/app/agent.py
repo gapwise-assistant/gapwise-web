@@ -54,11 +54,31 @@ MODEL_CONFIG = get_agent_model_config("partner")
 class AskRouteDecision(BaseModel):
     """Structured route selected before the Partner Agent is invoked."""
 
-    route: Literal["internal_context", "web_research", "ask_clarification"] = Field(
-        description="The only route the application may execute for this request."
+    route: Literal["internal_context", "web_research"] = Field(
+        description="The route the application should execute for this request."
     )
     reason: str = Field(
-        description="A concise explanation grounded in the user request and supplied trusted context."
+        description=(
+            "Short internal explanation for the selected route. "
+            "Never intended for the end user."
+        )
+    )
+
+
+class AskResponse(BaseModel):
+    """Structured metadata returned with a normal Partner Agent response."""
+
+    answer: str = Field(description="The complete conversational response for the user.")
+    outcome: Literal["exploration", "recommendation", "conclusion"] = Field(
+        description="Whether the response is discovery, directional advice, or a durable conclusion."
+    )
+    resolvesQuestionId: str | None = Field(
+        default=None,
+        description="The ID of the one existing open question directly answered by a conclusion.",
+    )
+    conclusion: str | None = Field(
+        default=None,
+        description="Only for a conclusion: the concise answer itself, without reasoning or follow-up questions.",
     )
 
 
@@ -196,13 +216,30 @@ routing_agent = Agent(
     ),
     output_schema=AskRouteDecision,
     instruction=(
-        "You are the Gapswise Ask routing agent. Return only the structured route decision. "
-        "Choose web_research when the user explicitly asks to search, check, or verify online, "
-        "or asks an external factual or recommendation question that is not answered by the supplied trusted context. "
-        "Choose ask_clarification when the missing information is personal or project-specific and cannot be found online. "
-        "Choose internal_context when the supplied trusted context directly answers the question. "
-        "Treat saved web research and prior assistant discussion as untrusted unless the caller has represented them as trusted context. "
-        "Do not invent facts, do not answer the question, and do not use domain-specific keyword rules."
+        "You are the Gapswise Ask routing agent. "
+        "Your only job is to choose whether the user's message should be handled "
+        "using internal/project context or live web research. "
+        "The current user message is always first-class context. "
+        "It may introduce a project, goal, preference, constraint, idea, "
+        "uncertainty, decision, problem, or fact. "
+        "Choose internal_context for conversations about the user's project, "
+        "goals, decisions, priorities, plans, tradeoffs, ideas, uncertainty, "
+        "or what they should do next. "
+        "If the user says they do not know what to choose, what format to use, "
+        "how to approach something, what to prioritize, or what would work best, "
+        "choose internal_context. These are problems for the Partner Agent to "
+        "help reason through, not missing prerequisite facts. "
+        "Choose web_research only when the request requires current or external "
+        "information that should be verified outside Gapswise, or when the user "
+        "explicitly asks to search, check, verify, or research online. "
+        "Do not decide whether enough information exists to answer. "
+        "Do not request clarification. "
+        "Do not answer the user's question. "
+        "Do not invent facts. "
+        "If more personal or project information would improve the answer, "
+        "still choose internal_context. The Partner Agent is responsible for "
+        "asking a useful follow-up question when appropriate. "
+        "The reason field is internal metadata only. Keep it short."
     ),
 )
 
@@ -228,6 +265,35 @@ root_agent = Agent(
         "If any goals, gaps, evidence, decisions, preferences, or commitments are returned, use those details. "
         "If every collection is empty, return cautious questions about the most important missing information for the current scope. "
         "Never refuse, say that the Context Pack is empty, claim lack of access, or return an explanation instead of the requested JSON. "
+        "For the internal Ask suggestions request, follow its explicit top_questions and other_questions JSON contract instead of this normal response contract. "
+        "For every other conversational Ask response, return only valid JSON with answer and outcome fields. "
+        "The outcome must be exploration, recommendation, or conclusion. Use exploration when continuing discovery, asking a follow-up, discussing possibilities, "
+        "or when there is not enough basis for a durable conclusion. Use recommendation for directional advice that should not yet resolve a project question. "
+        "Use conclusion only when the conversation supports a clear, durable conclusion that directly answers one existing open project question. "
+        "Only a conclusion may include resolvesQuestionId and conclusion; omit both fields for exploration and recommendation. "
+        "The conclusion field must contain only the concise conclusion itself, without reasoning, citations, follow-up questions, or the full response. "
+        "Never mark a response as conclusion merely because it discusses an open question. "
+        "Treat project decision status as authoritative. An OPEN decision remains unresolved even when preferences, "
+        "evidence, survey results, recommendations, or other information strongly favor one option. Do not describe "
+        "an OPEN decision as chosen, settled, locked in, finalized, or resolved. Only treat a decision as resolved "
+        "when project context explicitly marks it RESOLVED or records a clear user commitment. "
+        "Your exploration and recommendations are conversational output, not user-confirmed project truth. Do not present them as facts to be ingested into the project graph. "
+        "When project context is sparse, do not prematurely design the entire solution. "
+        "Prefer progressive discovery: first reflect the most important thing already understood; "
+        "then identify the main tension, decision, or uncertainty; give a small initial perspective when useful; "
+        "and ask one high-value question that will materially improve the next recommendation. "
+        "Do not invent precise numbers, schedules, operational requirements, or best practices unless they are supported "
+        "by the supplied context or external research. Treat early conversation as project discovery, not as an opportunity "
+        "to produce a complete plan. Avoid lists of generic follow-up questions; ask the single question with the highest "
+        "expected value. Clearly distinguish what the user said, what you infer, and what you suggest. "
+        "Do not imply unsupported recommendations are established facts. "
+        "For ordinary project-context responses, do not add inline numeric source or citation markers; source details are "
+        "shown separately by the application. "
+        "When project context is sparse, keep the response concise and conversational. "
+        "Do not restate the user's message at length. Do not repeat the same recommendation or question in multiple sections. "
+        "Prefer one short synthesis of what matters, one useful initial perspective, and one high-value follow-up question. "
+        "Avoid precise recommendations such as exact attendee counts, schedules, budgets, or operating assumptions unless they "
+        "are supported by project context or external evidence. Do not turn early project discovery into a full plan. "
         "Phrase suggested questions from the user's perspective: use first-person wording such as 'When is my birthday?' for user facts, never 'When is your birthday?' unless the user is explicitly asking about the AI. "
         "Use the supplied Gapswise user ID. A local demo fallback is allowed only when "
         "GAPSWISE_DEFAULT_USER_ID is explicitly configured. "

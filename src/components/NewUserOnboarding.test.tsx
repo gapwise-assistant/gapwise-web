@@ -10,6 +10,7 @@ describe('NewUserOnboarding', () => {
         isLoadingDemo={false}
         onLoadCareerDemo={vi.fn()}
         onLoadHackathonDemo={vi.fn()}
+        onLoadBakeryDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}
@@ -21,6 +22,7 @@ describe('NewUserOnboarding', () => {
     expect(html).toContain('Load demo');
     expect(html).toContain('Career demo');
     expect(html).toContain('Voluntary demo');
+    expect(html).toContain('Bakery pop-up demo');
   });
 
   it('shows a loading state while demo data is being copied', () => {
@@ -29,6 +31,7 @@ describe('NewUserOnboarding', () => {
         isLoadingDemo
         onLoadCareerDemo={vi.fn()}
         onLoadHackathonDemo={vi.fn()}
+        onLoadBakeryDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
         onSignOut={vi.fn()}

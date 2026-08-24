@@ -2,6 +2,7 @@ import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
 import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 
 export interface DecisionEvidence {
   id: string;
@@ -38,7 +39,7 @@ export interface DecisionWorkspaceModel {
   supportingEvidence: DecisionEvidence[];
   constraints: ClarityNode[];
   assumptionsRisks: ClarityNode[];
-  remainingQuestions: DecisionQuestion[];
+  decisionInputs: DecisionQuestion[];
   sources: Project['sources'];
   recommendation: DecisionRecommendation | null;
   currentPicture: string[];
@@ -199,8 +200,8 @@ function buildOptions(
   }));
 }
 
-function buildRecommendation(options: DecisionOption[], hasBlockingQuestions: boolean): DecisionRecommendation | null {
-  if (hasBlockingQuestions) return null;
+function buildRecommendation(options: DecisionOption[], hasBlockingInputs: boolean): DecisionRecommendation | null {
+  if (hasBlockingInputs) return null;
   if (options.length < 2 || options.some((option) => option.evidence.length === 0 || option.sourceIds.length === 0)) return null;
   const ranked = [...options].sort((left, right) => {
     const rightScore = right.evidence.reduce((sum, item) => sum + item.confidence, 0);
@@ -224,9 +225,12 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
   const relatedIds = relatedNodeIds(reasoningProject, decision.id);
   const relatedNodes = reasoningProject.nodes.filter((node) => relatedIds.has(node.id));
   const decisionEdges = connectedEdges(reasoningProject, decision.id);
-  const remainingQuestions = relatedNodes
+  const decisionInputs = relatedNodes
     .filter((node) => node.status === 'OPEN' && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'))
-    .filter((node) => decisionEdges.some((edge) => edge.type === 'blocks' || edge.type === 'depends_on' ? edge.source === node.id || edge.target === node.id : false))
+    .filter((node) => decisionEdges.some((edge) =>
+      (edge.type === 'blocks' || edge.type === 'depends_on' || edge.type === 'informs')
+      && (edge.source === node.id || edge.target === node.id)
+    ))
     .map((node) => ({
       node,
       why: node.why_it_matters?.[0] ?? 'Answering this could change confidence in the decision.',
@@ -244,21 +248,25 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
     ...options.flatMap((option) => option.sourceIds),
     ...constraints.flatMap((node) => node.source_refs),
     ...assumptionsRisks.flatMap((node) => node.source_refs),
-    ...remainingQuestions.flatMap((question) => question.node.source_refs),
+    ...decisionInputs.flatMap((question) => question.node.source_refs),
   ]);
   const sources = activeContextSources(reasoningProject).filter((source) => relevantSourceIds.includes(source.id));
-  const recommendation = buildRecommendation(options, remainingQuestions.length > 0);
-  const currentPicture = recommendation
-    ? [`Gapwise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]
-    : remainingQuestions.length
-      ? decision.why_it_matters?.[0]
-        ? [decision.why_it_matters[0]]
-        : assumptionsRisks.length
-          ? [`This decision is shaped by ${assumptionsRisks[0].text.replace(/[.!?]+$/, '')}.`]
-          : ['This decision still needs an answer before it can be made with confidence.']
-      : supportingEvidence.length
+  const recommendation = buildRecommendation(options, decisionInputs.length > 0);
+  const inputPicture = decisionInputs
+    .slice(0, 3)
+    .map((question) => question.why ?? `Still unresolved: ${question.node.text}`);
+  const currentPicture = Array.from(new Set([
+    ...(recommendation
+      ? [`Gapwise currently leans toward ${recommendation.option.label}.`, recommendation.explanation]
+      : []),
+    ...(decision.why_it_matters ?? []),
+    ...inputPicture,
+    ...(!recommendation && !decision.why_it_matters?.length && !inputPicture.length
+      ? supportingEvidence.length
         ? ['The decision has some supporting context, but no option has enough clearly separated evidence for a recommendation.']
-        : ['There is not enough structured context to recommend an option yet.'];
+        : ['There is not enough structured context to recommend an option yet.']
+      : []),
+  ])).slice(0, 5);
 
   return {
     decision,
@@ -266,7 +274,7 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
     supportingEvidence,
     constraints,
     assumptionsRisks,
-    remainingQuestions,
+    decisionInputs,
     sources,
     recommendation,
     currentPicture,
@@ -326,6 +334,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
     });
 
   const reason = input.reason?.trim();
+  resolveSatisfiedNextActions(updated, now);
   updated.history.push({
     question: previousText,
     answer: finalText,

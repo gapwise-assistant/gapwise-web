@@ -123,43 +123,29 @@ export function unlinkedOpenQuestions(project: Project): ClarityNode[] {
 }
 
 /**
- * Finds a user-confirmable decision from explicit context without silently
- * inventing a decision. This is intentionally deterministic and zero-cost.
+ * Suggests creating a decision only when the project has no open decision and
+ * a source explicitly describes a pending choice. Questions are not attached
+ * automatically; their relationships must be explicit.
  */
 export function findDecisionAnchorSuggestion(project: Project): DecisionAnchorSuggestion | null {
-  const questions = unlinkedOpenQuestions(project);
-  if (questions.length === 0) return null;
-  const decisions = openDecisions(project);
-  if (decisions.length === 1) {
-    const decision = decisions[0];
-    const questionNodeIds = questions
-      .filter((node) => decision.source_refs.length === 0 || node.source_refs.some((id) => decision.source_refs.includes(id)))
-      .slice(0, 6)
-      .map((node) => node.id);
-    if (questionNodeIds.length > 0) {
-      return {
-        title: decision.text,
-        questionNodeIds,
-        confidence: 0.9,
-        reason: `These ${questionNodeIds.length} open question${questionNodeIds.length === 1 ? '' : 's'} are not connected to the pending decision yet.`,
-      };
-    }
-  }
+  if (openDecisions(project).length > 0) return null;
+
   for (const source of project.sources.filter((candidate) => !candidate.discarded_at)) {
-    if (!hasExplicitOpenDecisionCue(source.content)) continue;
+    if (!hasExplicitOpenDecisionCue(source.content)) {
+      continue;
+    }
+
     const title = extractOpenDecisionTitle(source.content);
-    if (!title) continue;
-    const questionNodeIds = questions
-      .filter((node) => node.source_refs.includes(source.id))
-      .slice(0, 6)
-      .map((node) => node.id);
-    if (questionNodeIds.length === 0) continue;
+    if (!title) {
+      continue;
+    }
+
     return {
       title,
       sourceId: source.id,
-      questionNodeIds,
+      questionNodeIds: [],
       confidence: 0.8,
-      reason: `The source explicitly describes a pending choice and ${questionNodeIds.length} open question${questionNodeIds.length === 1 ? '' : 's'} from it could change that choice.`,
+      reason: 'The source explicitly describes a pending choice.',
     };
   }
   return null;
@@ -182,43 +168,6 @@ function decisionTitleMatches(left: string, right: string): boolean {
 }
 
 /**
- * Connects questions from the same source to a newly extracted OPEN decision.
- * We only do this when the decision is explicit and the question came from
- * that same source, avoiding speculative cross-project graph edges.
- */
-export function linkOpenDecisionQuestions(
-  project: Project,
-  sourceId: string,
-  sourceContent: string,
-  sourceNodeIds: string[],
-  now: string,
-): void {
-  const decisions = openDecisions(project).filter((decision) =>
-    decision.source_refs.includes(sourceId) || sourceNodeIds.includes(decision.id)
-  );
-  if (decisions.length === 0 || !hasExplicitOpenDecisionCue(sourceContent)) return;
-  const questions = project.nodes.filter((node) =>
-    sourceNodeIds.includes(node.id) && OPEN_QUESTION_TYPES.has(node.type) && node.status === 'OPEN'
-  ).slice(0, 6);
-  const edgeType: EdgeType = /\b(?:blocked|blocks|depends|before|must decide)\b/i.test(sourceContent) ? 'blocks' : 'informs';
-  questions.forEach((question) => {
-    const relevantDecisions = decisions.length === 1
-      ? decisions
-      : decisions.filter((decision) => {
-          const overlap = [...meaningfulTokens(question.text)].filter((token) => meaningfulTokens(decision.text).has(token)).length;
-          return overlap > 0;
-        });
-    relevantDecisions.forEach((decision) => addEdge(project, {
-      source: question.id,
-      target: decision.id,
-      type: edgeType,
-      confidence: 0.76,
-    }));
-    question.updated_at = now;
-  });
-}
-
-/**
  * Explicit user action for projects whose context did not contain a decision.
  * The returned clone is safe to persist through the normal project update path.
  */
@@ -232,10 +181,13 @@ export function anchorProjectDecision(
   if (!cleanedTitle) return project;
   const updated: Project = JSON.parse(JSON.stringify(project));
   const now = new Date().toISOString();
-  const questions = (questionNodeIds?.length
-    ? updated.nodes.filter((node) => questionNodeIds.includes(node.id))
-    : openQuestions(updated).slice(0, 6)
-  ).filter((node) => OPEN_QUESTION_TYPES.has(node.type) && node.status === 'OPEN');
+  const questions = questionNodeIds?.length
+    ? updated.nodes.filter((node) =>
+        questionNodeIds.includes(node.id)
+        && OPEN_QUESTION_TYPES.has(node.type)
+        && node.status === 'OPEN'
+      )
+    : [];
 
   let decision = updated.nodes.find((node) => node.type === 'DECISION' && decisionTitleMatches(node.text, cleanedTitle));
   if (!decision) {
@@ -251,7 +203,7 @@ export function anchorProjectDecision(
       confidence: 0.9,
       impact: 0.95,
       source_refs: Array.from(new Set(questions.flatMap((node) => node.source_refs))),
-      why_it_matters: ['Anchored by the user so the open questions can be prioritized against a specific choice.'],
+      why_it_matters: ['This decision was explicitly anchored by the user.'],
       created_by: 'user',
       created_at: now,
       updated_at: now,
@@ -264,12 +216,15 @@ export function anchorProjectDecision(
     decision.updated_at = now;
   }
 
-  questions.forEach((question) => addEdge(updated, {
-    source: question.id,
-    target: decision!.id,
-    type: 'blocks',
-    confidence: 0.84,
-  }));
+  questions.forEach((question) => {
+    addEdge(updated, {
+      source: question.id,
+      target: decision!.id,
+      type: 'informs',
+      confidence: 0.9,
+    });
+    question.updated_at = now;
+  });
   const goal = updated.nodes.find((node) => node.type === 'GOAL' && node.status !== 'DEPRECATED');
   if (goal) addEdge(updated, { source: decision.id, target: goal.id, type: 'affects', confidence: 0.8 });
 

@@ -174,6 +174,8 @@ export function questionEffectText(project: Project, node: ClarityNode): string 
           ? effect.edge.source === node.id ? 'Affects' : 'Affected by'
           : effect.edge.type === 'resolves'
             ? effect.edge.source === node.id ? 'Resolves' : 'Resolved by'
+            : effect.edge.type === 'satisfies'
+              ? effect.edge.source === node.id ? 'Completes' : 'Completed by'
             : 'Connected to';
     return `${relationship}: ${quote(effect.other.text)}.`;
   }

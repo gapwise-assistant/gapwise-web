@@ -5,6 +5,7 @@ import { UserMemoryProfile } from '@/types/clarity';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 
 function timestampId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -68,6 +69,7 @@ export function resolveGap(
   if (classification.supersedesOriginal) {
     createGraphEdge(updated, { source: understanding.id, target: gap.id, type: 'supersedes' });
   }
+  resolveSatisfiedNextActions(updated, now);
 
   updated.history.push({
     question: gap.text,

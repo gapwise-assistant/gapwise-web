@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { askGapswise, determineAskRoute, test3 } from './adkClient';
+import { askGapswise, determineAskRoute, isFocusQuestion, test3 } from './adkClient';
+
+describe('isFocusQuestion', () => {
+  it('recognizes narrow prioritization intent without classifying unrelated questions', () => {
+    expect(isFocusQuestion('What should I do first?')).toBe(true);
+    expect(isFocusQuestion('What deserves attention now?')).toBe(true);
+    expect(isFocusQuestion('Why do neighbors prefer monthly meetings?')).toBe(false);
+  });
+});
 
 function jsonResponse(data: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(data), {
@@ -131,7 +139,7 @@ describe('determineAskRoute', () => {
     expect(trustedResearch.map((item) => item.id)).not.toContain('research_web_save');
   });
 
-  it('marks an unavailable routing response as a routing failure', async () => {
+  it('keeps explicit web requests fail-closed when routing is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('routing service unavailable');
     }));
@@ -139,11 +147,180 @@ describe('determineAskRoute', () => {
     await expect(determineAskRoute('demo-user', 'Search online for current information.', null))
       .rejects.toMatchObject({ stage: 'routing' });
   });
+
+  it('falls back to internal context when a non-web routing request cannot be classified', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('routing service unavailable');
+    }));
+
+    await expect(determineAskRoute('demo-user', 'I am planning my first Night Lab event.', null))
+      .resolves.toMatchObject({
+        route: 'internal_context',
+        reason: 'Routing unavailable; defaulted to project conversation.',
+      });
+  });
+
+  it('normalizes an older clarification route to internal context', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'ask_clarification',
+      reason: 'The older router used a clarification route.',
+    })));
+
+    await expect(determineAskRoute('demo-user', 'I am planning my first Night Lab event.', null))
+      .resolves.toMatchObject({ route: 'internal_context' });
+  });
+
+  it('sends a new project message as first-class routing input when saved context is empty', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse({ route: 'internal_context', reason: 'The current message contains useful project context.' });
+    }));
+
+    await expect(determineAskRoute(
+      'demo-user',
+      'I am organizing the first Night Lab for designers, engineers, artists, and founders. It will be one evening of experimental projects with a final showcase. I want it creative and slightly chaotic but organized, and I am still deciding the event size and format.',
+      null,
+    )).resolves.toMatchObject({ route: 'internal_context' });
+
+    expect(requestBody).toMatchObject({
+      message: expect.stringContaining('first Night Lab'),
+      trusted_context: { sources: [], graph: [], resolvedAnswers: [], researchEvidence: [] },
+    });
+  });
 });
 
 describe('askGapswise', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('supplies the selected focus authoritatively for focus questions and preserves OPEN decision status', async () => {
+    let partnerPrompt = '';
+    const focusTitle = 'Validate local interest before choosing recurring logistics.';
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: {
+        relevantEvidence: [],
+        upcomingCommitments: [],
+        researchEvidence: [],
+        recentDecisions: [{
+          id: 'decision_frequency',
+          type: 'DECISION',
+          text: 'Choose monthly or biweekly meetings.',
+          status: 'OPEN',
+          source_refs: [],
+        }],
+      } });
+      if (target.endsWith('/internal/ask-route')) return jsonResponse({ route: 'internal_context', reason: 'Prioritization question.' });
+      if (target.endsWith('/api/internal/focus-assessment')) return jsonResponse({ focusAssessment: {
+        kind: 'discovery',
+        title: focusTitle,
+        sourceNodeIds: ['decision_frequency'],
+        sourceIds: [],
+        score: 0.84,
+        confidence: 0.9,
+      } });
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_focus' });
+      if (target.endsWith('/run_sse')) {
+        const body = JSON.parse(String(init?.body)) as { new_message: { parts: Array<{ text: string }> } };
+        partnerPrompt = body.new_message.parts[0].text;
+        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify({ answer: focusTitle, outcome: 'recommendation' }) }] } })}\n`);
+      }
+      throw new Error(`Unexpected fetch ${target}`);
+    }));
+
+    await askGapswise({ userId: 'demo-user', message: 'What should I focus on first?' });
+
+    expect(partnerPrompt).toContain(`Title: ${focusTitle}`);
+    expect(partnerPrompt).toContain('Treat this Focus Assessment as the selected current project priority.');
+    expect(partnerPrompt).toContain('Do not replace it with a different primary recommendation.');
+    expect(partnerPrompt).toContain('Choose monthly or biweekly meetings. [OPEN]');
+    expect(partnerPrompt).toContain('An OPEN decision is unresolved');
+  });
+
+  it('does not make the supplied assessment authoritative for a non-focus question', async () => {
+    let partnerPrompt = '';
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      if (target.endsWith('/internal/ask-route')) return jsonResponse({ route: 'internal_context', reason: 'Project question.' });
+      if (target.endsWith('/api/internal/focus-assessment')) return jsonResponse({ focusAssessment: {
+        kind: 'action', title: 'Prepare the venue.', sourceNodeIds: [], sourceIds: [], score: 0.7, confidence: 0.8,
+      } });
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_non_focus' });
+      if (target.endsWith('/run_sse')) {
+        const body = JSON.parse(String(init?.body)) as { new_message: { parts: Array<{ text: string }> } };
+        partnerPrompt = body.new_message.parts[0].text;
+        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify({ answer: 'Monthly was the stronger survey preference.', outcome: 'exploration' }) }] } })}\n`);
+      }
+      throw new Error(`Unexpected fetch ${target}`);
+    }));
+
+    await askGapswise({ userId: 'demo-user', message: 'Why did neighbors prefer monthly meetings?' });
+
+    expect(partnerPrompt).toContain('Use this assessment when relevant, but do not force it into unrelated answers.');
+    expect(partnerPrompt).not.toContain('The user is asking for project prioritization.');
+  });
+
+  it('preserves an exploratory Partner Agent response without answer metadata', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_exploration' });
+      if (target.endsWith('/internal/ask-route')) return jsonResponse({ route: 'internal_context', reason: 'Project conversation.' });
+      if (target.endsWith('/run_sse')) {
+        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify({
+          answer: 'You are still shaping the first event. Would you rather optimize for intimacy or visible energy?',
+          outcome: 'exploration',
+        }) }] } })}\n`);
+      }
+      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askGapswise({
+      userId: 'demo-user',
+      message: 'I am planning the first Night Lab event.',
+    });
+
+    expect(result).toMatchObject({
+      answer: 'You are still shaping the first event. Would you rather optimize for intimacy or visible energy?',
+      outcome: 'exploration',
+    });
+    expect(result.resolvesQuestionId).toBeUndefined();
+    expect(result.conclusion).toBeUndefined();
+  });
+
+  it('returns a structured conclusion only for a supplied open question target', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_conclusion' });
+      if (target.endsWith('/internal/ask-route')) return jsonResponse({ route: 'internal_context', reason: 'Project context.' });
+      if (target.endsWith('/run_sse')) {
+        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify({
+          answer: 'Given the available venue, start with donation-based admission for the first three events.',
+          outcome: 'conclusion',
+          resolvesQuestionId: 'question_123',
+          conclusion: 'Start the first three events with donation-based admission.',
+        }) }] } })}\n`);
+      }
+      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      throw new Error(`Unexpected fetch ${target}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askGapswise({
+      userId: 'demo-user',
+      message: 'What admission model should I use?',
+      openQuestions: [{ id: 'question_123', text: 'Should admission be donation-based for the first events?' }],
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'conclusion',
+      resolvesQuestionId: 'question_123',
+      conclusion: 'Start the first three events with donation-based admission.',
+    });
   });
 
   it('handles web research verification failure when no grounded URLs are returned', async () => {

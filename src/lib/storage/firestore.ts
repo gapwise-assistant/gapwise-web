@@ -14,11 +14,12 @@ import {
   FirestoreFeedback,
   FirestoreNode,
   FirestoreSource,
+  FocusAssessmentCacheRecord,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -233,6 +234,19 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'askResearch', research);
   }
 
+  async getFocusAssessment(userId: string, cacheId: string): Promise<FocusAssessmentCacheRecord | null> {
+    try {
+      const snapshot = await this.collection(userId, 'focusAssessments').doc(cacheId).get();
+      return snapshot.exists ? this.fromFirestore<FocusAssessmentCacheRecord>(snapshot.data()!) : null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveFocusAssessment(userId: string, record: FocusAssessmentCacheRecord): Promise<void> {
+    await this.save(userId, 'focusAssessments', record);
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return this.list<FirestoreFeedback>(userId, 'feedback');
   }
@@ -283,6 +297,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'askChats',
       'askMessages',
       'askResearch',
+      'focusAssessments',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();

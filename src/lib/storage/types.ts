@@ -2,6 +2,7 @@ import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummar
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
+import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 
 export interface BaseEntity {
   id: string;
@@ -100,6 +101,16 @@ export interface FirestoreEvent extends BaseEntity {
   payload: Record<string, any>;
 }
 
+export interface FocusAssessmentCacheRecord {
+  id: string;
+  userId: string;
+  projectId: string;
+  projectStateVersion: string;
+  assessment: FocusAssessment | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StorageProvider {
   listProjects(userId: string): Promise<Project[]>;
   getProject(userId: string, projectId?: string): Promise<Project | null>;
@@ -134,6 +145,8 @@ export interface StorageProvider {
   saveAskMessage(userId: string, message: AskChatMessage): Promise<void>;
   getAskResearch(userId: string): Promise<AskResearchEvidence[]>;
   saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void>;
+  getFocusAssessment(userId: string, cacheId: string): Promise<FocusAssessmentCacheRecord | null>;
+  saveFocusAssessment(userId: string, record: FocusAssessmentCacheRecord): Promise<void>;
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;

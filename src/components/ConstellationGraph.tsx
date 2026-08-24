@@ -15,9 +15,11 @@ import {
   DECISION_MAP_LANES,
   DECISION_MAP_LANE_LABELS,
   decisionMapLaneForType,
+  decisionMapNodeDimensions,
   getNeighborhood,
   isDecisionMapSecondaryNode,
 } from '@/lib/graph/constellation';
+import type { DecisionMapRendererDiagnostics } from '@/lib/graph/decisionMapDebug';
 
 type Dimension = '2d' | '3d';
 
@@ -38,6 +40,7 @@ interface ConstellationGraphProps {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onSelectNode: (node: ClarityNode) => void;
+  onLayoutDiagnostics?: (diagnostics: DecisionMapRendererDiagnostics) => void;
 }
 
 const NODE_COLORS: Record<ClarityNode['type'], string> = {
@@ -59,6 +62,7 @@ const EDGE_COLORS: Record<ClarityEdge['type'], string> = {
   contradicts: '#fb7185',
   supersedes: '#fbbf24',
   resolves: '#22d3ee',
+  satisfies: '#a78bfa',
   depends_on: '#c084fc',
   blocks: '#fb923c',
   affects: '#60a5fa',
@@ -220,6 +224,7 @@ interface Constellation2DProps extends GraphSceneProps {
   expanded?: boolean;
   viewport?: GraphViewport;
   onViewportChange?: (viewport: GraphViewport) => void;
+  onLayoutDiagnostics?: (diagnostics: DecisionMapRendererDiagnostics) => void;
 }
 
 function GraphScene({ project, selectedNodeId, focusMode, pathMode, editMode, onSelectNode }: GraphSceneProps) {
@@ -331,6 +336,7 @@ const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
   'supports',
   'contradicts',
   'resolves',
+  'satisfies',
   'affects',
   'depends_on',
   'supersedes',
@@ -338,13 +344,6 @@ const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
 
 function relationshipLabel(type: ClarityEdge['type']): string {
   return type.replaceAll('_', ' ');
-}
-
-function nodeDimensions(node: ClarityNode, secondary: boolean): { width: number; height: number } {
-  const lineCount = Math.min(6, Math.max(3, Math.ceil(node.text.length / (secondary ? 24 : 42))));
-  if (secondary) return { width: 160, height: 52 + lineCount * 16 };
-  if (node.type === 'GOAL') return { width: 260, height: 62 + lineCount * 16 };
-  return { width: 228, height: 58 + lineCount * 16 };
 }
 
 function edgeBoundaryPoint(
@@ -387,6 +386,7 @@ function Constellation2D({
   expanded = false,
   viewport,
   onViewportChange,
+  onLayoutDiagnostics,
 }: Constellation2DProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const panRef = useRef<PanState | null>(null);
@@ -438,6 +438,19 @@ function Constellation2D({
     }, {}),
     [draggedPositions, layout, project.nodes],
   );
+
+  useEffect(() => {
+    const bounds = svgRef.current?.getBoundingClientRect();
+    onLayoutDiagnostics?.({
+      positions,
+      showSecondaryContext,
+      zoom,
+      pan,
+      viewport: { width: bounds?.width ?? 0, height: bounds?.height ?? 0 },
+      mapWidth: mapMetrics.width,
+      mapHeight: mapMetrics.height,
+    });
+  }, [mapMetrics.height, mapMetrics.width, onLayoutDiagnostics, pan, positions, showSecondaryContext, zoom]);
 
   useEffect(() => () => {
     if (zoomTimerRef.current !== null) window.clearTimeout(zoomTimerRef.current);
@@ -531,7 +544,7 @@ function Constellation2D({
 
     const bounds = visibleNodes.reduce((current, node) => {
       const point = positions[node.id] ?? { x: 0, y: 0 };
-      const dimensions = nodeDimensions(node, isDecisionMapSecondaryNode(node, project));
+      const dimensions = decisionMapNodeDimensions(node, isDecisionMapSecondaryNode(node, project));
       return {
         minX: Math.min(current.minX, point.x - dimensions.width / 2),
         maxX: Math.max(current.maxX, point.x + dimensions.width / 2),
@@ -700,8 +713,8 @@ function Constellation2D({
             if (!showSecondaryContext && (isDecisionMapSecondaryNode(source, project) || isDecisionMapSecondaryNode(target, project))) return null;
             const sourcePoint = pointFor(source);
             const targetPoint = pointFor(target);
-            const sourceDimensions = nodeDimensions(source, isDecisionMapSecondaryNode(source, project));
-            const targetDimensions = nodeDimensions(target, isDecisionMapSecondaryNode(target, project));
+            const sourceDimensions = decisionMapNodeDimensions(source, isDecisionMapSecondaryNode(source, project));
+            const targetDimensions = decisionMapNodeDimensions(target, isDecisionMapSecondaryNode(target, project));
             const start = edgeBoundaryPoint(sourcePoint, targetPoint, sourceDimensions);
             const end = edgeBoundaryPoint(targetPoint, sourcePoint, targetDimensions);
             const slot = edgeSlots.get(edge.id) ?? { index: index % 3, count: 3 };
@@ -750,7 +763,7 @@ function Constellation2D({
             const secondary = isDecisionMapSecondaryNode(node, project);
             const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
             const highlighted = node.id === selectedNodeId || Boolean(emphasizedNodes?.has(node.id));
-            const dimensions = nodeDimensions(node, secondary);
+            const dimensions = decisionMapNodeDimensions(node, secondary);
             const color = NODE_COLORS[node.type];
             const isGoal = node.type === 'GOAL';
             return (
@@ -802,7 +815,7 @@ function Constellation2D({
             const point = pointFor(node);
             const muted = Boolean(emphasizedNodes) && !emphasizedNodes?.has(node.id);
             const highlighted = node.id === selectedNodeId || Boolean(emphasizedNodes?.has(node.id));
-            const dimensions = nodeDimensions(node, false);
+            const dimensions = decisionMapNodeDimensions(node, false);
             const color = NODE_COLORS[node.type];
             const isGoal = node.type === 'GOAL';
             return (
@@ -936,6 +949,7 @@ export default function ConstellationGraph({
   isFullscreen = false,
   onToggleFullscreen,
   onSelectNode,
+  onLayoutDiagnostics,
 }: ConstellationGraphProps) {
   const [editMode, setEditMode] = useState(false);
 
@@ -983,6 +997,7 @@ export default function ConstellationGraph({
           expanded={expanded}
           viewport={viewport}
           onViewportChange={onViewportChange}
+          onLayoutDiagnostics={onLayoutDiagnostics}
           onSelectNode={onSelectNode}
         />
       )}

@@ -136,7 +136,10 @@ export interface TraceEvent {
   contextSummary?: TraceContextSummary;
   pipelineSteps?: TracePipelineStep[];
   decisionAnchoring?: TraceDecisionAnchoring;
+  /** Client-rendered, deterministic Decision Map instrumentation. */
+  decisionMapDebug?: DecisionMapDebugTrace;
   /** True when the event describes a deterministic demo simulation, not an AI call. */
   simulation?: boolean;
   error?: string;
 }
+import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';

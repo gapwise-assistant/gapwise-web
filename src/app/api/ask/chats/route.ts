@@ -41,10 +41,18 @@ const messageSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   role: z.enum(['user', 'assistant']),
   text: z.string().min(1),
+  outcome: z.enum(['exploration', 'recommendation', 'conclusion']).optional(),
+  resolvesQuestionId: z.string().trim().min(1).optional(),
+  conclusion: z.string().trim().min(1).max(5000).optional(),
   sources: z.array(sourceSchema).default([]),
   openQuestionIds: z.array(z.string()).optional(),
   openQuestions: z.array(z.object({ id: z.string(), text: z.string() })).optional(),
   searchSuggestions: z.object({ renderedContent: z.string().optional(), webSearchQueries: z.array(z.string()).optional() }).optional(),
+  execution: z.object({
+    route: z.enum(['web_research', 'internal_context']),
+    agent: z.string(),
+    toolCalls: z.array(z.string()),
+  }).optional(),
   createdAt: z.string().datetime().optional(),
 });
 

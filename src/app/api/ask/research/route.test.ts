@@ -64,6 +64,9 @@ const nonWebAssistantMessage = {
   projectId: 'project_a',
   role: 'assistant' as const,
   text: 'An internal context suggestion.',
+  outcome: 'conclusion' as const,
+  resolvesQuestionId: 'question_1',
+  conclusion: 'Non-web confirmed answer.',
   sources: [{
     id: 'source_1',
     title: 'Internal doc',
@@ -125,7 +128,7 @@ describe('POST /api/ask/research', () => {
       assistantMessageId: 'assistant_non_web',
       projectId: 'project_a',
       targetQuestionId: 'question_1',
-      text: 'Non-web confirmed answer.',
+      text: 'A long conversational response with reasoning that must not become the stored answer.',
     }));
 
     expect(response.status).toBe(200);
@@ -141,6 +144,26 @@ describe('POST /api/ask/research', () => {
       answer: 'Non-web confirmed answer.',
       projectId: 'project_a',
     });
+  });
+
+  it('rejects Use as my answer when the stored response is not a conclusion', async () => {
+    vi.mocked(listProjects).mockResolvedValue([
+      { id: 'project_a', nodes: [{ id: 'question_1', text: 'Question 1?', type: 'UNKNOWN', status: 'OPEN' }] },
+    ] as never);
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      action: 'use_as_answer',
+      chatId: 'chat_1',
+      assistantMessageId: 'assistant_1',
+      projectId: 'project_a',
+      targetQuestionId: 'question_1',
+      text: 'The full response must not be accepted as an answer.',
+    }));
+
+    expect(response.status).toBe(400);
+    expect(answerQuestion).not.toHaveBeenCalled();
+    expect(storage.saveAskResearch).not.toHaveBeenCalled();
   });
 
   it('uses the originating decision target instead of asking the user to choose a question', async () => {
@@ -162,14 +185,14 @@ describe('POST /api/ask/research', () => {
       chatId: 'chat_1',
       assistantMessageId: 'assistant_non_web',
       projectId: 'project_a',
-      text: 'Use a helper as a spotter for the upstairs windows.',
+      text: 'A long decision discussion that must not become the stored decision.',
     }));
 
     expect(response.status).toBe(200);
     expect(answerQuestion).not.toHaveBeenCalled();
     expect(confirmDecision).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       decisionNodeId: 'decision_1',
-      customDecision: 'Use a helper as a spotter for the upstairs windows.',
+      customDecision: 'Non-web confirmed answer.',
     }));
     expect(saveProject).toHaveBeenCalledWith('demo-user', updatedProject);
     expect(storage.saveAskResearch).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
@@ -226,7 +249,7 @@ describe('POST /api/ask/research', () => {
       assistantMessageId: 'assistant_non_web',
       projectId: 'project_a',
       targetQuestionId: 'question_1',
-      text: 'Recover non-web answer.',
+      text: 'A long recovery discussion that must not become the stored answer.',
     }));
 
     expect(firstResponse.status).toBe(500);
@@ -241,9 +264,9 @@ describe('POST /api/ask/research', () => {
         nodes: [{ id: 'question_1', text: 'Question 1?', type: 'UNKNOWN', status: 'RESOLVED' }],
         history: [{
           question: 'Question 1?',
-          answer: 'Recover non-web answer.',
+          answer: 'Non-web confirmed answer.',
           timestamp: '2026-08-20T10:02:00.000Z',
-          graph_diff_summary: 'Resolved "Question 1?" -> KNOWN: "Recover non-web answer."',
+          graph_diff_summary: 'Resolved "Question 1?" -> KNOWN: "Non-web confirmed answer."',
         }],
       },
     ] as never);
@@ -255,7 +278,7 @@ describe('POST /api/ask/research', () => {
       assistantMessageId: 'assistant_non_web',
       projectId: 'project_a',
       targetQuestionId: 'question_1',
-      text: 'Recover non-web answer.',
+      text: 'A long recovery discussion that must not become the stored answer.',
     }));
 
     expect(retryResponse.status).toBe(200);

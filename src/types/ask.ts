@@ -28,7 +28,17 @@ export interface AskSearchSuggestions {
   webSearchQueries?: string[];
 }
 
-export type AskRoute = 'web_research' | 'internal_context' | 'ask_clarification';
+export type AskOutcome = 'exploration' | 'recommendation' | 'conclusion';
+export type AskResponseOutcome = AskOutcome;
+
+export interface AskResponse {
+  answer: string;
+  outcome: AskOutcome;
+  resolvesQuestionId?: string;
+  conclusion?: string;
+}
+
+export type AskRoute = 'web_research' | 'internal_context';
 
 export interface AskExecution {
   route: AskRoute;
@@ -43,6 +53,9 @@ export interface AskOpenQuestion {
 
 export interface AskResult {
   answer: string;
+  outcome?: AskResponseOutcome;
+  resolvesQuestionId?: string;
+  conclusion?: string;
   sessionId?: string;
   sources: AskSource[];
   execution?: AskExecution;
@@ -76,11 +89,15 @@ export interface AskChatMessage {
   projectId?: string;
   role: AskMessageRole;
   text: string;
+  outcome?: AskResponseOutcome;
+  resolvesQuestionId?: string;
+  conclusion?: string;
   sources: AskSource[];
   createdAt: string;
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  execution?: AskExecution;
 }
 
 export interface AskResearchEvidence {

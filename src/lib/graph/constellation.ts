@@ -34,6 +34,11 @@ export interface DecisionMapMetrics {
   laneY: Record<DecisionMapLane, number>;
 }
 
+export interface DecisionMapNodeDimensions {
+  width: number;
+  height: number;
+}
+
 function decisionMapScore(node: ClarityNode): number {
   return (node.impact * node.confidence) + (node.priority ?? 0) * 0.25;
 }
@@ -56,6 +61,17 @@ export function isDecisionMapSecondaryNode(
   return !graph.edges.some((edge) =>
     (edge.source === node.id || edge.target === node.id) && edge.type !== 'derived_from'
   );
+}
+
+/** Kept with the deterministic layout so renderer diagnostics use its exact node boxes. */
+export function decisionMapNodeDimensions(
+  node: ClarityNode,
+  secondary: boolean,
+): DecisionMapNodeDimensions {
+  const lineCount = Math.min(6, Math.max(3, Math.ceil(node.text.length / (secondary ? 24 : 42))));
+  if (secondary) return { width: 160, height: 52 + lineCount * 16 };
+  if (node.type === 'GOAL') return { width: 260, height: 62 + lineCount * 16 };
+  return { width: 228, height: 58 + lineCount * 16 };
 }
 
 function laneNodes(
@@ -187,11 +203,12 @@ const EDGE_PRIORITY: Record<ClarityEdge['type'], number> = {
   depends_on: 1,
   affects: 2,
   resolves: 3,
-  contradicts: 4,
-  supports: 5,
-  supersedes: 6,
-  informs: 7,
-  derived_from: 8,
+  satisfies: 4,
+  contradicts: 5,
+  supports: 6,
+  supersedes: 7,
+  informs: 8,
+  derived_from: 9,
 };
 
 function clamp(value: number, min: number, max: number): number {

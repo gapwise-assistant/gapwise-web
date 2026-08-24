@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalAskQuestions, chatPickerOptions, ChatSession, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
+import { askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 function chat(id: string, question: string, messagesCount = 1): ChatSession {
@@ -74,6 +74,41 @@ describe('Ask research persistence state', () => {
 });
 
 describe('Ask answer targeting', () => {
+  it('only enables answer confirmation for a conclusion targeting an open question', () => {
+    expect(canUseAskConclusion({
+      outcome: 'exploration',
+      resolvesQuestionId: 'question_1',
+      conclusion: 'A possible direction.',
+      openQuestionIds: ['question_1'],
+    })).toBe(false);
+    expect(canUseAskConclusion({
+      outcome: 'recommendation',
+      resolvesQuestionId: 'question_1',
+      conclusion: 'A recommendation.',
+      openQuestionIds: ['question_1'],
+    })).toBe(false);
+    expect(canUseAskConclusion({
+      outcome: 'conclusion',
+      resolvesQuestionId: 'question_1',
+      conclusion: 'Use the donation model.',
+      openQuestionIds: ['question_1'],
+    })).toBe(true);
+    expect(askResponseAction({
+      outcome: 'exploration',
+      conclusion: 'Would monthly feel more manageable for a first trial run?',
+    })).toBeNull();
+    expect(askResponseAction({
+      outcome: 'recommendation',
+      conclusion: 'Start with a smaller first event.',
+    })).toBeNull();
+    expect(askResponseAction({
+      outcome: 'conclusion',
+      resolvesQuestionId: 'question_1',
+      conclusion: 'Start monthly for the first three events.',
+      openQuestionIds: ['question_1'],
+    })).toBe('use_as_answer');
+  });
+
   it('uses stored question IDs instead of grouping answer targets by display text', () => {
     const questions = canonicalAskQuestions([
       { id: 'question_a', text: 'What is the current status of the launch input?' },
@@ -85,6 +120,18 @@ describe('Ask answer targeting', () => {
       { id: 'question_a', text: 'What is the current status of the launch input?' },
       { id: 'question_b', text: 'What action should I take for the launch input?' },
     ]);
+  });
+});
+
+describe('Ask clarification responses', () => {
+  it('identifies router clarification responses so confirmation actions stay hidden', () => {
+    expect(isClarificationResponse({
+      text: 'I do not have enough context in your saved project notes to answer this. Could you share more details or clarify the specific information you need?',
+    })).toBe(true);
+    expect(isClarificationResponse({
+      text: 'Based on the saved project context, verify the configuration values before the demo.',
+      execution: { route: 'internal_context', agent: 'Partner Agent', toolCalls: [] },
+    })).toBe(false);
   });
 });
 

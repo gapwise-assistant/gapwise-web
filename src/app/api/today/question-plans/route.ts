@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       userId,
       projectId: parsed.data.projectId,
       message: questionSuggestionRequestMessage(parsed.data.scopeLabel, questions),
+      structuredResponse: false,
     });
     return NextResponse.json({
       suggestions: parseQuestionSuggestions(result.answer, questions),

@@ -14,6 +14,11 @@ import {
   createKintaGenDemoProject,
   KINTAGEN_DEMO_ID,
 } from '@/lib/demo/kintagen';
+import {
+  BAKERY_DEMO_ID,
+  createBakeryDemoMemories,
+  createBakeryDemoProject,
+} from '@/lib/demo/bakery';
 import { getStorageProvider } from '@/lib/storage';
 import { AppScope } from '@/types/scope';
 import { Project } from '@/types/clarity';
@@ -51,6 +56,15 @@ export interface HackathonDemoBootstrapResult {
 }
 
 export interface KintaGenDemoBootstrapResult {
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+  created: boolean;
+}
+
+export interface BakeryDemoBootstrapResult {
   project: Project;
   projects: Project[];
   activeProjectId: string;
@@ -310,6 +324,32 @@ export async function loadKintaGenDemoForUser(userId: string): Promise<KintaGenD
   const scope: AppScope = { type: 'project', projectId: project.id };
   await storage.setAppScope(userId, scope);
   recordDemoDecisionMapActivity(userId, project, '/api/projects/kintagen-demo');
+
+  return {
+    project,
+    projects: await storage.listProjects(userId),
+    activeProjectId: project.id,
+    scope,
+    memories,
+    created: !existingDemo,
+  };
+}
+
+/** Loads a fresh, repeatable weekend bakery pop-up project into user-scoped storage. */
+export async function loadBakeryDemoForUser(userId: string): Promise<BakeryDemoBootstrapResult> {
+  const storage = getStorageProvider();
+  const existingProjects = await storage.listProjects(userId);
+  const existingDemo = existingProjects.some((candidate) => candidate.id === BAKERY_DEMO_ID);
+  const project = createBakeryDemoProject();
+  const memories = createBakeryDemoMemories();
+
+  await storage.resetUserData(userId);
+  await storage.saveProject(userId, project);
+  await storage.replaceMemories(userId, memories);
+
+  const scope: AppScope = { type: 'project', projectId: project.id };
+  await storage.setAppScope(userId, scope);
+  recordDemoDecisionMapActivity(userId, project, '/api/projects/bakery-demo');
 
   return {
     project,

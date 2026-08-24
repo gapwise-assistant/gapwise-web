@@ -45,12 +45,16 @@ describe('decision anchoring', () => {
     expect(extractOpenDecisionTitle('OPEN DECISION: Should ClinicFlow launch the pilot? The choice is blocked by safety data.')).toBe(
       'Should ClinicFlow launch the pilot?'
     );
-    expect(suggestion?.questionNodeIds).toHaveLength(2);
+    expect(suggestion?.questionNodeIds).toEqual([]);
+
+    const questionNodeIds = ingested.nodes
+      .filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN')
+      .map((node) => node.id);
 
     const anchored = anchorProjectDecision(
       ingested,
       suggestion!.title,
-      suggestion!.questionNodeIds,
+      questionNodeIds,
       DEFAULT_USER_PROFILE,
     );
     const decision = anchored.nodes.find((node) => node.type === 'DECISION');
@@ -59,9 +63,9 @@ describe('decision anchoring', () => {
       status: 'OPEN',
       text: 'Should ClinicFlow launch the six-week pilot by November 1?',
     });
-    expect(anchored.edges.filter((edge) => edge.target === decision?.id && edge.type === 'blocks')).toHaveLength(2);
+    expect(anchored.edges.filter((edge) => edge.target === decision?.id && edge.type === 'blocks')).toHaveLength(0);
+    expect(anchored.edges.filter((edge) => edge.target === decision?.id && edge.type === 'informs')).toHaveLength(2);
     expect(anchored.active_question?.node_id).toBeTruthy();
-    expect(anchored.active_question?.blocked_decision_ids).toContain(decision?.id);
     expect(anchored.clarity_score).toBe(calculateClarityScore(anchored));
     const resolved = { ...anchored, nodes: anchored.nodes.map((node) => node.id === decision?.id ? { ...node, status: 'RESOLVED' as const } : node) };
     expect(anchored.clarity_score).toBeLessThanOrEqual(calculateClarityScore(resolved));

@@ -18,6 +18,7 @@ export type EdgeType =
   | 'blocks'
   | 'informs'
   | 'resolves'
+  | 'satisfies'
   | 'derived_from'
   | 'supersedes'
   | 'affects';

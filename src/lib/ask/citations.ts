@@ -38,7 +38,13 @@ export function sourceIdFromCitation(href?: string): string | null {
 }
 
 export function addSourceCitations(answer: string, sources: AskSource[]): string {
-  if (!sources.length || answer.includes('](#source-')) return answer;
+  // Project context remains available in the Sources panel, but it should not
+  // turn ordinary conversation into a footnoted research report. Inline
+  // markers are reserved for grounded web sources.
+  const citationSources = sources
+    .map((source, index) => ({ source, index }))
+    .filter(({ source }) => source.kind === 'web' && Boolean(source.url));
+  if (!citationSources.length || answer.includes('](#source-')) return answer;
   let inCodeFence = false;
   const blocks = answer.split(/\n{2,}/).map((block) => {
     const fenceCount = (block.match(/```/g) ?? []).length;
@@ -46,8 +52,8 @@ export function addSourceCitations(answer: string, sources: AskSource[]): string
     if (fenceCount % 2 === 1) inCodeFence = !inCodeFence;
     if (isCode || /^#{1,6}\s/.test(block.trim()) || block.trim().length < 24) return block;
 
-    const matches = sources
-      .map((source, index) => ({ source, index, score: sourceScore(block, source) }))
+    const matches = citationSources
+      .map(({ source, index }) => ({ source, index, score: sourceScore(block, source) }))
       .filter((item) => item.score >= 0.22)
       .sort((a, b) => b.score - a.score)
       .slice(0, 2);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { calculateDecisionValue } from '@/lib/decisionValue';
-import { calculateGapPriority, selectTopGap } from '@/lib/prioritization';
+import { calculateGapPriority, selectTopAttentionItem, selectTopGap } from '@/lib/prioritization';
 import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { rankGaps } from '@/lib/tools/graphTools';
@@ -54,6 +54,19 @@ function project(nodes: ClarityNode[], edges: Project['edges'] = []): Project {
 }
 
 describe('decision value', () => {
+  it('selects an open decision as a valid attention item', () => {
+    const decision = node('decision_format', 'DECISION', 'Choose whether to run one session or two', {
+      impact: 0.95,
+      confidence: 0.9,
+    });
+    const question = node('question_availability', 'UNKNOWN', 'Is the venue available?', {
+      impact: 0.8,
+      confidence: 0.5,
+    });
+
+    expect(selectTopAttentionItem(project([decision, question]), profile)?.id).toBe(decision.id);
+  });
+
   it('keeps the Golden Demo target-persona blocker decision-relevant', () => {
     const [top] = rankGaps(createGoldenDemoProject());
 

@@ -130,7 +130,9 @@ export function OpenQuestions({ items, summary, onAnswer, onHide }: OpenQuestion
       <div className="overflow-visible rounded-xl border border-slate-800 bg-slate-900 divide-y divide-slate-800">
         {items.length > 0 ? items.map((item) => (
           <QuestionRow
-            key={item.id}
+            // A recommendation can support more than one question, so its
+            // ID is not a unique row identity. The canonical question ID is.
+            key={item.question.id}
             item={item}
             onAnswer={onAnswer}
             onHide={onHide}

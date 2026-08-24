@@ -14,15 +14,30 @@ const source: AskSource = {
 };
 
 describe('Ask source citations', () => {
-  it('adds a grounded citation to a matching Markdown block', () => {
+  it('does not add inline markers for ordinary project context', () => {
     const answer = `**Validate Interface Assumptions:**
 
 Decide how prominent the **Interactive Visual Clarity Graph** should be versus a traditional chatbot interface.`;
 
     const cited = addSourceCitations(answer, [source]);
 
-    expect(cited).toContain('[1](#source-src_2)');
+    expect(cited).not.toContain('#source-');
     expect(cited).toContain('**Interactive Visual Clarity Graph**');
+  });
+
+  it('adds inline markers only for grounded web sources', () => {
+    const webSource: AskSource = {
+      ...source,
+      id: 'web_2',
+      kind: 'web',
+      url: 'https://example.com/reference',
+    };
+    const cited = addSourceCitations(
+      'The interface decision should use an interactive visual Clarity Graph.',
+      [source, webSource],
+    );
+
+    expect(cited).toContain('[2](#source-web_2)');
   });
 
   it('does not attach unrelated sources or citations inside code fences', () => {

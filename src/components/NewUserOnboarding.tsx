@@ -9,12 +9,14 @@ interface NewUserOnboardingProps {
   isLoadingCareerDemo?: boolean;
   isLoadingHackathonDemo?: boolean;
   isLoadingKintaGenDemo?: boolean;
+  isLoadingBakeryDemo?: boolean;
   error?: string;
   onCreateProject: () => void;
   onLoadDemo: () => void;
   onLoadCareerDemo?: () => void;
   onLoadHackathonDemo?: () => void;
   onLoadKintaGenDemo?: () => void;
+  onLoadBakeryDemo?: () => void;
   onSignOut: () => void;
 }
 
@@ -24,12 +26,14 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   isLoadingCareerDemo = false,
   isLoadingHackathonDemo = false,
   isLoadingKintaGenDemo = false,
+  isLoadingBakeryDemo = false,
   error,
   onCreateProject,
   onLoadDemo,
   onLoadCareerDemo,
   onLoadHackathonDemo,
   onLoadKintaGenDemo,
+  onLoadBakeryDemo,
   onSignOut,
 }) => (
   <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-12 text-slate-100">
@@ -53,7 +57,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
         </button>
       </div>
 
-      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <button
           type="button"
           onClick={onCreateProject}
@@ -115,9 +119,23 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             </span>
           </button>
         )}
+        {onLoadBakeryDemo && (
+          <button
+            type="button"
+            onClick={onLoadBakeryDemo}
+            disabled={isLoadingBakeryDemo}
+            title="Load or reset the weekend bakery pop-up demo"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-orange-800/80 bg-orange-950/20 p-4 text-left transition hover:border-orange-500 hover:bg-orange-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-orange-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingBakeryDemo ? 'Loading bakery pop-up demo...' : 'Bakery pop-up demo'}
+            </span>
+          </button>
+        )}
       </div>
 
-      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo) && (
+      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo) && (
         <div className="mt-5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-4" aria-live="polite" role="status">
           <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
