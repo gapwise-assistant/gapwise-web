@@ -6,6 +6,7 @@ import { projectForReasoning } from '@/lib/context/sourceState';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import { appendGapResolvedHistory } from '@/lib/history/projectHistory';
 
 function timestampId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -50,6 +51,7 @@ export function resolveGap(
   if (!gap) return updated;
 
   const now = new Date().toISOString();
+  const questionText = gap.text;
   gap.status = 'RESOLVED';
   gap.confidence = 1;
   gap.updated_at = now;
@@ -81,7 +83,12 @@ export function resolveGap(
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, profile);
   updated.updated_at = now;
-  return updated;
+  return appendGapResolvedHistory(project, updated, {
+    nodeId: gap.id,
+    question: questionText,
+    answer: resolutionText,
+    createdAt: now,
+  });
 }
 
 export function rankGaps(project: Project) {

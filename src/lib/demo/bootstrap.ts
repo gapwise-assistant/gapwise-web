@@ -1,4 +1,8 @@
-import { createGoldenDemoProject } from '@/lib/demo/seed';
+import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { createProjectFromInput } from '@/lib/projects/createProject';
+import { processContextSource } from '@/lib/context/contextAnalysis';
+import { confirmDecision } from '@/lib/decisions/workspace';
+import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import {
   CAREER_CONFLICT_DEMO_ID,
   createCareerConflictDemoMemories,
@@ -19,6 +23,12 @@ import {
   createBakeryDemoMemories,
   createBakeryDemoProject,
 } from '@/lib/demo/bakery';
+import {
+  BAKERY_JOURNEY_LOCATION_DECISION,
+  BAKERY_JOURNEY_SOURCES,
+  bakeryJourneyProjectInput,
+  findBakeryLocationDecision,
+} from '@/lib/demo/bakeryJourney';
 import { getStorageProvider } from '@/lib/storage';
 import { AppScope } from '@/types/scope';
 import { Project } from '@/types/clarity';
@@ -65,6 +75,15 @@ export interface KintaGenDemoBootstrapResult {
 }
 
 export interface BakeryDemoBootstrapResult {
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+  created: boolean;
+}
+
+export interface BakeryJourneyDemoBootstrapResult {
   project: Project;
   projects: Project[];
   activeProjectId: string;
@@ -358,5 +377,71 @@ export async function loadBakeryDemoForUser(userId: string): Promise<BakeryDemoB
     scope,
     memories,
     created: !existingDemo,
+  };
+}
+
+/**
+ * Replays a realistic bakery project journey through the production mutation
+ * paths. This intentionally does not seed nodes, edges, or history events.
+ */
+export async function loadBakeryJourneyDemoForUser(userId: string): Promise<BakeryJourneyDemoBootstrapResult> {
+  const storage = getStorageProvider();
+  await storage.resetUserData(userId);
+  clearTracesForUser(userId);
+
+  let project = createProjectFromInput(bakeryJourneyProjectInput(), '2026-08-23T11:00:00.000Z');
+  await storage.saveProject(userId, project);
+
+  for (const source of BAKERY_JOURNEY_SOURCES) {
+    const processed = await processContextSource(project, {
+      sourceId: source.id,
+      filename: source.filename,
+      content: source.content,
+      type: 'note',
+      origin: 'user',
+    }, DEFAULT_USER_PROFILE, {
+      captureProcessingLog: process.env.NODE_ENV !== 'production',
+    });
+    const refreshed = await refreshProjectGapRuntime({
+      userId,
+      project: processed.project,
+      profile: DEFAULT_USER_PROFILE,
+      memories: [],
+      route: '/api/projects/bakery-journey',
+      label: `Bakery journey · ${source.filename}`,
+    });
+    project = refreshed.project;
+    await storage.saveProject(userId, project);
+  }
+
+  const locationDecision = findBakeryLocationDecision(project);
+  if (!locationDecision) {
+    throw new Error('The bakery journey could not find the launch-location decision after processing its sources.');
+  }
+  project = confirmDecision(project, {
+    decisionNodeId: locationDecision.id,
+    customDecision: BAKERY_JOURNEY_LOCATION_DECISION,
+  });
+  const refreshedAfterDecision = await refreshProjectGapRuntime({
+    userId,
+    project,
+    profile: DEFAULT_USER_PROFILE,
+    memories: [],
+    route: '/api/projects/bakery-journey',
+    label: 'Bakery journey · location decision resolved',
+  });
+  project = refreshedAfterDecision.project;
+  await storage.saveProject(userId, project);
+
+  const scope: AppScope = { type: 'project', projectId: project.id };
+  await storage.setAppScope(userId, scope);
+
+  return {
+    project,
+    projects: await storage.listProjects(userId),
+    activeProjectId: project.id,
+    scope,
+    memories: [],
+    created: true,
   };
 }

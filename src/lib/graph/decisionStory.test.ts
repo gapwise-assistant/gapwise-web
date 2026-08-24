@@ -49,7 +49,7 @@ describe('Project Story presentation graph', () => {
       expect.objectContaining({ source: 'bakery_products_decision', target: 'bakery_goal' }),
     ]));
     expect(junctions).toEqual(expect.arrayContaining([
-      { target: 'bakery_pricing_decision', sources: ['bakery_location_decision', 'bakery_products_decision'] },
+      { target: 'bakery_pricing_decision', sources: ['bakery_location_decision', 'bakery_products_decision', 'bakery_supplier_decision'] },
     ]));
   });
 
@@ -57,7 +57,7 @@ describe('Project Story presentation graph', () => {
     const project = createBakeryDemoProject();
     const projection = buildDecisionMapProjection(project, focus, 'story', new Set());
     const visibleDecisions = new Set(projection.visibleNodeIds);
-    expect(decisionStoryRiskAnnotations(project, 'bakery_location_decision', visibleDecisions)).toContain('Choosing a location too late could cause the intended launch to be missed');
+    expect(decisionStoryRiskAnnotations(project, 'bakery_location_decision', visibleDecisions)).toContain('Choosing a location too late could make the preferred launch weekend impossible');
 
     const path = decisionStoryPath(project, projection, 'bakery_location_decision');
     expect(path.nodeIds).toEqual(['bakery_location_decision', 'bakery_pricing_decision', 'bakery_goal']);

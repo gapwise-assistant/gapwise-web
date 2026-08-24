@@ -6,7 +6,6 @@ import type { ClarityNode, Project } from '@/types/clarity';
 import {
   buildDecisionStoryEdges,
   decisionStoryPath,
-  decisionStoryRiskAnnotations,
 } from '@/lib/graph/decisionStory';
 import {
   calculateDecisionStoryLayout,
@@ -51,10 +50,6 @@ function nodeDimensions(node: ClarityNode): { width: number; height: number } {
   return { width: Math.max(240, base.width), height: Math.max(92, base.height) };
 }
 
-function shorten(text: string, length = 108): string {
-  return text.length <= length ? text : `${text.slice(0, length - 1).trimEnd()}…`;
-}
-
 function nodeAt(project: Project, id: string): ClarityNode | undefined {
   return project.nodes.find((node) => node.id === id);
 }
@@ -65,7 +60,6 @@ function StoryNode({
   selected,
   currentFocus,
   muted,
-  risks,
   onSelect,
 }: {
   node: ClarityNode;
@@ -73,7 +67,6 @@ function StoryNode({
   selected: boolean;
   currentFocus: boolean;
   muted: boolean;
-  risks: string[];
   onSelect: () => void;
 }) {
   const dimensions = nodeDimensions(node);
@@ -95,9 +88,6 @@ function StoryNode({
           <span className="block truncate text-[9px] font-extrabold uppercase tracking-[0.14em]" style={{ color }}>{node.type.replace('_', ' ')}</span>
           {currentFocus && <span className="mt-1 block text-[9px] font-extrabold uppercase tracking-[0.12em] text-cyan-200">★ Current focus</span>}
           <span className="mt-2 block line-clamp-4 text-[11px] font-semibold leading-snug text-slate-100">{node.text}</span>
-          {risks.length > 0 && (
-            <span className="mt-2 block line-clamp-2 text-[10px] font-semibold leading-snug text-orange-200">⚠ {shorten(risks[0])}{risks.length > 1 ? ` +${risks.length - 1} more risk${risks.length === 2 ? '' : 's'}` : ''}</span>
-          )}
         </button>
       </foreignObject>
     </g>
@@ -134,8 +124,6 @@ function ProjectStoryGraph({
   const selectedPath = useMemo(() => decisionStoryPath(project, storyProjection, selectedNodeId), [project, selectedNodeId, storyProjection]);
   const emphasizedNodes = useMemo(() => selectedNodeId ? new Set(selectedPath.nodeIds) : null, [selectedNodeId, selectedPath.nodeIds]);
   const emphasizedEdges = useMemo(() => new Set(selectedPath.edgeIds), [selectedPath.edgeIds]);
-  const storyNodeSet = useMemo(() => new Set(storyNodes.map((node) => node.id)), [storyNodes]);
-
   const updateViewport = useCallback((nextZoom: number, nextPan: { x: number; y: number }) => {
     setLocalZoom(nextZoom);
     setLocalPan(nextPan);
@@ -288,8 +276,7 @@ function ProjectStoryGraph({
           {storyNodes.map((node) => {
             const point = layout[node.id];
             if (!point) return null;
-            const risks = node.type === 'DECISION' ? decisionStoryRiskAnnotations(project, node.id, storyNodeSet) : [];
-            return <StoryNode key={node.id} node={node} point={point} selected={selectedNodeId === node.id} currentFocus={focusNodeId === node.id} muted={Boolean(emphasizedNodes && !emphasizedNodes.has(node.id))} risks={risks} onSelect={() => onSelectNode(node)} />;
+            return <StoryNode key={node.id} node={node} point={point} selected={selectedNodeId === node.id} currentFocus={focusNodeId === node.id} muted={Boolean(emphasizedNodes && !emphasizedNodes.has(node.id))} onSelect={() => onSelectNode(node)} />;
           })}
         </g>
       </svg>

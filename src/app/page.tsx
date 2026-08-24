@@ -30,6 +30,7 @@ import {
 import { HACKATHON_DEMO_ID } from '@/lib/demo/hackathon';
 import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { BAKERY_DEMO_ID } from '@/lib/demo/bakery';
+import { BAKERY_JOURNEY_DEMO_ID } from '@/lib/demo/bakeryJourney';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import type { TodayQuestion } from '@/lib/today/sections';
@@ -45,6 +46,7 @@ import { AppDestination } from '@/lib/navigation';
 import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 import { buildDecisionWorkspace, decisionQuestionForDisplay, findDecisionForNode } from '@/lib/decisions/workspace';
 import { calculateGapPriority } from '@/lib/prioritization';
+import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
 
 type AppTab = AppDestination;
 
@@ -243,6 +245,31 @@ async function loadBakeryDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadBakeryJourneyDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/bakery-journey', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The bakery journey demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -340,6 +367,7 @@ export default function Home() {
   const [isLoadingHackathonDemo, setIsLoadingHackathonDemo] = useState(false);
   const [isLoadingKintaGenDemo, setIsLoadingKintaGenDemo] = useState(false);
   const [isLoadingBakeryDemo, setIsLoadingBakeryDemo] = useState(false);
+  const [isLoadingBakeryJourneyDemo, setIsLoadingBakeryJourneyDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -360,9 +388,11 @@ export default function Home() {
         ? 'Scientific AI assistant'
         : isLoadingBakeryDemo
           ? 'Bakery pop-up demo'
-        : isLoadingDemo
-          ? 'demo'
-          : null;
+          : isLoadingBakeryJourneyDemo
+            ? 'Bakery journey'
+            : isLoadingDemo
+              ? 'demo'
+              : null;
   const openContext = useCallback((entry: ContextEntry = { tab: 'recent' }) => {
     setContextEntry(entry);
     setActiveTab('scope');
@@ -408,16 +438,19 @@ export default function Home() {
 
   // Auto-persist whenever project changes
   const updateProject = useCallback(async (updated: Project): Promise<boolean> => {
-    setProject((current) => (current.id === updated.id ? updated : current));
+    const previous = projects.find((candidate) => candidate.id === updated.id)
+      ?? (project.id === updated.id ? project : undefined);
+    const next = previous ? appendGoalChangedHistory(previous, updated) : updated;
+    setProject((current) => (current.id === next.id ? next : current));
     setProjects((current) => {
-      const existingIndex = current.findIndex((item) => item.id === updated.id);
-      if (existingIndex < 0) return [updated, ...current];
-      return current.map((item) => (item.id === updated.id ? updated : item));
+      const existingIndex = current.findIndex((item) => item.id === next.id);
+      if (existingIndex < 0) return [next, ...current];
+      return current.map((item) => (item.id === next.id ? next : item));
     });
-    const savedToApi = await persistProjectToAPI(userId, updated);
+    const savedToApi = await persistProjectToAPI(userId, next);
     setStorageMessage(savedToApi ? '' : 'Saved locally. Persistent storage API was unavailable.');
     return savedToApi;
-  }, [userId]);
+  }, [project, projects, userId]);
 
   const refreshProjectData = useCallback(async () => {
     try {
@@ -626,6 +659,40 @@ export default function Home() {
       setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery pop-up demo could not be loaded.');
     } finally {
       setIsLoadingBakeryDemo(false);
+    }
+  }, [userId]);
+
+  const handleLoadBakeryJourneyDemo = useCallback(async () => {
+    setIsLoadingBakeryJourneyDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadBakeryJourneyDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, BAKERY_JOURNEY_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('scope');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery journey demo could not be loaded.');
+    } finally {
+      setIsLoadingBakeryJourneyDemo(false);
     }
   }, [userId]);
 
@@ -1003,6 +1070,7 @@ export default function Home() {
           isLoadingHackathonDemo={isLoadingHackathonDemo}
           isLoadingKintaGenDemo={isLoadingKintaGenDemo}
           isLoadingBakeryDemo={isLoadingBakeryDemo}
+          isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
@@ -1013,6 +1081,7 @@ export default function Home() {
           onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
           onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
           onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
+          onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -1043,6 +1112,8 @@ export default function Home() {
         isLoadingKintaGenDemo={isLoadingKintaGenDemo}
         onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
         isLoadingBakeryDemo={isLoadingBakeryDemo}
+        onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
+        isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}

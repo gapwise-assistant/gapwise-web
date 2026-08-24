@@ -3,6 +3,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
 import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import { appendDecisionResolvedHistory } from '@/lib/history/projectHistory';
 
 export interface DecisionEvidence {
   id: string;
@@ -344,5 +345,10 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
   updated.updated_at = now;
-  return updated;
+  return appendDecisionResolvedHistory(project, updated, {
+    nodeId: decision.id,
+    question: previousText,
+    answer: finalText,
+    createdAt: now,
+  });
 }

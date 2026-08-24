@@ -16,13 +16,13 @@ describe('weekend bakery pop-up demo', () => {
 
     expect(project.id).toBe(BAKERY_DEMO_ID);
     expect(project.title).toBe('Launch a weekend bakery pop-up');
-    expect(project.goal).toBe('Launch a profitable weekend bakery pop-up within the next two months, validate repeat demand, and avoid committing to high fixed costs before the concept is proven.');
+    expect(project.goal).toBe('Launch a weekend bakery pop-up within eight weeks, prove repeat demand, and reach positive unit economics without taking on large fixed costs too early.');
     expect(project.deadline).toBeUndefined();
     expect(project.one_sentence_context).toBeUndefined();
     expect(project.sources).toEqual([
       expect.objectContaining({
         id: BAKERY_LAUNCH_PLANNING_NOTES_ID,
-        filename: 'Bakery Launch Planning Notes',
+        filename: 'Bakery Expansion and Launch Planning',
         type: 'note',
         origin: 'user',
         content: BAKERY_LAUNCH_PLANNING_NOTES,
@@ -38,6 +38,10 @@ describe('weekend bakery pop-up demo', () => {
       'bakery_location_decision',
       'bakery_products_decision',
       'bakery_pricing_decision',
+      'bakery_sales_channel_decision',
+      'bakery_supplier_decision',
+      'bakery_marketing_mix_decision',
+      'bakery_repeat_measurement_decision',
     ]);
     expect(project.nodes.find((node) => node.id === 'bakery_initial_menu_preference')).toMatchObject({
       type: 'PREFERENCE',
@@ -52,7 +56,7 @@ describe('weekend bakery pop-up demo', () => {
       expect.objectContaining({
         source: 'bakery_select_location_action',
         target: 'bakery_location_decision',
-        type: 'depends_on',
+        type: 'satisfies',
       }),
     ]));
   });

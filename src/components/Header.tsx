@@ -23,6 +23,8 @@ interface HeaderProps {
   isLoadingKintaGenDemo?: boolean;
   onLoadBakeryDemo?: () => void;
   isLoadingBakeryDemo?: boolean;
+  onLoadBakeryJourneyDemo?: () => void;
+  isLoadingBakeryJourneyDemo?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -47,6 +49,8 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingKintaGenDemo = false,
   onLoadBakeryDemo,
   isLoadingBakeryDemo = false,
+  onLoadBakeryJourneyDemo,
+  isLoadingBakeryJourneyDemo = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -58,7 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo;
+  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo;
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
@@ -148,7 +152,7 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo) && (
+          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo) && (
             <div ref={demoMenuRef} className="relative">
               <button
                 type="button"
@@ -207,6 +211,17 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       {isLoadingBakeryDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-orange-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-orange-300" />}
                       {isLoadingBakeryDemo ? 'Loading bakery pop-up demo…' : 'Bakery pop-up demo'}
+                    </button>
+                  )}
+                  {onLoadBakeryJourneyDemo && (
+                    <button
+                      type="button"
+                      onClick={() => { setDemoMenuOpen(false); onLoadBakeryJourneyDemo(); }}
+                      disabled={isAnyDemoLoading}
+                      className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-200 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {isLoadingBakeryJourneyDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-emerald-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-emerald-300" />}
+                      {isLoadingBakeryJourneyDemo ? 'Loading bakery journey…' : 'Bakery journey'}
                     </button>
                   )}
                 </div>

@@ -10,6 +10,7 @@ import {
   type QuestionReconciliationClassification,
 } from '@/lib/questions/canonical';
 import { resolveQuestionReferences } from '@/lib/questions/presentation';
+import { appendContextAddedHistory } from '@/lib/history/projectHistory';
 
 export { semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
@@ -992,7 +993,11 @@ export async function ingestContextSource(
   updated.clarity_score = calculateClarityScore(reasoningProject);
   updated.active_question = selectTopGap(reasoningProject, profile);
   updated.updated_at = now;
-  return updated;
+  return appendContextAddedHistory(project, updated, {
+    sourceId,
+    filename: input.filename,
+    createdAt: now,
+  });
 }
 
 export function discardContextSource(project: Project, sourceId: string, profile: UserMemoryProfile): Project {

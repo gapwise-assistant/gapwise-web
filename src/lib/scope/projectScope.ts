@@ -21,6 +21,7 @@ export function emptyGeneralContext(now = new Date().toISOString()): Project {
     edges: [],
     sources: [],
     history: [],
+    historyEvents: [],
     active_question: null,
     created_at: now,
     updated_at: now,
@@ -48,6 +49,9 @@ export function mergeProjectsForEverything(projects: Project[], generalContext?:
     history: included
       .flatMap((project) => project.history)
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
+    historyEvents: included
+      .flatMap((project) => project.historyEvents ?? [])
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     active_question: null,
     created_at: created[0] ?? new Date().toISOString(),
     updated_at: timestamps[timestamps.length - 1] ?? new Date().toISOString(),

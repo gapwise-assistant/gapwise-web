@@ -184,6 +184,64 @@ export interface DecisionValueAssessment {
   reason: string;
 }
 
+export type ProjectHistoryEventType =
+  | 'context_added'
+  | 'decision_resolved'
+  | 'gap_resolved'
+  | 'action_completed'
+  | 'goal_changed'
+  | 'focus_changed'
+  | 'context_changed';
+
+export type ProjectHistoryChangeKind =
+  | 'learned'
+  | 'resolved'
+  | 'unblocked'
+  | 'became_actionable'
+  | 'invalidated'
+  | 'updated';
+
+export interface HistoryNodeSnapshot {
+  nodeId?: string;
+  text: string;
+  type?: NodeType;
+  status?: ClarityNode['status'];
+}
+
+export interface ProjectHistoryChange {
+  kind: ProjectHistoryChangeKind;
+  nodeId?: string;
+  text: string;
+  /** Immutable display state captured when this event was created. */
+  snapshot?: HistoryNodeSnapshot;
+}
+
+export interface ProjectHistoryFocus {
+  title: string;
+  actionNodeId?: string;
+  sourceNodeIds?: string[];
+  sourceIds?: string[];
+}
+
+export interface ProjectHistoryEvent {
+  id: string;
+  projectId: string;
+  createdAt: string;
+  type: ProjectHistoryEventType;
+  title: string;
+  summary?: string;
+  sourceId?: string;
+  sourceNodeIds?: string[];
+  affectedNodeIds?: string[];
+  /** Immutable downstream items affected by this event. */
+  affectedNodes?: HistoryNodeSnapshot[];
+  primaryNodeId?: string;
+  primarySnapshot?: HistoryNodeSnapshot;
+  changes?: ProjectHistoryChange[];
+  focusBefore?: ProjectHistoryFocus;
+  focusAfter?: ProjectHistoryFocus;
+}
+
 export interface GapGuidance {
   focus: string;
   whyNow: string;
@@ -237,6 +295,7 @@ export interface Project {
     timestamp: string;
     graph_diff_summary: string;
   }[];
+  historyEvents?: ProjectHistoryEvent[];
   created_at: string;
   updated_at: string;
 }

@@ -1,4 +1,4 @@
-import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary, ContextProcessingLog } from '@/types/clarity';
+import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary, ContextProcessingLog, ProjectHistoryEvent } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -74,6 +74,7 @@ export interface FirestoreContext extends BaseEntity {
   one_sentence_context?: string;
   clarity_score: number;
   active_question?: CandidateGap | null;
+  historyEvents?: ProjectHistoryEvent[];
 }
 
 export interface FirestoreConversation extends BaseEntity {

@@ -20,6 +20,8 @@ import { buildDecisionMapProjection, type DecisionMapView } from '@/lib/graph/de
 import { buildDecisionMapActivityFingerprint, decisionMapWarningCodes } from '@/lib/graph/decisionMapActivity';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { DecisionMapActivity } from '@/components/DecisionMapActivity';
+import { DecisionNodeFocus } from '@/components/DecisionNodeFocus';
+import { buildDecisionNodeFocus } from '@/lib/graph/decisionFocus';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
   ssr: false,
@@ -35,9 +37,14 @@ interface ClarityGraphCanvasProps {
   project: Project;
   onSelectNode: (node: ClarityNode) => void;
   onReviewDecision?: (node: ClarityNode) => void;
+  onResolveQuestion?: (node: ClarityNode) => void;
   onSelectSource?: (sourceId: string) => void;
   focusNodeId?: string | null;
 }
+
+type StoryMode =
+  | { type: 'overview' }
+  | { type: 'node_focus'; nodeId: string };
 
 const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: string }> = {
   GOAL: { bg: 'bg-emerald-950/80', border: 'border-emerald-500/80', text: 'text-emerald-300' },
@@ -79,12 +86,14 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   project,
   onSelectNode,
   onReviewDecision,
+  onResolveQuestion,
   onSelectSource,
   focusNodeId,
 }) => {
   const [view, setView] = useState<DecisionMapView>('story');
   const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [storyMode, setStoryMode] = useState<StoryMode>({ type: 'overview' });
   const [focusMode, setFocusMode] = useState(false);
   const [pathMode, setPathMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -130,6 +139,10 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
     expandedClusterIds,
   ), [expandedClusterIds, focusAssessment, project, view]);
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId);
+  const nodeFocus = useMemo(
+    () => storyMode.type === 'node_focus' ? buildDecisionNodeFocus(project, storyMode.nodeId, focusAssessment) : null,
+    [focusAssessment, project, storyMode],
+  );
   const decisionPath = selectedNodeId ? buildDecisionExplanation(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
 
   const toggleCluster = useCallback((nodeId: string) => {
@@ -245,15 +258,35 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
     setSelectedNodeId(focusNodeId);
-    setFocusMode(true);
-    setPathMode(true);
-  }, [focusNodeId, project]);
+    if (view === 'story') {
+      setStoryMode({ type: 'node_focus', nodeId: focusNodeId });
+    } else {
+      setFocusMode(true);
+      setPathMode(true);
+    }
+  }, [focusNodeId, project, view]);
 
   const selectNode = (node: ClarityNode) => {
     setSelectedNodeId(node.id);
-    setFocusMode(true);
-    setPathMode(true);
+    if (view === 'story') {
+      setStoryMode({ type: 'node_focus', nodeId: node.id });
+    } else {
+      setFocusMode(true);
+      setPathMode(true);
+    }
     onSelectNode(node);
+  };
+
+  const inspectNode = (node: ClarityNode) => {
+    setSelectedNodeId(node.id);
+    if (view === 'story') setStoryMode({ type: 'node_focus', nodeId: node.id });
+    onSelectNode(node);
+  };
+
+  const changeView = (nextView: DecisionMapView) => {
+    setView(nextView);
+    setStoryMode({ type: 'overview' });
+    if (nextView === 'story') setSelectedNodeId(null);
   };
 
   const renderInspector = () => {
@@ -378,12 +411,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             <p className="mt-1 max-w-2xl text-xs text-slate-400">See what is known, uncertain, blocked, and how it connects to your goal.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {selectedNode && (
+            {selectedNode && view !== 'story' && (
               <button type="button" onClick={() => setFocusMode((current) => !current)} className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${focusMode ? 'border-cyan-700 bg-cyan-950 text-cyan-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`} aria-pressed={focusMode}>
                 <Focus className="h-3.5 w-3.5" />{focusMode ? 'Show all' : 'Focus neighborhood'}
               </button>
             )}
-            {selectedNode && (
+            {selectedNode && view !== 'story' && (
               <button type="button" onClick={() => setPathMode((current) => !current)} className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${pathMode ? 'border-rose-700 bg-rose-950 text-rose-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`} aria-pressed={pathMode}>
                 <Route className="h-3.5 w-3.5" />{pathMode ? 'Exit focus path' : 'Focus path'}
               </button>
@@ -402,10 +435,9 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         <div className="touch-scroll flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
           {([
             ['story', 'Project story'],
-            ['focus', 'Current focus'],
             ['all', `All (${project.nodes.length})`],
           ] as const).map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setView(id)} className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${view === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}>
+            <button key={id} type="button" onClick={() => changeView(id)} className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${view === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}>
               {label}
             </button>
           ))}
@@ -414,26 +446,40 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         <div className={isFullscreen ? 'grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_340px] lg:overflow-hidden' : 'grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]'}>
           <div className={isFullscreen ? 'flex min-h-[55dvh] min-w-0 flex-col gap-3 p-2 sm:p-4 lg:min-h-0' : 'min-w-0 space-y-3'}>
             <div className={isFullscreen ? 'relative min-h-0 flex-1' : 'relative'}>
-              <LazyConstellationGraph
-                project={project}
-                projection={projection}
-                expandedClusterIds={expandedClusterIds}
-                onToggleCluster={toggleCluster}
-                selectedNodeId={selectedNodeId}
-                focusMode={focusMode}
-                pathMode={pathMode}
-                focusNodeId={focusAssessment?.actionNodeId ?? null}
-                dimension="2d"
-                expanded={isFullscreen}
-                viewport={viewport}
-                onViewportChange={setViewport}
-                isFullscreen={isFullscreen}
-                onToggleFullscreen={() => setIsFullscreen((current) => !current)}
-                onLayoutDiagnostics={handleLayoutDiagnostics}
-                onSelectNode={selectNode}
-              />
+              {view === 'story' && nodeFocus ? (
+                <DecisionNodeFocus
+                  focus={nodeFocus}
+                  focusAssessment={focusAssessment}
+                  onBack={() => {
+                    setStoryMode({ type: 'overview' });
+                    setSelectedNodeId(null);
+                  }}
+                  onInspectNode={inspectNode}
+                  onReviewDecision={onReviewDecision}
+                  onResolveQuestion={onResolveQuestion}
+                />
+              ) : (
+                <LazyConstellationGraph
+                  project={project}
+                  projection={projection}
+                  expandedClusterIds={expandedClusterIds}
+                  onToggleCluster={toggleCluster}
+                  selectedNodeId={selectedNodeId}
+                  focusMode={focusMode}
+                  pathMode={pathMode}
+                  focusNodeId={focusAssessment?.actionNodeId ?? null}
+                  dimension="2d"
+                  expanded={isFullscreen}
+                  viewport={viewport}
+                  onViewportChange={setViewport}
+                  isFullscreen={isFullscreen}
+                  onToggleFullscreen={() => setIsFullscreen((current) => !current)}
+                  onLayoutDiagnostics={handleLayoutDiagnostics}
+                  onSelectNode={selectNode}
+                />
+              )}
             </div>
-            {renderPath()}
+            {view !== 'story' && renderPath()}
             <div className="flex flex-wrap items-center gap-3 px-1 text-[10px] text-slate-500">
               {legendTypes.map((type) => <span key={type} className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: legendColors[type] }} />{type.replace('_', ' ')}</span>)}
             </div>

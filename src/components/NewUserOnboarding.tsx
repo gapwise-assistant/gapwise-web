@@ -10,6 +10,7 @@ interface NewUserOnboardingProps {
   isLoadingHackathonDemo?: boolean;
   isLoadingKintaGenDemo?: boolean;
   isLoadingBakeryDemo?: boolean;
+  isLoadingBakeryJourneyDemo?: boolean;
   error?: string;
   onCreateProject: () => void;
   onLoadDemo: () => void;
@@ -17,6 +18,7 @@ interface NewUserOnboardingProps {
   onLoadHackathonDemo?: () => void;
   onLoadKintaGenDemo?: () => void;
   onLoadBakeryDemo?: () => void;
+  onLoadBakeryJourneyDemo?: () => void;
   onSignOut: () => void;
 }
 
@@ -27,6 +29,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   isLoadingHackathonDemo = false,
   isLoadingKintaGenDemo = false,
   isLoadingBakeryDemo = false,
+  isLoadingBakeryJourneyDemo = false,
   error,
   onCreateProject,
   onLoadDemo,
@@ -34,6 +37,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   onLoadHackathonDemo,
   onLoadKintaGenDemo,
   onLoadBakeryDemo,
+  onLoadBakeryJourneyDemo,
   onSignOut,
 }) => (
   <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-12 text-slate-100">
@@ -57,7 +61,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
         </button>
       </div>
 
-      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo, onLoadBakeryJourneyDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <button
           type="button"
           onClick={onCreateProject}
@@ -133,9 +137,23 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             </span>
           </button>
         )}
+        {onLoadBakeryJourneyDemo && (
+          <button
+            type="button"
+            onClick={onLoadBakeryJourneyDemo}
+            disabled={isLoadingBakeryJourneyDemo}
+            title="Replay the multi-step bakery project journey"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-4 text-left transition hover:border-emerald-500 hover:bg-emerald-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-emerald-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingBakeryJourneyDemo ? 'Loading bakery journey...' : 'Bakery journey'}
+            </span>
+          </button>
+        )}
       </div>
 
-      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo) && (
+      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo) && (
         <div className="mt-5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-4" aria-live="polite" role="status">
           <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />

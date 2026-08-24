@@ -58,5 +58,6 @@ export function createProjectFromInput(input: CreateProjectInput, createdAt = ne
     sources: [],
     active_question: null,
     history: [],
+    historyEvents: [],
   };
 }

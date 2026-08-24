@@ -14,6 +14,7 @@ import { ProjectQuestionsList } from '@/components/ProjectQuestionsList';
 import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
+import { ProjectHistory } from '@/components/ProjectHistory';
 import { AppScope } from '@/types/scope';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 import { projectForReasoning } from '@/lib/context/sourceState';
@@ -46,7 +47,7 @@ interface ScopeDestinationProps {
 }
 
 type ScopeSection = 'projects' | 'priorities' | 'unclear' | 'context';
-type ProjectSection = 'overview' | 'gaps' | 'graph' | 'context';
+type ProjectSection = 'overview' | 'gaps' | 'context' | 'history' | 'graph';
 
 function dismissNode(project: Project, nodeId: string): Project {
   const updated: Project = JSON.parse(JSON.stringify(project));
@@ -547,8 +548,9 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           {([
             ['overview', 'Overview'],
             ['gaps', 'Gaps'],
-            ['graph', 'Decision Map'],
             ['context', 'Context'],
+            ['history', 'History'],
+            ['graph', 'Decision Map'],
           ] as const).map(([id, label]) => (
             <button
               key={id}
@@ -565,7 +567,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'gaps' && renderProjectQuestions()}
-      {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} />}
+      {projectSection === 'history' && <ProjectHistory userId={userId} project={project} onNavigateToSource={onNavigateToSource} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} onResolveQuestion={onAnswerQuestion} />}
       {projectSection === 'context' && (
         <ContextInbox
           project={project}

@@ -43,6 +43,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
         one_sentence_context: project.one_sentence_context,
         clarity_score: project.clarity_score,
         active_question: project.active_question ?? null,
+        historyEvents: project.historyEvents ?? [],
         status: project.status === 'archived' ? 'ARCHIVED' : 'ACTIVE',
         createdAt: project.created_at,
         updatedAt,
@@ -161,6 +162,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
     one_sentence_context: context.one_sentence_context,
     clarity_score: context.clarity_score,
     active_question: context.active_question ?? null,
+    historyEvents: context.historyEvents ?? [],
     created_at: context.createdAt,
     updated_at: context.updatedAt,
     nodes: nodes.map((node) => ({
