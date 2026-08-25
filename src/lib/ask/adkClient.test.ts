@@ -58,6 +58,34 @@ describe('determineAskRoute', () => {
     await expect(determineAskRoute('demo-user', 'When is my birthday?', null, sources)).resolves.toMatchObject({ route: 'internal_context' });
   });
 
+  it('preserves the graph-reasoning route from the routing agent', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'graph_reasoning',
+      reason: 'The question requires tracing project dependencies.',
+    })));
+
+    await expect(determineAskRoute(
+      'demo-user',
+      'If the security review fails, what does that put at risk?',
+      null,
+    )).resolves.toMatchObject({ route: 'graph_reasoning' });
+  });
+
+  it('promotes a causal project question when the router returns internal context', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'internal_context',
+      reason: 'The request concerns the user project.',
+    })));
+
+    await expect(determineAskRoute(
+      'demo-user',
+      'If the security review is delayed, what happens to the launch?',
+      null,
+    )).resolves.toMatchObject({
+      route: 'graph_reasoning',
+    });
+  });
+
   it('passes confirmed context and resolved answer details to the routing agent', async () => {
     let requestBody: Record<string, unknown> | undefined;
     vi.stubGlobal('fetch', vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -261,6 +289,96 @@ describe('askGapswise', () => {
 
     expect(partnerPrompt).toContain('Use this assessment when relevant, but do not force it into unrelated answers.');
     expect(partnerPrompt).not.toContain('The user is asking for project prioritization.');
+  });
+
+  it('loads and sends a bounded graph slice only for graph reasoning', async () => {
+    let graphContextRequests = 0;
+    let normalContextPackRequests = 0;
+    let partnerPrompt = '';
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith('/api/internal/context-pack')) {
+        const body = JSON.parse(String(init?.body)) as { graphReasoning?: boolean };
+        if (body.graphReasoning) {
+          graphContextRequests += 1;
+          return jsonResponse({
+            contextPack: {
+              relevantEvidence: [],
+              upcomingCommitments: [],
+              researchEvidence: [],
+              graphContext: {
+                projectGoal: 'Launch the pilot safely.',
+                startingNodeIds: ['question_security'],
+                nodes: [{
+                  id: 'question_security',
+                  type: 'UNKNOWN',
+                  status: 'OPEN',
+                  text: 'Will the security review finish before Friday?',
+                  confidence: 0.9,
+                  impact: 0.8,
+                }, {
+                  id: 'risk_launch',
+                  type: 'RISK',
+                  status: 'OPEN',
+                  text: 'A delayed security review could threaten the pilot launch.',
+                  confidence: 0.9,
+                  impact: 0.8,
+                }],
+                edges: [{
+                  id: 'edge_security_risk',
+                  source: 'question_security',
+                  target: 'risk_launch',
+                  type: 'affects',
+                  confidence: 0.8,
+                }],
+              },
+            },
+          });
+        }
+        normalContextPackRequests += 1;
+        return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      }
+      if (target.endsWith('/internal/ask-route')) {
+        return jsonResponse({ route: 'internal_context', reason: 'The request concerns the user project.' });
+      }
+      if (target.endsWith('/api/internal/focus-assessment')) return new Response('', { status: 404 });
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_graph' });
+      if (target.endsWith('/run_sse')) {
+        const body = JSON.parse(String(init?.body)) as { new_message: { parts: Array<{ text: string }> } };
+        partnerPrompt = body.new_message.parts[0].text;
+        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify({
+          answer: 'The unresolved security review affects the Friday launch risk.',
+          outcome: 'exploration',
+        }) }] } })}\n`);
+      }
+      throw new Error(`Unexpected fetch ${target}`);
+    }));
+
+    const result = await askGapswise({
+      userId: 'demo-user',
+      message: 'If the security review is delayed, what happens to the launch?',
+    });
+
+    expect(normalContextPackRequests).toBe(1);
+    expect(graphContextRequests).toBe(1);
+    expect(partnerPrompt).toContain('PROJECT_GRAPH_CONTEXT (graph reasoning is active)');
+    expect(partnerPrompt).toContain('Launch the pilot safely.');
+    expect(partnerPrompt).toContain('question_security');
+    expect(result.graphReasoning).toMatchObject({
+      startingNodeIds: ['question_security'],
+      selectedNodeIds: ['question_security', 'risk_launch'],
+      selectedEdges: [{
+        id: 'edge_security_risk',
+        source: 'question_security',
+        target: 'risk_launch',
+        type: 'affects',
+      }],
+    });
+    expect(result.execution).toEqual({
+      route: 'graph_reasoning',
+      agent: 'Partner Agent',
+      toolCalls: ['ADK /run_sse'],
+    });
   });
 
   it('preserves an exploratory Partner Agent response without answer metadata', async () => {

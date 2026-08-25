@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ClarityNode } from '@/types/clarity';
+import type { ClarityNode, Project } from '@/types/clarity';
 import {
   allowedRelationshipTypes,
   relationshipAddsDistinctMeaning,
   relationshipRoleCompatible,
+  removeSupersededRelationships,
+  writeSemanticEdge,
 } from '@/lib/graph/relationshipSemantics';
 
 function node(id: string, type: ClarityNode['type'], text: string, status: ClarityNode['status']): ClarityNode {
@@ -68,5 +70,137 @@ describe('relationship semantics', () => {
       target: 'b',
       type: 'affects',
     })).toBe(true);
+  });
+
+  it('treats inverse blocking and dependency edges as one relationship', () => {
+    expect(relationshipAddsDistinctMeaning([
+      { id: 'edge-1', source: 'blocker', target: 'blocked', type: 'blocks' },
+    ], {
+      source: 'blocked',
+      target: 'blocker',
+      type: 'depends_on',
+    })).toBe(false);
+
+    expect(relationshipAddsDistinctMeaning([
+      { id: 'edge-1', source: 'blocked', target: 'blocker', type: 'depends_on' },
+    ], {
+      source: 'blocker',
+      target: 'blocked',
+      type: 'blocks',
+    })).toBe(false);
+  });
+
+  it('keeps the stronger same-direction relationship and removes the weaker edge when it arrives later', () => {
+    const edges = [{
+      id: 'edge-1',
+      source: 'risk',
+      target: 'decision',
+      type: 'affects' as const,
+      confidence: 0.8,
+    }];
+    const candidate = {
+      source: 'risk',
+      target: 'decision',
+      type: 'blocks' as const,
+      confidence: 0.9,
+    };
+
+    expect(relationshipAddsDistinctMeaning(edges, candidate)).toBe(true);
+    removeSupersededRelationships(edges, candidate);
+    expect(edges).toEqual([]);
+  });
+
+  it('keeps only the stronger direction for reciprocal generic edges', () => {
+    const edges = [{
+      id: 'edge-1',
+      source: 'evidence-b',
+      target: 'decision-a',
+      type: 'informs' as const,
+      confidence: 0.7,
+    }];
+
+    expect(relationshipAddsDistinctMeaning(edges, {
+      source: 'decision-a',
+      target: 'evidence-b',
+      type: 'informs',
+      confidence: 0.6,
+    })).toBe(false);
+
+    const stronger = {
+      source: 'decision-a',
+      target: 'evidence-b',
+      type: 'informs' as const,
+      confidence: 0.9,
+    };
+    expect(relationshipAddsDistinctMeaning(edges, stronger)).toBe(true);
+    removeSupersededRelationships(edges, stronger);
+    expect(edges).toEqual([]);
+  });
+
+  it('rejects reciprocal support loops', () => {
+    const edges = [{
+      id: 'edge-1',
+      source: 'evidence-a',
+      target: 'evidence-b',
+      type: 'supports' as const,
+      confidence: 1,
+    }];
+
+    expect(relationshipAddsDistinctMeaning(edges, {
+      source: 'evidence-b',
+      target: 'evidence-a',
+      type: 'supports',
+      confidence: 1,
+    })).toBe(false);
+  });
+
+  it('writes semantic edges through the shared dedupe and supersession rules', () => {
+    const risk = node('risk', 'RISK', 'The schedule may slip.', 'OPEN');
+    const decision = node('decision', 'DECISION', 'Choose the launch date.', 'OPEN');
+    const project = {
+      nodes: [risk, decision],
+      edges: [{
+        id: 'edge-generic',
+        source: 'risk',
+        target: 'decision',
+        type: 'affects' as const,
+        confidence: 0.7,
+      }],
+    } as Project;
+
+    const persisted = writeSemanticEdge(project, {
+      source: 'risk',
+      target: 'decision',
+      type: 'blocks',
+      confidence: 0.9,
+    });
+
+    expect(persisted).toMatchObject({
+      source: 'risk',
+      target: 'decision',
+      type: 'blocks',
+      confidence: 0.9,
+    });
+    expect(project.edges).toHaveLength(1);
+    expect(writeSemanticEdge(project, {
+      source: 'risk',
+      target: 'decision',
+      type: 'blocks',
+      confidence: 0.9,
+    })).toBeUndefined();
+  });
+
+  it('rejects missing endpoints and role-incompatible edges on the shared write path', () => {
+    const action = node('action', 'NEXT_ACTION', 'Book the selected venue.', 'OPEN');
+    const constraint = node('constraint', 'CONSTRAINT', 'The budget is fixed.', 'RESOLVED');
+    const project = { nodes: [action, constraint], edges: [] } as unknown as Project;
+
+    expect(writeSemanticEdge(project, {
+      source: 'missing', target: constraint.id, type: 'informs', confidence: 0.9,
+    })).toBeUndefined();
+    expect(writeSemanticEdge(project, {
+      source: action.id, target: constraint.id, type: 'resolves', confidence: 0.9,
+    })).toBeUndefined();
+    expect(project.edges).toEqual([]);
   });
 });

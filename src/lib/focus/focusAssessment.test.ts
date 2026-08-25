@@ -179,7 +179,7 @@ describe('shared Focus Assessment', () => {
       id: 'pricing', type: 'DECISION', text: 'Determine the ticket price.', status: 'OPEN',
       confidence: 0.8, impact: 0.85, source_refs: [], created_by: 'user', created_at: timestamp, updated_at: timestamp,
     });
-    project.edges.push({ id: 'venue_action_outcome', source: 'venue_action', target: 'venue', type: 'informs' });
+    project.edges.push({ id: 'venue_action_outcome', source: 'venue_action', target: 'venue', type: 'satisfies' });
     const contextPack = buildContextPack({
       userId: 'focus-user', query: 'What needs my attention today?', project, profile: DEFAULT_USER_PROFILE,
     });

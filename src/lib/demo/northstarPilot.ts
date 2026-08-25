@@ -1,10 +1,13 @@
 import type { Project } from '@/types/clarity';
+import { anchorProjectDecision } from '@/lib/decisions/anchoring';
 
 export const NORTHSTAR_PILOT_DEMO_NAME = 'Northstar pilot';
 export const NORTHSTAR_PILOT_CREATED_AT = '2026-08-24T09:00:00.000Z';
 export const NORTHSTAR_PILOT_DEMO_ID = `project_launch-the-northstar-logistics-pilot_${Date.parse(NORTHSTAR_PILOT_CREATED_AT)}`;
 export const NORTHSTAR_PILOT_CHAT_ID = 'northstar_pilot_discovery_chat';
 export const NORTHSTAR_PILOT_RESOLVED_SCOPE = 'Use scheduled CSV imports and named user accounts for the eight-week pilot; defer the full API integration and SSO until after the pilot succeeds.';
+export const NORTHSTAR_PILOT_TECHNICAL_DECISION = 'Choose the technical scope for the Northstar Logistics pilot';
+export const NORTHSTAR_PILOT_PRICING_DECISION = 'Settle the pricing for the Northstar Logistics pilot';
 
 export interface NorthstarPilotConversation {
   user: string;
@@ -121,16 +124,54 @@ export function northstarPilotProjectInput(): { name: string; goal: string } {
   };
 }
 
-/**
- * Finds the unresolved technical-scope choice from the graph produced by the
- * normal Context ingestion path. It intentionally returns a node, rather than
- * an ID constant, so the demo exercises the same decision target lookup as a
- * user-driven resolution.
- */
+/** Finds the replay's technical-scope decision regardless of lifecycle state. */
 export function findNorthstarTechnicalScopeDecision(project: Project): Project['nodes'][number] | undefined {
   return project.nodes
-    .filter((node) => node.type === 'DECISION' && node.status === 'OPEN')
-    .find((node) => /technical|scope|api|sso|integration/i.test(node.text));
+    .filter((node) => node.type === 'DECISION' && /technical|scope|api|sso|integration/i.test(node.text))
+    .sort((left, right) => Number(right.status === 'OPEN') - Number(left.status === 'OPEN'))[0];
+}
+
+export function findNorthstarPricingDecision(project: Project): Project['nodes'][number] | undefined {
+  return project.nodes
+    .filter((node) => node.type === 'DECISION' && /pric|commercial|pilot fee/i.test(node.text))
+    .sort((left, right) => {
+      const leftDedicated = !/technical|scope|api|sso|integration/i.test(left.text);
+      const rightDedicated = !/technical|scope|api|sso|integration/i.test(right.text);
+      return Number(rightDedicated) - Number(leftDedicated)
+        || Number(right.status === 'OPEN') - Number(left.status === 'OPEN');
+    })[0];
+}
+
+/**
+ * The replay has two user-stated decisions that are required by its scripted
+ * workflow. Anchor them through the normal explicit-decision path so model
+ * omission cannot terminate the replay before the later sources execute.
+ */
+export function ensureNorthstarReplayDecisions(project: Project, sourceId: string): Project {
+  const technical = findNorthstarTechnicalScopeDecision(project);
+  let updated = anchorProjectDecision(
+    project,
+    technical?.text ?? NORTHSTAR_PILOT_TECHNICAL_DECISION,
+  );
+  const anchoredTechnical = findNorthstarTechnicalScopeDecision(updated);
+  const pricing = updated.nodes
+    .filter((node) =>
+      node.type === 'DECISION'
+      && node.id !== anchoredTechnical?.id
+      && /pric|commercial|pilot fee/i.test(node.text)
+    )
+    .sort((left, right) => Number(right.status === 'OPEN') - Number(left.status === 'OPEN'))[0];
+  updated = anchorProjectDecision(
+    updated,
+    pricing?.text ?? NORTHSTAR_PILOT_PRICING_DECISION,
+  );
+
+  [findNorthstarTechnicalScopeDecision(updated), findNorthstarPricingDecision(updated)]
+    .filter((node): node is Project['nodes'][number] => Boolean(node))
+    .forEach((node) => {
+      node.source_refs = Array.from(new Set([...node.source_refs, sourceId]));
+    });
+  return updated;
 }
 
 export function findNorthstarSecurityAcceptanceGap(project: Project): Project['nodes'][number] | undefined {

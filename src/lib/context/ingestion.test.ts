@@ -270,13 +270,13 @@ describe('context ingestion', () => {
     expect(updated.nodes.find((node) => node.id === 'budget_question')?.source_refs).not.toContain('os-notes');
   });
 
-  it('does not let an unfinished action resolve a question or unrelated evidence inform a decision', async () => {
+  it('does not let an unfinished action resolve a question while preserving a source-local semantic link', async () => {
     const project = createProjectFromInput({ name: 'Release plan', goal: 'Ship a reliable release.' }, '2026-08-20T09:00:00Z');
     const updated = await ingestContextSource(project, {
       sourceId: 'relationship-note',
       filename: 'relationship-note.txt',
       type: 'text',
-      content: 'The note contains unrelated details.',
+      content: 'The integration result informs release timing, but the test action is still unfinished.',
       derivedNodes: [
         {
           type: 'NEXT_ACTION',
@@ -294,7 +294,7 @@ describe('context ingestion', () => {
         },
         {
           type: 'EVIDENCE',
-          text: 'The sample contains an unrelated contact detail.',
+          text: 'The integration result affects the safe release window.',
           confidence: 0.9,
           impact: 0.7,
         },
@@ -306,12 +306,12 @@ describe('context ingestion', () => {
           status: 'OPEN',
         },
       ],
-      relationships: [{ sourceNodeIndex: 2, targetNodeId: 'new:3', type: 'informs', confidence: 0.95 }],
+      relationships: [{ sourceRef: 'new:2', targetRef: 'new:3', type: 'informs', confidence: 0.95 }],
     }, DEFAULT_USER_PROFILE);
 
     expect(updated.nodes.find((node) => node.text === 'What is the integration status?')?.status).toBe('OPEN');
     expect(updated.edges.some((edge) => edge.type === 'resolves')).toBe(false);
-    expect(updated.edges.some((edge) => edge.type === 'informs')).toBe(false);
+    expect(updated.edges.some((edge) => edge.type === 'informs')).toBe(true);
   });
 
   it('persists satisfies for an intended action without resolving its target', async () => {
@@ -750,5 +750,106 @@ describe('context ingestion', () => {
       expect.objectContaining({ type: 'NEXT_ACTION', text: 'Test both values from the same project.' }),
       expect.objectContaining({ type: 'EVIDENCE', text: 'I have not tested both values from the same project.' }),
     ]));
+  });
+
+  it('allows an existing canonical node to point to a new source-local node', async () => {
+    const project = createProjectFromInput({ name: 'Pilot', goal: 'Launch a viable pilot.' }, '2026-08-20T12:00:00Z');
+    const goal = project.nodes.find((node) => node.type === 'GOAL')!;
+    const updated = await ingestContextSource(project, {
+      sourceId: 'pilot-choice',
+      filename: 'pilot-choice.txt',
+      type: 'text',
+      content: 'The pilot cannot proceed until the delivery model is chosen.',
+      derivedNodes: [{
+        candidateRef: 'new:0',
+        id: 'delivery-decision',
+        type: 'DECISION',
+        text: 'Choose the pilot delivery model.',
+        status: 'OPEN',
+        confidence: 0.9,
+        impact: 0.9,
+      }],
+      relationships: [{
+        sourceRef: goal.id,
+        targetRef: 'new:0',
+        type: 'depends_on',
+        confidence: 0.95,
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.edges).toContainEqual(expect.objectContaining({
+      source: goal.id,
+      target: 'delivery-decision',
+      type: 'depends_on',
+    }));
+  });
+
+  it('rejects an ingestion relationship when both endpoints are historical', async () => {
+    const project = createProjectFromInput({ name: 'Pilot', goal: 'Launch a viable pilot.' }, '2026-08-20T12:00:00Z');
+    const goal = project.nodes.find((node) => node.type === 'GOAL')!;
+    project.nodes.push({
+      ...goal,
+      id: 'old-decision',
+      type: 'DECISION',
+      text: 'Choose the pilot delivery model.',
+      status: 'OPEN',
+    });
+    const updated = await ingestContextSource(project, {
+      sourceId: 'later-note',
+      filename: 'later-note.txt',
+      type: 'text',
+      content: 'A later note was added.',
+      derivedNodes: [],
+      relationships: [{
+        sourceRef: goal.id,
+        targetRef: 'old-decision',
+        type: 'depends_on',
+        confidence: 0.95,
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.edges).toEqual([]);
+  });
+
+  it('allows canonical refs when the current source materially refines one endpoint', async () => {
+    const project = createProjectFromInput({ name: 'Pilot', goal: 'Launch a viable pilot.' }, '2026-08-20T12:00:00Z');
+    const goal = project.nodes.find((node) => node.type === 'GOAL')!;
+    project.nodes.push({
+      ...goal,
+      id: 'old-decision',
+      type: 'DECISION',
+      text: 'Choose the delivery model.',
+      status: 'OPEN',
+    });
+    const updated = await ingestContextSource(project, {
+      sourceId: 'delivery-refinement',
+      filename: 'delivery-refinement.txt',
+      type: 'text',
+      content: 'Choose the delivery model for the first pilot.',
+      derivedNodes: [{
+        candidateRef: 'new:0',
+        type: 'DECISION',
+        text: 'Choose the delivery model for the first pilot.',
+        status: 'OPEN',
+        confidence: 0.95,
+        impact: 0.9,
+        questionClassification: 'REFINES_EXISTING',
+        canonicalNodeId: 'old-decision',
+      }],
+      relationships: [{
+        sourceRef: 'old-decision',
+        targetRef: goal.id,
+        type: 'affects',
+        confidence: 0.95,
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.find((node) => node.id === 'old-decision')?.text)
+      .toBe('Choose the delivery model for the first pilot.');
+    expect(updated.edges).toContainEqual(expect.objectContaining({
+      source: 'old-decision',
+      target: goal.id,
+      type: 'affects',
+    }));
   });
 });

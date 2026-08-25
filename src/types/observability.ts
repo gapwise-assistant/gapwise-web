@@ -140,6 +140,10 @@ export interface TraceEvent {
   decisionMapDebug?: DecisionMapDebugTrace;
   /** Semantic event metadata used by the compact Decision Map Activity feed. */
   decisionMapActivity?: import('@/lib/graph/decisionMapActivity').PersistedDecisionMapActivity;
+  /** Whether this Ask turn used the graph-reasoning capability. */
+  askGraphReasoning?: boolean;
+  /** Sanitized development-only graph context used by a graph-reasoning Ask turn. */
+  askGraphReasoningContext?: import('@/types/ask').AskGraphReasoningTrace;
   /** True when the event describes a deterministic demo simulation, not an AI call. */
   simulation?: boolean;
   error?: string;

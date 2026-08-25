@@ -4,7 +4,10 @@ import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
 import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { appendDecisionResolvedHistory } from '@/lib/history/projectHistory';
-import { ensureResolutionConsistency } from '@/lib/graph/relationshipSemantics';
+import {
+  ensureResolutionConsistency,
+  writeSemanticEdge,
+} from '@/lib/graph/relationshipSemantics';
 
 export interface DecisionEvidence {
   id: string;
@@ -307,15 +310,6 @@ export function buildDecisionWorkspace(project: Project, targetNodeId: string): 
   };
 }
 
-function addEdgeIfMissing(project: Project, edge: Omit<ClarityEdge, 'id'>): void {
-  const exists = project.edges.some(
-    (candidate) => candidate.source === edge.source && candidate.target === edge.target && candidate.type === edge.type,
-  );
-  if (!exists) {
-    project.edges.push({ ...edge, id: `edge_${Date.now()}_${project.edges.length}` });
-  }
-}
-
 function deprecateResolvedDecisionAliases(project: Project, canonicalDecisionId: string, now: string): void {
   project.nodes
     .filter((node) =>
@@ -359,7 +353,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
     const node = updated.nodes.find((candidate) => candidate.id === nodeId);
     const evidence = workspace.supportingEvidence.find((item) => item.nodeId === nodeId);
     if ((node?.type === 'KNOWN' || node?.type === 'EVIDENCE') && (evidence?.relation === 'supports' || evidence?.relation === 'informs')) {
-      addEdgeIfMissing(updated, { source: node.id, target: decision.id, type: 'supports', confidence: node.confidence });
+      writeSemanticEdge(updated, { source: node.id, target: decision.id, type: 'supports', confidence: node.confidence });
     }
   });
 
@@ -370,7 +364,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
       node.status = 'RESOLVED';
       node.confidence = 1;
       node.updated_at = now;
-      addEdgeIfMissing(updated, { source: decision.id, target: node.id, type: 'resolves', confidence: 1 });
+      writeSemanticEdge(updated, { source: decision.id, target: node.id, type: 'resolves', confidence: 1 });
     });
 
   ensureResolutionConsistency(updated);

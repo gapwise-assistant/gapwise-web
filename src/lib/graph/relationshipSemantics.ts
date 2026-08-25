@@ -29,6 +29,13 @@ export function isEvidenceNode(node: ClarityNode): boolean {
  * unverified.
  */
 export function hasConclusiveResultEvidence(node: ClarityNode): boolean {
+  if (
+    node.created_by === 'user'
+    && node.status === 'RESOLVED'
+    && ['KNOWN', 'EVIDENCE', 'EXPERIMENT', 'CONSTRAINT', 'PREFERENCE', 'DECISION'].includes(node.type)
+  ) {
+    return true;
+  }
   if (!isEvidenceNode(node)) {
     return node.type === 'DECISION' && node.status === 'RESOLVED';
   }
@@ -107,27 +114,175 @@ export function allowedRelationshipTypes(
 }
 
 /**
- * Reject only relationships that add no distinct meaning to an existing pair.
- * A specific prerequisite/blocking edge makes a generic affects edge redundant;
- * other relationship types may coexist when the source supports both claims.
+ * Relationship strength is only used for the narrow generic-vs-specific cases
+ * where two edges express the same project meaning. It is not a global ranking
+ * of all relationship types.
  */
+const RELATIONSHIP_STRENGTH: Partial<Record<EdgeType, number>> = {
+  informs: 1,
+  affects: 1,
+  supports: 2,
+  blocks: 2,
+  depends_on: 2,
+};
+
+function isInverseDependencyPair(
+  left: Pick<ClarityEdge, 'source' | 'target' | 'type'>,
+  right: Pick<ClarityEdge, 'source' | 'target' | 'type'>,
+): boolean {
+  return (
+    left.type === 'blocks'
+    && right.type === 'depends_on'
+    && left.source === right.target
+    && left.target === right.source
+  ) || (
+    left.type === 'depends_on'
+    && right.type === 'blocks'
+    && left.source === right.target
+    && left.target === right.source
+  );
+}
+
+function isStrongerRelationship(
+  candidateType: EdgeType,
+  existingType: EdgeType,
+): boolean {
+  const candidateStrength = RELATIONSHIP_STRENGTH[candidateType] ?? 0;
+  const existingStrength = RELATIONSHIP_STRENGTH[existingType] ?? 0;
+  return candidateStrength > existingStrength
+    && (
+      (candidateType === 'blocks' || candidateType === 'depends_on')
+        && existingType === 'affects'
+      || candidateType === 'supports' && existingType === 'informs'
+    );
+}
+
+type RelationshipCandidate = Pick<ClarityEdge, 'source' | 'target' | 'type'> & {
+  confidence?: number;
+};
+
+export type SemanticEdgeInput = Omit<ClarityEdge, 'id'> & {
+  id?: string;
+};
+
+export type SemanticEdgeRejectionReason =
+  | 'missing_source'
+  | 'missing_target'
+  | 'self_reference'
+  | 'role_incompatible'
+  | 'duplicate'
+  | 'redundant_relationship';
+
+/** Shared persistence invariant used by every canonical edge-writing path. */
+export function semanticEdgeRejectionReason(
+  project: Project,
+  candidate: RelationshipCandidate,
+): SemanticEdgeRejectionReason | undefined {
+  const source = project.nodes.find((node) => node.id === candidate.source);
+  const target = project.nodes.find((node) => node.id === candidate.target);
+  if (!source) return 'missing_source';
+  if (!target) return 'missing_target';
+  if (source.id === target.id) return 'self_reference';
+  if (!relationshipRoleCompatible(source, target, candidate.type)) return 'role_incompatible';
+  if (!relationshipAddsDistinctMeaning(project.edges, candidate)) {
+    return project.edges.some((edge) =>
+      edge.source === candidate.source
+      && edge.target === candidate.target
+      && edge.type === candidate.type
+    ) ? 'duplicate' : 'redundant_relationship';
+  }
+  return undefined;
+}
+
 export function relationshipAddsDistinctMeaning(
   existingEdges: ClarityEdge[],
-  candidate: Pick<ClarityEdge, 'source' | 'target' | 'type'>,
+  candidate: RelationshipCandidate,
 ): boolean {
   const pair = existingEdges.filter((edge) =>
     edge.source === candidate.source && edge.target === candidate.target,
   );
   if (pair.some((edge) => edge.type === candidate.type)) return false;
 
-  if (
-    candidate.type === 'affects'
-    && pair.some((edge) => edge.type === 'depends_on' || edge.type === 'blocks')
-  ) {
+  if (existingEdges.some((edge) => isInverseDependencyPair(edge, candidate))) {
     return false;
   }
 
+  if (pair.some((edge) => isStrongerRelationship(edge.type, candidate.type))) {
+    return false;
+  }
+
+  if (candidate.type === 'informs' || candidate.type === 'affects' || candidate.type === 'supports') {
+    const reciprocal = existingEdges.find((edge) =>
+      edge.type === candidate.type
+      && edge.source === candidate.target
+      && edge.target === candidate.source,
+    );
+    if (reciprocal && (
+      candidate.type === 'supports'
+      || (reciprocal.confidence ?? 0) >= (candidate.confidence ?? 0)
+    )) {
+      return false;
+    }
+  }
+
   return true;
+}
+
+/**
+ * Remove only edges that are superseded by an accepted stronger candidate.
+ * Inverse dependency edges are intentionally not removed here because they
+ * are rejected by relationshipAddsDistinctMeaning() and the existing edge is
+ * the one retained.
+ */
+export function removeSupersededRelationships(
+  existingEdges: ClarityEdge[],
+  candidate: RelationshipCandidate,
+): void {
+  const candidateConfidence = candidate.confidence ?? 0;
+  for (let index = existingEdges.length - 1; index >= 0; index -= 1) {
+    const edge = existingEdges[index];
+    const sameDirectedPair = edge.source === candidate.source
+      && edge.target === candidate.target;
+    const supersededSamePair = sameDirectedPair
+      && isStrongerRelationship(candidate.type, edge.type);
+    const supersededReciprocalGeneric = (
+      candidate.type === 'informs' || candidate.type === 'affects'
+    ) && edge.type === candidate.type
+      && edge.source === candidate.target
+      && edge.target === candidate.source
+      && candidateConfidence > (edge.confidence ?? 0);
+
+    if (supersededSamePair || supersededReciprocalGeneric) {
+      existingEdges.splice(index, 1);
+    }
+  }
+}
+
+/**
+ * Persist one semantic edge using the same duplicate, redundancy, and
+ * supersession rules for every graph-writing path.
+ */
+export function writeSemanticEdge(
+  project: Project,
+  edge: SemanticEdgeInput,
+): ClarityEdge | undefined {
+  const candidate: RelationshipCandidate = {
+    source: edge.source,
+    target: edge.target,
+    type: edge.type,
+    confidence: edge.confidence,
+  };
+
+  if (semanticEdgeRejectionReason(project, candidate)) return undefined;
+
+  removeSupersededRelationships(project.edges, candidate);
+
+  const persisted: ClarityEdge = {
+    ...edge,
+    id: edge.id ?? `edge_semantic_${Date.now()}_${project.edges.length}_${Math.random().toString(36).slice(2, 8)}`,
+  };
+  project.edges.push(persisted);
+  return persisted;
 }
 
 function relationshipTokens(text: string): Set<string> {

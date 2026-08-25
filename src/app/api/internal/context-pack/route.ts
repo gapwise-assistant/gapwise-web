@@ -16,6 +16,7 @@ const contextPackRequestSchema = z.object({
   includeBroadContext: z.boolean().optional(),
   excludeMessageId: z.string().trim().min(1).optional(),
   excludeSourceId: z.string().trim().min(1).optional(),
+  graphReasoning: z.boolean().optional(),
 });
 
 export async function POST(request: Request) {
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
     includeBroadContext: parsed.data.includeBroadContext,
     excludeMessageId: parsed.data.excludeMessageId,
     excludeSourceId: parsed.data.excludeSourceId,
+    graphReasoning: parsed.data.graphReasoning,
   });
 
   return NextResponse.json({ contextPack });

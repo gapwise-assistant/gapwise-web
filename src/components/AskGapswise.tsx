@@ -149,6 +149,13 @@ function chatHoverLabel(chat: ChatSession): string {
   return `${chatTimestamp(chat.createdAt)} · ${chatQuestion(chat)}`;
 }
 
+function logAskBrowserDebug(stage: string, details: unknown): void {
+  if (typeof window === 'undefined') return;
+  if (process.env.NODE_ENV === 'production') return;
+  if (!['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(window.location.hostname)) return;
+  console.log(`[Gapwise Ask][browser] ${stage}`, details);
+}
+
 export function canonicalAskQuestions(questions: AskOpenQuestion[]): AskOpenQuestion[] {
   // The API already returns stored canonical question IDs. The UI must not
   // invent a second semantic grouping based on display text; that can hide a
@@ -578,20 +585,23 @@ export function AskGapswise({
     setError('');
 
     try {
+      const requestBody = {
+        userId,
+        message: text,
+        chatId: updatedChat.id,
+        userMessageId: userMsgId,
+        ...(chatToUse.sessionId ? { sessionId: chatToUse.sessionId } : {}),
+        ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+        ...(chatToUse.target ? { target: chatToUse.target } : {}),
+      };
+      logAskBrowserDebug('api-request', { endpoint: '/api/ask', body: requestBody });
       const response = await authFetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          message: text,
-          chatId: updatedChat.id,
-          userMessageId: userMsgId,
-          ...(chatToUse.sessionId ? { sessionId: chatToUse.sessionId } : {}),
-          ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
-          ...(chatToUse.target ? { target: chatToUse.target } : {}),
-        }),
+        body: JSON.stringify(requestBody),
       });
       const data = await response.json();
+      logAskBrowserDebug('api-response', { status: response.status, body: data });
       if (!response.ok) throw new Error(data.error ?? 'Ask failed.');
       await onProjectContextChanged?.();
 

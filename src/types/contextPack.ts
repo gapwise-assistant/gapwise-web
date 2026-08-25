@@ -34,6 +34,26 @@ export interface EvidenceExcerpt {
   supports?: string[];
 }
 
+export interface AskGraphContext {
+  projectGoal: string;
+  nodes: Array<{
+    id: string;
+    type: ClarityNode['type'];
+    status: ClarityNode['status'];
+    text: string;
+    confidence: number;
+    impact: number;
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    type: string;
+    confidence?: number;
+  }>;
+  startingNodeIds: string[];
+}
+
 export interface ContextPack {
   id: string;
   query: string;
@@ -51,6 +71,7 @@ export interface ContextPack {
   includedContextIds: string[];
   relevantConversationExcerpts?: RelevantConversationExcerpt[];
   researchEvidence?: AskResearchEvidence[];
+  graphContext?: AskGraphContext;
 }
 
 export interface ContextPackInput {
@@ -67,7 +88,9 @@ export interface ContextPackInput {
   scope?: AppScope;
   excludeMessageId?: string;
   excludeSourceId?: string;
-  limits?: Partial<Record<keyof Omit<ContextPack, 'id' | 'query' | 'built_at' | 'includedContextIds' | 'provenanceSources'>, number>>;
+  /** Build the bounded canonical graph slice used only by graph-reasoning Ask. */
+  graphReasoning?: boolean;
+  limits?: Partial<Record<keyof Omit<ContextPack, 'id' | 'query' | 'built_at' | 'includedContextIds' | 'provenanceSources' | 'graphContext'>, number>>;
 }
 
 export type SourceLike = Pick<

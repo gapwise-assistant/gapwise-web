@@ -13,14 +13,16 @@ import { appendContextAddedHistory } from '@/lib/history/projectHistory';
 import {
   ensureResolutionConsistency,
   relationshipHasSemanticSupport,
-  relationshipAddsDistinctMeaning,
-  relationshipRoleCompatible,
+  semanticEdgeRejectionReason,
+  writeSemanticEdge,
 } from '@/lib/graph/relationshipSemantics';
 
 export { semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
 export interface PrecomputedSourceNode {
   id?: string;
+  /** Stable identity of this candidate within its source extraction. */
+  candidateRef?: string;
   type: ClarityNode['type'];
   text: string;
   confidence: number;
@@ -32,15 +34,17 @@ export interface PrecomputedSourceNode {
   questionClassification?: ReconciliationClassification;
   canonicalQuestionId?: string;
   canonicalNodeId?: string;
-  canonicalCandidateIndex?: number;
+  canonicalCandidateRef?: string;
   reconciliationConfidence?: number;
   reconciliationReason?: string;
   questionAliases?: string[];
 }
 
 export interface PrecomputedRelationship {
-  sourceNodeIndex: number;
-  targetNodeId: string;
+  /** Either a current-source candidate ref (`new:<original index>`) or a canonical node ID. */
+  sourceRef: string;
+  /** Either a current-source candidate ref (`new:<original index>`) or a canonical node ID. */
+  targetRef: string;
   type: EdgeType;
   confidence?: number;
 }
@@ -706,37 +710,28 @@ function persistValidatedRelationship(
   const targetNode = project.nodes.find((node) => node.id === candidate.targetNodeId);
   if (!sourceNode) return { accepted: false, reason: 'missing_source' };
   if (!targetNode) return { accepted: false, reason: 'missing_target' };
-  if (sourceNode.id === targetNode.id) return { accepted: false, reason: 'self_reference' };
-  if (!relationshipRoleCompatible(sourceNode, targetNode, candidate.type)) {
-    return { accepted: false, reason: 'role_incompatible' };
-  }
   if (!relationshipHasSemanticSupport(sourceNode, targetNode, candidate.type, explicitlyLinked)) {
     return { accepted: false, reason: 'semantic_support_failed' };
   }
   const confidence = candidate.confidence ?? sourceNode.confidence;
   if (confidence < 0.6) return { accepted: false, reason: 'low_confidence' };
-  if (!relationshipAddsDistinctMeaning(project.edges, {
+  const rejectionReason = semanticEdgeRejectionReason(project, {
     source: candidate.sourceNodeId,
     target: candidate.targetNodeId,
     type: candidate.type,
-  })) {
-    return {
-      accepted: false,
-      reason: project.edges.some((edge) =>
-        edge.source === candidate.sourceNodeId
-        && edge.target === candidate.targetNodeId
-        && edge.type === candidate.type
-      ) ? 'duplicate' : 'redundant_relationship',
-    };
-  }
-
-  project.edges.push({
+    confidence,
+  });
+  if (rejectionReason) return { accepted: false, reason: rejectionReason };
+  const persisted = writeSemanticEdge(project, {
     id: makeId('edge_context'),
     source: candidate.sourceNodeId,
     target: candidate.targetNodeId,
     type: candidate.type,
     confidence,
   });
+  if (!persisted) {
+    return { accepted: false, reason: 'redundant_relationship' };
+  }
 
   if (candidate.type !== 'satisfies') {
     applyRelationshipState(targetNode, candidate.type, sourceId, sourceFilename, now);
@@ -846,14 +841,17 @@ export async function ingestContextSource(
       ? derivedNodes
       : fallbackNodesForSource(content);
     const nodeIds: string[] = [];
+    const nodeIdByCandidateRef = new Map<string, string>();
+    const currentSourceCanonicalNodeIds = new Set<string>();
 
-    nodesToProcess.forEach((node) => {
+    nodesToProcess.forEach((node, nodeIndex) => {
+      const candidateRef = node.candidateRef ?? `new:${nodeIndex}`;
       const deterministicReconciliation = (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
         ? reconcileQuestionCandidate(node, updated)
         : undefined;
       const questionClassification = node.questionClassification ?? deterministicReconciliation?.classification;
-      const siblingTargetId = node.canonicalCandidateIndex !== undefined
-        ? nodeIds[node.canonicalCandidateIndex]
+      const siblingTargetId = node.canonicalCandidateRef
+        ? nodeIdByCandidateRef.get(node.canonicalCandidateRef)
         : undefined;
       const siblingTarget = siblingTargetId
         ? updated.nodes.find((candidate) => candidate.id === siblingTargetId)
@@ -921,6 +919,7 @@ export async function ingestContextSource(
       }
       if (existingNode) {
         const previousText = existingNode.text;
+        const previousStatus = existingNode.status;
         if (node.questionClassification && !node.canonicalNodeId && !node.canonicalQuestionId && existingNode.reconciliation_status === 'fallback') {
           existingNode.text = node.text;
         }
@@ -945,10 +944,9 @@ export async function ingestContextSource(
         existingNode.reconciliation_status = node.questionClassification ? 'reconciled' : 'fallback';
         existingNode.reconciliation_classification = questionClassification ?? existingNode.reconciliation_classification;
         if (
-          canonicalDecisionMerge
+          (canonicalDecisionMerge || isCanonicalContextNode(node.type))
           && questionClassification === 'REFINES_EXISTING'
-          && existingNode.status === 'OPEN'
-          && node.status === 'OPEN'
+          && (existingNode.type !== 'DECISION' || (existingNode.status === 'OPEN' && node.status === 'OPEN'))
         ) {
           existingNode.text = node.text;
         }
@@ -961,6 +959,10 @@ export async function ingestContextSource(
           existingNode.status = 'OPEN';
         }
         nodeIds.push(existingNode.id);
+        nodeIdByCandidateRef.set(candidateRef, existingNode.id);
+        if (existingNode.text !== previousText || existingNode.status !== previousStatus) {
+          currentSourceCanonicalNodeIds.add(existingNode.id);
+        }
         return;
       }
 
@@ -999,6 +1001,8 @@ export async function ingestContextSource(
       };
       updated.nodes.push(createdNode);
       nodeIds.push(createdNode.id);
+      nodeIdByCandidateRef.set(candidateRef, createdNode.id);
+      currentSourceCanonicalNodeIds.add(createdNode.id);
     });
 
     newSource.derived_node_ids = nodeIds;
@@ -1009,8 +1013,8 @@ export async function ingestContextSource(
       ...nodesToProcess.flatMap((node, sourceNodeIndex) =>
         node.relationship && node.relatedNodeIds?.length
           ? node.relatedNodeIds.map((targetNodeId) => ({
-              sourceNodeIndex,
-              targetNodeId,
+              sourceRef: node.candidateRef ?? `new:${sourceNodeIndex}`,
+              targetRef: targetNodeId,
               type: node.relationship as EdgeType,
               confidence: node.confidence,
             }))
@@ -1023,37 +1027,39 @@ export async function ingestContextSource(
       rejectedRelationships: [],
     };
     relationships.forEach((relationship) => {
-      const sourceNodeId = nodeIds[relationship.sourceNodeIndex];
-      const targetNodeId = relationship.targetNodeId.startsWith('new:')
-        ? nodeIds[Number(relationship.targetNodeId.slice(4))]
-        : relationship.targetNodeId;
+      const sourceNodeId = nodeIdByCandidateRef.get(relationship.sourceRef) ?? relationship.sourceRef;
+      const targetNodeId = nodeIdByCandidateRef.get(relationship.targetRef) ?? relationship.targetRef;
       const candidate: CanonicalRelationshipCandidate = {
-        sourceNodeId: sourceNodeId ?? `missing:${relationship.sourceNodeIndex}`,
-        targetNodeId: targetNodeId ?? relationship.targetNodeId,
+        sourceNodeId,
+        targetNodeId,
         type: relationship.type,
         confidence: relationship.confidence,
       };
-      if (!sourceNodeId || !targetNodeId) {
+      const sourceExists = updated.nodes.some((node) => node.id === sourceNodeId);
+      const targetExists = updated.nodes.some((node) => node.id === targetNodeId);
+      if (!sourceExists || !targetExists) {
         relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(
           candidate,
-          !sourceNodeId ? 'missing_source' : 'missing_target',
+          !sourceExists ? 'missing_source' : 'missing_target',
         ));
         return;
       }
-      const sourceSpec = nodesToProcess[relationship.sourceNodeIndex];
-      // A model target that names an existing canonical node is an explicit
-      // cross-turn link. Same-source generated targets still need either an
-      // explicit related_node_ids link or substantive lexical support so an
-      // unrelated fact cannot become evidence for a sibling decision.
-      const explicitlyLinked = !relationship.targetNodeId.startsWith('new:')
-        || Boolean(sourceSpec?.relatedNodeIds?.some((id) => id === relationship.targetNodeId || id === targetNodeId));
+      const sourceIsCurrent = currentSourceCanonicalNodeIds.has(sourceNodeId);
+      const targetIsCurrent = currentSourceCanonicalNodeIds.has(targetNodeId);
+      if (!sourceIsCurrent && !targetIsCurrent) {
+        relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(
+          candidate,
+          'not_source_local',
+        ));
+        return;
+      }
       const result = persistValidatedRelationship(
         updated,
         candidate,
         sourceId,
         input.filename,
         now,
-        explicitlyLinked,
+        true,
       );
       if (result.accepted) relationshipPersistenceTrace.acceptedRelationships.push(candidate);
       else relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(candidate, result.reason ?? 'rejected'));
@@ -1081,19 +1087,14 @@ export async function ingestContextSource(
     );
     if (resolutionSourceId) {
       fallbackResolutionTargets.forEach((targetNode) => {
-        const exists = updated.edges.some((edge) =>
-          edge.source === resolutionSourceId && edge.target === targetNode.id && edge.type === 'resolves'
-        );
-        if (!exists) {
-          updated.edges.push({
-            id: makeId('edge_context'),
-            source: resolutionSourceId,
-            target: targetNode.id,
-            type: 'resolves',
-            confidence: 0.88,
-          });
-        }
-        applyRelationshipState(targetNode, 'resolves', sourceId, input.filename, now);
+        const persisted = writeSemanticEdge(updated, {
+          id: makeId('edge_context'),
+          source: resolutionSourceId,
+          target: targetNode.id,
+          type: 'resolves',
+          confidence: 0.88,
+        });
+        if (persisted) applyRelationshipState(targetNode, 'resolves', sourceId, input.filename, now);
       });
     }
 

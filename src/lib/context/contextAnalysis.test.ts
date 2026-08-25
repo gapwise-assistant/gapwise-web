@@ -200,10 +200,20 @@ describe('AI context graph analysis', () => {
           },
           {
             type: 'KNOWN',
-            text: 'Engineering estimates the CSV pilot will take between 80 and 120 engineering hours, plus 20 to 30 hours of support during the pilot.',
+            text: 'Engineering estimates the CSV pilot will take between 80 and 120 engineering hours.',
             confidence: 0.95,
             impact: 0.85,
           },
+          {
+            type: 'KNOWN',
+            text: 'The CSV pilot will require about 20 to 30 support hours during the pilot.',
+            confidence: 0.95,
+            impact: 0.85,
+          },
+        ],
+        relationships: [
+          { source_ref: 'new:2', target_ref: 'pricing-decision', type: 'informs', confidence: 0.92 },
+          { source_ref: 'new:3', target_ref: 'pricing-decision', type: 'informs', confidence: 0.92 },
         ],
         reconciliation: [
           {
@@ -224,8 +234,15 @@ describe('AI context graph analysis', () => {
             candidate_index: 2,
             classification: 'REFINES_EXISTING',
             canonical_node_id: 'csv-hours',
+            same_atomic_proposition: true,
             confidence: 0.9,
-            reason: 'Adds support-hour detail to the existing estimate.',
+            reason: 'Expresses the same engineering-hours estimate more precisely.',
+          },
+          {
+            candidate_index: 3,
+            classification: 'DISTINCT',
+            confidence: 0.98,
+            reason: 'Support effort is an independently variable estimate.',
           },
         ],
       },
@@ -244,17 +261,22 @@ describe('AI context graph analysis', () => {
     }), DEFAULT_USER_PROFILE, { genAI });
 
     const source = result.project.sources.find((candidate) => candidate.id === 'northstar-pricing-update');
-    expect(source?.derived_node_ids).toEqual(['pilot-budget', 'csv-hours']);
+    expect(source?.derived_node_ids).toHaveLength(3);
+    expect(source?.derived_node_ids).toEqual(expect.arrayContaining(['pilot-budget', 'csv-hours']));
     expect(result.project.nodes.filter((node) => node.id === 'pilot-budget')).toHaveLength(1);
     expect(result.project.nodes.filter((node) => node.id === 'csv-hours')).toHaveLength(1);
     expect(result.project.nodes.find((node) => node.id === 'pilot-budget')?.type).toBe('CONSTRAINT');
     expect(result.project.nodes.find((node) => node.id === 'pilot-budget')?.source_refs).toContain('northstar-pricing-update');
     expect(result.project.nodes.find((node) => node.id === 'csv-hours')?.source_refs).toContain('northstar-pricing-update');
-    expect(result.project.nodes.some((node) =>
+    const supportHours = result.project.nodes.find((node) =>
       node.source_refs.includes('northstar-pricing-update')
-      && node.id !== 'pilot-budget'
-      && node.id !== 'csv-hours'
-    )).toBe(false);
+      && /20 to 30 support hours/i.test(node.text)
+    );
+    expect(supportHours).toBeDefined();
+    expect(result.project.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'csv-hours', target: 'pricing-decision', type: 'informs' }),
+      expect.objectContaining({ source: supportHours?.id, target: 'pricing-decision', type: 'informs' }),
+    ]));
   });
 
   it('reuses a resolved canonical decision when a later turn clarifies its wording', async () => {
@@ -352,7 +374,7 @@ describe('AI context graph analysis', () => {
     ]));
   });
 
-  it('completes a canonical relationship between existing nodes after reconciliation', async () => {
+  it('does not manufacture an old-to-old relationship during later ingestion', async () => {
     const project = projectWithGoal('Run a reliable workshop.');
     project.nodes.push(
       {
@@ -380,34 +402,38 @@ describe('AI context graph analysis', () => {
         updated_at: '2026-08-20T10:00:00.000Z',
       },
     );
-    const genAI = mockGenAISequence([
-      {
-        summary: 'The new survey confirms the capacity decision is still being evaluated.',
-        nodes: [{ type: 'EVIDENCE', text: 'The new survey confirms the capacity is still being evaluated.', confidence: 0.9, impact: 0.8 }],
-        relationships: [{ source_node_index: 0, target_node_id: 'decision_capacity', type: 'informs', confidence: 0.95 }],
-      },
-      {
-        classifications: [{
-          pair_id: 'pair:known_survey:decision_capacity',
-          relationship: 'informs',
-          confidence: 0.95,
-        }],
-      },
-    ]);
+    const genAI = mockGenAI({
+      summary: 'The source repeats an old survey fact and mentions the open decision.',
+      nodes: [{ type: 'KNOWN', text: 'A participant survey recommends twelve attendees.', confidence: 0.9, impact: 0.8 }],
+      relationships: [{ source_ref: 'new:0', target_ref: 'decision_capacity', type: 'informs', confidence: 0.95 }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'EQUIVALENT',
+        canonical_node_id: 'known_survey',
+        confidence: 0.98,
+        reason: 'The source repeats the existing survey result without changing it.',
+      }],
+    });
 
     const result = await processContextSource(project, input({
       sourceId: 'src_new_survey',
-      content: 'The new survey confirms the capacity is still being evaluated.',
+      content: 'The participant survey still recommends twelve attendees while the capacity decision remains open.',
     }), DEFAULT_USER_PROFILE, { genAI, captureProcessingLog: true });
 
-    expect(result.project.edges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ source: 'known_survey', target: 'decision_capacity', type: 'informs' }),
-    ]));
-    const completionStage = result.project.sources.find((source) => source.id === 'src_new_survey')?.processing_log?.stages.find(
-      (stage) => stage.name === 'Canonical relationship completion',
+    expect(result.project.edges.some((edge) =>
+      edge.source === 'known_survey'
+      && edge.target === 'decision_capacity'
+      && edge.type === 'informs'
+    )).toBe(false);
+    const validationStage = result.project.sources.find((source) => source.id === 'src_new_survey')?.processing_log?.stages.find(
+      (stage) => stage.name === 'Relationship validation',
     );
-    expect(completionStage?.output).toEqual(expect.objectContaining({
-      acceptedRelationships: [expect.objectContaining({ sourceNodeId: 'known_survey', targetNodeId: 'decision_capacity' })],
+    expect(validationStage?.output).toEqual(expect.objectContaining({
+      rejectedRelationships: [expect.objectContaining({
+        sourceNodeId: 'known_survey',
+        targetNodeId: 'decision_capacity',
+        reason: 'not_source_local',
+      })],
     }));
   });
 
@@ -530,7 +556,7 @@ describe('AI context graph analysis', () => {
 
     const source = result.project.sources.find((item) => item.id === 'src_japan_notes');
     const nodes = result.project.nodes.filter((node) => source?.derived_node_ids.includes(node.id));
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
     expect(nodes.map((node) => node.text)).toEqual([
       'What are pink things?',
       'Are green things better than pink things?',
@@ -551,7 +577,9 @@ describe('AI context graph analysis', () => {
       content: 'I booked the elevator reservation earlier, but I am unsure whether the booking is recorded.',
     }), DEFAULT_USER_PROFILE, { genAI });
 
-    expect(result.project.nodes.find((node) => node.source_refs.includes('src_move_notes'))?.text).toBe('Have I booked the elevator reservation yet?');
+    const question = result.project.nodes.find((node) => node.source_refs.includes('src_move_notes'));
+    expect(question?.text).toBe('Have I booked one yet?');
+    expect(question?.text).not.toContain('elevator reservation');
   });
 
   it('keeps model-provided actions separate from unresolved questions', async () => {
@@ -1292,7 +1320,7 @@ describe('AI context graph analysis', () => {
     expect(source?.relevance).toBe('possibly_not_relevant');
     expect(source?.discarded_at).toBeUndefined();
     expect(source?.derived_node_ids).toHaveLength(1);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
   });
 
   it('deduplicates unchanged context without a second Gemini call', async () => {
@@ -1306,7 +1334,7 @@ describe('AI context graph analysis', () => {
 
     expect(first.skipped).toBe(false);
     expect(second.skipped).toBe(true);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
     expect(second.project.sources).toHaveLength(1);
   });
 
@@ -1335,7 +1363,6 @@ describe('AI context graph analysis', () => {
       'Goal relevance filtering',
       'Graph persistence',
       'Relationship validation',
-      'Canonical relationship completion',
       'Graph persistence result',
     ]);
     expect(JSON.stringify(source?.processing_log)).toContain('Tokyo and Kyoto are in the itinerary.');
@@ -1393,7 +1420,7 @@ describe('AI context graph analysis', () => {
     expect(sourceQuestions.map((node) => node.text)).toContain('What should I confirm before the surgery?');
     expect(rankGaps(result.project).some((gap) => /insurance company told me/i.test(gap.question))).toBe(false);
     expect(result.project.active_question?.question).not.toMatch(/insurance company told me/i);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a usable status question when the model is unavailable', async () => {
@@ -1454,6 +1481,21 @@ describe('AI context graph analysis', () => {
                 }),
               }),
             }),
+            relationships: expect.objectContaining({
+              items: expect.objectContaining({
+                properties: expect.objectContaining({
+                  source_ref: expect.any(Object),
+                  target_ref: expect.any(Object),
+                }),
+              }),
+            }),
+            reconciliation: expect.objectContaining({
+              items: expect.objectContaining({
+                properties: expect.objectContaining({
+                  same_atomic_proposition: expect.any(Object),
+                }),
+              }),
+            }),
           }),
         }),
       }),
@@ -1491,5 +1533,49 @@ describe('AI context graph analysis', () => {
       'Cancellations within 72 hours lose 50% of the fee.',
     ]));
     expect(derived.filter((node) => node.type === 'CONSTRAINT')).toHaveLength(4);
+  });
+
+  it('refuses a destructive refinement when the model does not confirm atomic identity', async () => {
+    const project = projectWithGoal('Estimate pilot delivery effort accurately.');
+    project.nodes.push({
+      id: 'engineering-hours',
+      type: 'KNOWN',
+      text: 'The pilot requires 80 to 120 engineering hours.',
+      status: 'RESOLVED',
+      confidence: 0.9,
+      impact: 0.8,
+      source_refs: ['earlier-estimate'],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The estimate includes independently variable support effort.',
+      nodes: [{
+        type: 'KNOWN',
+        text: 'The pilot requires 80 to 120 engineering hours and 20 to 30 support hours.',
+        confidence: 0.95,
+        impact: 0.85,
+      }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'REFINES_EXISTING',
+        canonical_node_id: 'engineering-hours',
+        same_atomic_proposition: false,
+        confidence: 0.9,
+        reason: 'The statement also introduces support effort.',
+      }],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'combined-estimate',
+      content: 'The pilot requires 80 to 120 engineering hours and 20 to 30 support hours.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.find((node) => node.id === 'engineering-hours')?.text)
+      .toBe('The pilot requires 80 to 120 engineering hours.');
+    expect(result.project.nodes.some((node) =>
+      node.id !== 'engineering-hours' && /20 to 30 support hours/i.test(node.text)
+    )).toBe(true);
   });
 });

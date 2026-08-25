@@ -39,6 +39,7 @@ import {
   NORTHSTAR_PILOT_DEMO_NAME,
   NORTHSTAR_PILOT_DEMO_ID,
   NORTHSTAR_PILOT_RESOLVED_SCOPE,
+  ensureNorthstarReplayDecisions,
   findNorthstarTechnicalScopeDecision,
   northstarPilotProjectInput,
 } from '@/lib/demo/northstarPilot';
@@ -549,6 +550,9 @@ export async function loadNorthstarPilotDemoForUser(userId: string): Promise<Nor
     const ingestedProject = await storage.getProject(userId, project.id);
     if (!ingestedProject) throw new Error('The Northstar pilot project disappeared during Ask ingestion.');
     project = ingestedProject;
+    if (index === 0) {
+      project = ensureNorthstarReplayDecisions(project, ingested.sourceId);
+    }
 
     const refreshed = await refreshProjectGapRuntime({
       userId,

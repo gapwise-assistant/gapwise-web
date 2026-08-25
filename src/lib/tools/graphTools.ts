@@ -7,6 +7,7 @@ import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { appendGapResolvedHistory } from '@/lib/history/projectHistory';
+import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 
 function timestampId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -29,13 +30,8 @@ export function createGraphNode(
   return created;
 }
 
-export function createGraphEdge(project: Project, edge: Omit<ClarityEdge, 'id'>): ClarityEdge {
-  const created: ClarityEdge = {
-    ...edge,
-    id: timestampId('edge'),
-  };
-  project.edges.push(created);
-  return created;
+export function createGraphEdge(project: Project, edge: Omit<ClarityEdge, 'id'>): ClarityEdge | undefined {
+  return writeSemanticEdge(project, edge);
 }
 
 export function resolveGap(

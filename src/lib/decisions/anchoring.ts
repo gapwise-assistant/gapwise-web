@@ -1,6 +1,7 @@
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
-import type { ClarityEdge, ClarityNode, EdgeType, Project, UserMemoryProfile } from '@/types/clarity';
+import type { ClarityNode, Project, UserMemoryProfile } from '@/types/clarity';
 import { canonicalOpenQuestions } from '@/lib/questions/canonical';
+import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 
 export interface DecisionAnchorSuggestion {
   title: string;
@@ -151,18 +152,6 @@ export function findDecisionAnchorSuggestion(project: Project): DecisionAnchorSu
   return null;
 }
 
-function edgeExists(project: Project, source: string, target: string, type?: EdgeType): boolean {
-  return project.edges.some((edge) => edge.source === source && edge.target === target && (!type || edge.type === type));
-}
-
-function addEdge(project: Project, edge: Omit<ClarityEdge, 'id'>): void {
-  if (edgeExists(project, edge.source, edge.target, edge.type)) return;
-  project.edges.push({
-    ...edge,
-    id: `edge_anchor_${stableHash(`${edge.source}:${edge.target}:${edge.type}`)}`,
-  });
-}
-
 function decisionTitleMatches(left: string, right: string): boolean {
   return normalized(left) === normalized(right);
 }
@@ -217,7 +206,7 @@ export function anchorProjectDecision(
   }
 
   questions.forEach((question) => {
-    addEdge(updated, {
+    writeSemanticEdge(updated, {
       source: question.id,
       target: decision!.id,
       type: 'informs',
@@ -226,7 +215,7 @@ export function anchorProjectDecision(
     question.updated_at = now;
   });
   const goal = updated.nodes.find((node) => node.type === 'GOAL' && node.status !== 'DEPRECATED');
-  if (goal) addEdge(updated, { source: decision.id, target: goal.id, type: 'affects', confidence: 0.8 });
+  if (goal) writeSemanticEdge(updated, { source: decision.id, target: goal.id, type: 'affects', confidence: 0.8 });
 
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, profile ?? {

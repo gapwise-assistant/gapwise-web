@@ -11,6 +11,7 @@ import { persistAskConversationContext } from '@/lib/ask/conversationContext';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { AskChatMessage, AskChatSession, AskOpenQuestion, AskSearchSuggestions, AskTarget } from '@/types/ask';
+import { logAskDebug } from '@/lib/ask/debug';
 
 export const runtime = 'nodejs';
 
@@ -208,6 +209,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid Ask request.', issues: parsed.error.issues }, { status: 400 });
   }
 
+  logAskDebug('api-request', {
+    method: 'POST',
+    route: '/api/ask',
+    body: parsed.data,
+    localhost: isLocalhostRequest(request),
+  });
+
   let userId: string;
   try {
     userId = await requireAuthenticatedUserId(request, parsed.data.userId);
@@ -234,7 +242,7 @@ export async function POST(request: Request) {
   let persistedTurn: Awaited<ReturnType<typeof persistUserAskMessage>> | null = null;
   if (parsed.data.chatId && parsed.data.userMessageId) {
     try {
-      persistedTurn = await persistUserAskMessage({
+    persistedTurn = await persistUserAskMessage({
         userId,
         chatId: parsed.data.chatId,
         userMessageId: parsed.data.userMessageId,
@@ -243,6 +251,13 @@ export async function POST(request: Request) {
         sessionId: boundSessionId,
         target: parsed.data.target,
         request,
+      });
+      logAskDebug('user-message-persisted-and-ingested', {
+        userMessageId: parsed.data.userMessageId,
+        chatId: parsed.data.chatId,
+        projectId: parsed.data.projectId,
+        sourceId: persistedTurn.context.sourceId,
+        openQuestions: persistedTurn.context.openQuestions,
       });
     } catch (error) {
       if (error instanceof StorageError && (error.code === 'PERMISSION_DENIED' || error.code === 'VALIDATION_ERROR')) {
@@ -308,6 +323,12 @@ export async function POST(request: Request) {
       ? await askGapswise(askInput)
       : await askGapswiseLocally(askInput);
     const persistedResult = await withPersistedTurn(result);
+    logAskDebug('api-response', {
+      route: '/api/ask',
+      status: 200,
+      result: persistedResult,
+    });
+    const { graphReasoning: graphReasoningTrace, ...publicResult } = persistedResult;
     if (live) {
       const execution = persistedResult.execution;
       const agentName = execution?.agent ?? 'Partner Agent';
@@ -323,6 +344,8 @@ export async function POST(request: Request) {
         contextIds: [],
         scores: [],
         toolCalls,
+        askGraphReasoning: routeName === 'graph_reasoning',
+        ...(graphReasoningTrace ? { askGraphReasoningContext: graphReasoningTrace } : {}),
         model: getConfiguredGeminiModel(),
         agentConfigs: [{
           ...configuredModelConfig('Vertex AI / Google ADK', 'Used', agentName),
@@ -350,20 +373,25 @@ export async function POST(request: Request) {
     }
     return NextResponse.json(isDemoMode()
       ? {
-          ...persistedResult,
+          ...publicResult,
           generatedBy: 'local-context',
           modelConfig: localModelConfig(),
           fallbackPrompt: parsed.data.message,
           fallbackSystemPrompt: localFallbackSystemPrompt,
         }
       : {
-          ...persistedResult,
+          ...publicResult,
           modelConfig: {
             ...configuredModelConfig('Vertex AI / Google ADK', 'Used', persistedResult.execution?.agent),
             model: getConfiguredGeminiModel(),
           },
         });
   } catch (error) {
+    logAskDebug('api-error', {
+      route: '/api/ask',
+      error: error instanceof Error ? error.message : 'unknown-error',
+      stage: error instanceof AskAgentError ? error.stage : undefined,
+    });
     if (isDemoMode()) {
       return NextResponse.json(
         { error: error instanceof Error ? `Local demo Ask failed: ${error.message}` : 'Local demo Ask failed.' },
@@ -379,6 +407,7 @@ export async function POST(request: Request) {
     try {
       const fallback = await askGapswiseLocally(askInput);
       const persistedFallback = await withPersistedTurn(fallback);
+      logAskDebug('local-fallback-response', persistedFallback);
       const notice = offlineFallbackNotices[Math.floor(Math.random() * offlineFallbackNotices.length)];
       return NextResponse.json({
         ...persistedFallback,

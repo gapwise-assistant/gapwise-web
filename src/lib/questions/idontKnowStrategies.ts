@@ -1,6 +1,7 @@
 import type { ClarityNode, Project, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { rankSources } from '@/lib/retrieval/relevance';
+import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 
 export interface IdontKnowContextFinding {
   sourceId: string;
@@ -90,8 +91,7 @@ export async function processIdontKnowStrategy(
         .forEach((source) => {
           if (!source.derived_node_ids.includes(evidenceNode.id)) source.derived_node_ids.push(evidenceNode.id);
         });
-      updated.edges.push({
-        id: `edge_${idSuffix}`,
+      writeSemanticEdge(updated, {
         source: evidenceNode.id,
         target: targetNode.id,
         type: 'informs',
@@ -123,7 +123,7 @@ export async function processIdontKnowStrategy(
       y: targetNode.y ? targetNode.y + 80 : 420,
     };
     updated.nodes.push(experimentNode);
-    updated.edges.push({ id: `edge_${idSuffix}`, source: experimentNode.id, target: targetNode.id, type: 'informs', confidence: 0.8 });
+    writeSemanticEdge(updated, { source: experimentNode.id, target: targetNode.id, type: 'informs', confidence: 0.8 });
     didChange = true;
     message = `Created a small experiment for “${question}” and linked it to the unresolved question.`;
   } else if (strategy === 'assumption') {
@@ -144,7 +144,7 @@ export async function processIdontKnowStrategy(
       y: targetNode.y ? targetNode.y + 60 : 420,
     };
     updated.nodes.push(assumptionNode);
-    updated.edges.push({ id: `edge_${idSuffix}`, source: assumptionNode.id, target: targetNode.id, type: 'informs', confidence: 0.5 });
+    writeSemanticEdge(updated, { source: assumptionNode.id, target: targetNode.id, type: 'informs', confidence: 0.5 });
     targetNode.status = 'DEFERRED';
     targetNode.updated_at = now;
     didChange = true;

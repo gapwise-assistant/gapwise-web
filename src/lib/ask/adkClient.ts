@@ -2,8 +2,10 @@ import { z } from 'zod';
 import { GoogleAuth } from 'google-auth-library';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
+import { logAskDebug } from '@/lib/ask/debug';
 import type {
   AskExecution,
+  AskGraphReasoningTrace,
   AskOpenQuestion,
   AskResponse,
   AskResponseOutcome,
@@ -32,6 +34,8 @@ export interface AskResult {
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  /** Development-only routing diagnostics; removed from the public API response. */
+  graphReasoning?: AskGraphReasoningTrace;
 }
 
 export type AskFailureStage = 'agent-auth' | 'agent-unavailable' | 'context-pack' | 'gemini' | 'routing';
@@ -55,6 +59,26 @@ const graphNodeSchema = z.object({
   status: z.string().optional(),
   source_refs: z.array(z.string()).default([]),
   why_it_matters: z.array(z.string()).optional(),
+});
+
+const askGraphContextSchema = z.object({
+  projectGoal: z.string(),
+  nodes: z.array(z.object({
+    id: z.string(),
+    type: z.string(),
+    status: z.string(),
+    text: z.string(),
+    confidence: z.number(),
+    impact: z.number(),
+  })).default([]),
+  edges: z.array(z.object({
+    id: z.string(),
+    source: z.string(),
+    target: z.string(),
+    type: z.string(),
+    confidence: z.number().optional(),
+  })).default([]),
+  startingNodeIds: z.array(z.string()).default([]),
 });
 
 const evidenceSchema = z.object({
@@ -122,12 +146,13 @@ const contextPackResponseSchema = z.object({
       answerFingerprint: z.string().optional(),
       status: z.enum(['pending', 'confirmed']).optional(),
     })).default([]),
+    graphContext: askGraphContextSchema.optional(),
   }),
 });
 type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
 
 const askRouteResponseSchema = z.object({
-  route: z.enum(['web_research', 'internal_context', 'ask_clarification']),
+  route: z.enum(['web_research', 'internal_context', 'graph_reasoning', 'ask_clarification']),
   reason: z.string().default(''),
 });
 
@@ -201,6 +226,13 @@ async function agentServiceHeaders(): Promise<Record<string, string>> {
 
 async function createSession(userId: string, projectId?: string, chatId?: string): Promise<string> {
   const identityHeaders = await agentServiceHeaders();
+  logAskDebug('session-request', {
+    endpoint: `${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`,
+    user_id: userId,
+    project_id: projectId,
+    chat_id: chatId,
+    app_name: 'app',
+  });
   let response: Response;
   try {
     response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
@@ -233,6 +265,7 @@ async function createSession(userId: string, projectId?: string, chatId?: string
     throw new AskAgentError('ADK session creation returned an invalid response.', { stage: 'agent-unavailable' });
   }
   if (!body.id) throw new AskAgentError('ADK session creation returned no session id.');
+  logAskDebug('session-response', { status: response.status, session_id: body.id });
   return body.id;
 }
 
@@ -388,6 +421,14 @@ async function runAdkTurn(
   structuredResponse = true,
 ): Promise<AdkTurnResult> {
   const identityHeaders = await agentServiceHeaders();
+  logAskDebug('adk-request', {
+    endpoint: `${agentBaseUrl()}/run_sse`,
+    app_name: 'app',
+    user_id: userId,
+    session_id: sessionId,
+    structuredResponse,
+    message,
+  });
   let response: Response;
   try {
     response = await fetch(`${agentBaseUrl()}/run_sse`, {
@@ -432,6 +473,12 @@ async function runAdkTurn(
       (candidate): candidate is AskResponse => Boolean(candidate)
     )
     : undefined;
+  logAskDebug('adk-response', {
+    status: response.status,
+    eventCount: events.length,
+    rawAnswer,
+    structuredResponse: responseEnvelope,
+  });
   return {
     answer: responseEnvelope?.answer ?? rawAnswer,
     ...(responseEnvelope ? { response: responseEnvelope } : {}),
@@ -487,6 +534,52 @@ function explicitlyRequestsWebResearch(message: string): boolean {
   return /\b(?:search (?:the )?(?:web|internet)|search online|look (?:it )?up|look this up|browse (?:the )?(?:web|internet)|check online|verify online|google it|research online|latest news)\b/i.test(message);
 }
 
+/**
+ * The routing agent is authoritative when it identifies web research. For
+ * project reasoning, keep a small generic safety net for causal questions the
+ * deployed router may conservatively classify as ordinary internal context.
+ * These cues describe reasoning shape, not a project domain or vocabulary.
+ */
+function requiresGraphReasoning(message: string): boolean {
+  const normalized = message.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+
+  const consequenceCue = /\b(?:what happens|what would happen|downstream|consequence|impact|affect(?:s|ed)?|at risk|blocking|blocked by|depends on|dependency|dependencies|prerequisite|causal chain|trade[- ]?off|conflict)\b/;
+  const causalCue = /\b(?:if|when|unless|without|because|due to|as a result)\b/;
+  const changeCue = /\bwhat\s+(?:would|needs to|has to|could)\s+change\b|\bwhat changes if\b/;
+  const multiConceptCue = /\b(?:constraints?|decisions?|risks?|goals?|assumptions?|requirements?|unknowns?|dependencies?|blockers?)\b/g;
+  const projectConcepts = normalized.match(multiConceptCue) ?? [];
+  const evaluationCue = /\b(?:matter most|make .* difficult|make .* hard|shape|influence|evaluate|choose|decide)\b/;
+
+  if (changeCue.test(normalized)) return true;
+  if (consequenceCue.test(normalized)) return true;
+  if (causalCue.test(normalized) && projectConcepts.length >= 1) return true;
+  return projectConcepts.length >= 2 && evaluationCue.test(normalized);
+}
+
+function applyGraphReasoningOverride(
+  message: string,
+  decision: { route: AskRoutingDecision; reason: string },
+): { route: AskRoutingDecision; reason: string } {
+  if (
+    decision.route === 'web_research'
+    || decision.route === 'graph_reasoning'
+    || explicitlyRequestsWebResearch(message)
+  ) return decision;
+  if (!requiresGraphReasoning(message)) return decision;
+
+  const promoted = {
+    route: 'graph_reasoning' as const,
+    reason: `${decision.reason} Generic causal project reasoning requires the canonical graph slice.`,
+  };
+  logAskDebug('graph-reasoning-promoted', {
+    originalRoute: decision.route,
+    ...promoted,
+    graphReasoning: true,
+  });
+  return promoted;
+}
+
 function routingFallback(
   message: string,
   error: AskAgentError,
@@ -495,16 +588,24 @@ function routingFallback(
   // Agent, because that could present unverified model memory as research.
   if (explicitlyRequestsWebResearch(message)) throw error;
 
+  const fallback = applyGraphReasoningOverride(message, {
+    route: 'internal_context',
+    reason: 'Routing unavailable; defaulted to project conversation.',
+  });
+  logAskDebug('routing-fallback', {
+    message,
+    route: fallback.route,
+    graphReasoning: fallback.route === 'graph_reasoning',
+    error: error.message,
+  });
+
   console.warn('[Gapwise Ask]', {
     stage: 'routing',
     fallback: 'internal_context',
     reason: error.message,
   });
 
-  return {
-    route: 'internal_context',
-    reason: 'Routing unavailable; defaulted to project conversation.',
-  };
+  return fallback;
 }
 
 export async function determineAskRoute(
@@ -513,6 +614,13 @@ export async function determineAskRoute(
   contextPack: AskContextPack | null,
   sources: AskSource[] = [],
 ): Promise<{ route: AskRoutingDecision; reason: string }> {
+  const routingContext = trustedRoutingContext(contextPack, sources);
+  logAskDebug('routing-request', {
+    endpoint: `${agentBaseUrl()}/internal/ask-route`,
+    user_id: userId,
+    message,
+    trusted_context: routingContext,
+  });
   let headers: Record<string, string>;
   try {
     headers = await agentServiceHeaders();
@@ -530,7 +638,7 @@ export async function determineAskRoute(
       body: JSON.stringify({
         user_id: userId,
         message,
-        trusted_context: trustedRoutingContext(contextPack, sources),
+        trusted_context: routingContext,
       }),
     });
   } catch {
@@ -574,18 +682,32 @@ export async function determineAskRoute(
   // Older deployed routers may still return this route. It is no longer a
   // destination: conversational clarification belongs to the Partner Agent.
   if (parsed.data.route === 'ask_clarification') {
-    return {
+    return applyGraphReasoningOverride(message, {
       route: 'internal_context',
       reason: 'Legacy ask_clarification route normalized to internal_context.',
-    };
+    });
   }
 
-  const route: AskRoutingDecision = parsed.data.route;
-  return { route, reason: parsed.data.reason };
+  const route = applyGraphReasoningOverride(message, {
+    route: parsed.data.route,
+    reason: parsed.data.reason,
+  });
+  logAskDebug('routing-response', {
+    ...parsed.data,
+    route: route.route,
+    reason: route.reason,
+    graphReasoning: route.route === 'graph_reasoning',
+  });
+  return route;
 }
 
 async function runWebResearchTurn(userId: string, message: string): Promise<AdkTurnResult> {
   const headers = await agentServiceHeaders();
+  logAskDebug('web-research-request', {
+    endpoint: `${agentBaseUrl()}/internal/web-research`,
+    user_id: userId,
+    message,
+  });
   let response: Response;
   try {
     response = await fetch(`${agentBaseUrl()}/internal/web-research`, {
@@ -606,7 +728,15 @@ async function runWebResearchTurn(userId: string, message: string): Promise<AdkT
   if (!parsed.success) throw new AskAgentError('Web research returned an invalid response.', { stage: 'gemini' });
   const events = parsed.data.events;
   const answer = compactAdkTextChunks(events.flatMap(textFromAdkEvent));
-  return { answer, ...webSourcesFromAdkEvents(events) };
+  const result = { answer, ...webSourcesFromAdkEvents(events) };
+  logAskDebug('web-research-response', {
+    status: response.status,
+    eventCount: events.length,
+    answer: result.answer,
+    sources: result.sources,
+    searchSuggestions: result.searchSuggestions,
+  });
+  return result;
 }
 
 function compactAdkTextChunks(chunks: string[]): string {
@@ -794,6 +924,19 @@ function contextPromptForAgent(
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
   const focusSection = focusAssessmentPromptSection(focusAssessment, focusIntent);
   if (focusSection) sections.push(focusSection);
+  if (contextPack.graphContext
+    && (contextPack.graphContext.nodes.length > 0 || contextPack.graphContext.edges.length > 0)) {
+    sections.push([
+      'PROJECT_GRAPH_CONTEXT (graph reasoning is active)',
+      'This is a bounded read-only slice of the canonical project graph behind Decision Map.',
+      'Use canonical node status and persisted edge direction. Distinguish direct project facts and persisted relationships from your own logical inferences.',
+      'A depends_on B means A is dependent on B. A blocks B means A prevents or gates B. A informs B means A provides information useful for evaluating B. A supports B means A provides support or evidence for B.',
+      'A resolves B means a completed answer or outcome resolves B. A satisfies B means work is intended to satisfy B; it does not mean B is already resolved. A affects B means A materially changes B without necessarily blocking it. A supersedes B means A replaces or makes B outdated.',
+      'Do not expose node IDs unless they are directly useful. Do not invent project facts, processes, timelines, or relationships. If a relevant relationship is not persisted, you may reason across canonical facts, but describe that as an inference rather than as an explicit graph edge. Never persist inferred relationships from this response.',
+      `Project goal: ${contextPack.graphContext.projectGoal}`,
+      `Structured graph slice:\n${JSON.stringify(contextPack.graphContext)}`,
+    ].join('\n'));
+  }
   if (!sections.length) return message;
   return [
     'PRELOADED GAPWISE CONTEXT PACK',
@@ -814,19 +957,26 @@ async function loadSafeSources(
   chatId?: string,
   excludeMessageId?: string,
   excludeSourceId?: string,
+  graphReasoning = false,
 ): Promise<{ sources: AskSource[]; contextPack: AskContextPack | null }> {
   try {
+    const requestBody = {
+      userId,
+      query,
+      ...(projectId ? { projectId } : {}),
+      ...(chatId ? { chatId } : {}),
+      ...(excludeMessageId ? { excludeMessageId } : {}),
+      ...(excludeSourceId ? { excludeSourceId } : {}),
+      ...(graphReasoning ? { graphReasoning: true } : {}),
+    };
+    logAskDebug('context-pack-request', {
+      endpoint: `${gapswiseAppUrl()}/api/internal/context-pack`,
+      body: requestBody,
+    });
     const response = await fetch(`${gapswiseAppUrl()}/api/internal/context-pack`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...internalApiHeaders() },
-      body: JSON.stringify({
-        userId,
-        query,
-        ...(projectId ? { projectId } : {}),
-        ...(chatId ? { chatId } : {}),
-        ...(excludeMessageId ? { excludeMessageId } : {}),
-        ...(excludeSourceId ? { excludeSourceId } : {}),
-      }),
+      body: JSON.stringify(requestBody),
     });
     if (!response.ok) {
       console.error('[Gapwise Ask]', {
@@ -901,15 +1051,22 @@ async function loadSafeSources(
       }))
     );
 
-    return {
+    const result = {
       sources: Array.from(
         new Map(
           [...evidenceSources, ...graphSources, ...memorySources, ...calendarSources, ...researchSources]
             .map((source) => [source.id, source])
-        ).values()
+      ).values()
       ).slice(0, 8),
       contextPack: parsed.data.contextPack,
     };
+    logAskDebug('context-pack-response', {
+      status: response.status,
+      graphReasoning,
+      sourceCount: result.sources.length,
+      contextPack: result.contextPack,
+    });
+    return result;
   } catch (error) {
     console.error('[Gapwise Ask]', {
       stage: 'context-pack',
@@ -1023,8 +1180,15 @@ export async function askGapswise(params: {
   structuredResponse?: boolean;
 }): Promise<AskResult> {
   assertExternalServicesAllowed('Google ADK / Gemini');
+  logAskDebug('ask-start', {
+    userId: params.userId,
+    projectId: params.projectId,
+    chatId: params.chatId,
+    message: params.message,
+    sessionId: params.sessionId,
+  });
   const existingSessionId = params.sessionId?.trim() || undefined;
-  const { sources, contextPack } = await loadSafeSources(
+  const initialContext = await loadSafeSources(
     params.userId,
     params.message,
     params.projectId,
@@ -1032,8 +1196,35 @@ export async function askGapswise(params: {
     params.excludeMessageId,
     params.excludeSourceId,
   );
+  let sources = initialContext.sources;
+  let contextPack = initialContext.contextPack;
 
   const routing = await determineAskRoute(params.userId, params.message, contextPack, sources);
+  logAskDebug('route-selected', {
+    ...routing,
+    graphReasoning: routing.route === 'graph_reasoning',
+  });
+
+  // The first Context Pack is intentionally lightweight so routing and
+  // ordinary Ask requests do not pay for graph serialization. A graph slice
+  // is loaded only after the router selects graph_reasoning.
+  if (routing.route === 'graph_reasoning') {
+    const graphContext = await loadSafeSources(
+      params.userId,
+      params.message,
+      params.projectId,
+      params.chatId,
+      params.excludeMessageId,
+      params.excludeSourceId,
+      true,
+    );
+    if (graphContext.contextPack) {
+      sources = graphContext.sources;
+      contextPack = graphContext.contextPack;
+    }
+    logAskDebug('graph-context-selected', contextPack?.graphContext ?? null);
+  }
+
   const availableQuestions = availableOpenQuestions(contextPack, params.openQuestions ?? []);
 
   if (routing.route === 'web_research') {
@@ -1079,7 +1270,8 @@ export async function askGapswise(params: {
     };
   }
 
-  // internal_context
+  // internal_context and graph_reasoning both use the Partner Agent. The
+  // latter differs only by the additional bounded graph section in the prompt.
   const focusAssessment = await loadFocusAssessment(params.userId, params.projectId);
   const focusIntent = isFocusQuestion(params.message);
   const sessionId = existingSessionId ?? await createSession(params.userId, params.projectId, params.chatId);
@@ -1102,7 +1294,26 @@ export async function askGapswise(params: {
   const metadata = directAnswer
     ? { outcome: 'exploration' as const }
     : validatedResponseMetadata(adkTurn.response, contextPack, availableQuestions);
-  return {
+  const graph = contextPack?.graphContext;
+  const graphTrace = graph ? {
+    startingNodeIds: graph.startingNodeIds,
+    selectedNodeIds: graph.nodes.map((node) => node.id),
+    selectedEdges: graph.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: edge.type,
+    })),
+    nodeCount: graph.nodes.length,
+    edgeCount: graph.edges.length,
+  } : {
+    startingNodeIds: [],
+    selectedNodeIds: [],
+    selectedEdges: [],
+    nodeCount: 0,
+    edgeCount: 0,
+  };
+  const result = {
     answer: directAnswer ?? adkTurn.answer,
     ...metadata,
     sessionId,
@@ -1112,5 +1323,8 @@ export async function askGapswise(params: {
     promptUsed,
     searchSuggestions: adkTurn.searchSuggestions,
     execution: { route: routing.route, agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
+    ...(routing.route === 'graph_reasoning' ? { graphReasoning: graphTrace } : {}),
   };
+  logAskDebug('ask-complete', result);
+  return result;
 }

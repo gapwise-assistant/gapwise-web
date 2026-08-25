@@ -7,6 +7,7 @@ import { Project } from '@/types/clarity';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
+import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -169,11 +170,8 @@ export async function editAnsweredQuestion(params: {
     if (linked.gap && linked.gap.source_refs.length && !linked.understanding.source_refs.length) {
       linked.understanding.source_refs = [...linked.gap.source_refs];
     }
-    if (classification.supersedesOriginal && linked.gap && !updated.edges.some(
-      (edge) => edge.source === linked.understanding.id && edge.target === linked.gap?.id && edge.type === 'supersedes'
-    )) {
-      updated.edges.push({
-        id: `edge_${Date.now()}_supersedes`,
+    if (classification.supersedesOriginal && linked.gap) {
+      writeSemanticEdge(updated, {
         source: linked.understanding.id,
         target: linked.gap.id,
         type: 'supersedes',

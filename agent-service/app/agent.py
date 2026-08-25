@@ -54,7 +54,7 @@ MODEL_CONFIG = get_agent_model_config("partner")
 class AskRouteDecision(BaseModel):
     """Structured route selected before the Partner Agent is invoked."""
 
-    route: Literal["internal_context", "web_research"] = Field(
+    route: Literal["internal_context", "web_research", "graph_reasoning"] = Field(
         description="The route the application should execute for this request."
     )
     reason: str = Field(
@@ -225,6 +225,18 @@ routing_agent = Agent(
         "Choose internal_context for conversations about the user's project, "
         "goals, decisions, priorities, plans, tradeoffs, ideas, uncertainty, "
         "or what they should do next. "
+        "Choose graph_reasoning when the user asks about relationships among "
+        "multiple project facts, dependencies, blockers, downstream impact, "
+        "consequences, conflicts, tradeoffs, prerequisite chains, or what "
+        "would change if a project condition changes. This route still uses "
+        "the Partner Agent, but tells the application to provide a bounded "
+        "canonical graph slice in addition to the normal Context Pack. "
+        "When a tradeoff or recommendation requires tracing relationships "
+        "among multiple project nodes, choose graph_reasoning even though it "
+        "is also a project conversation. "
+        "Do not choose graph_reasoning for a simple fact lookup, summary, "
+        "ordinary conversation, or a generic request to explain the assistant's "
+        "previous recommendation. "
         "If the user says they do not know what to choose, what format to use, "
         "how to approach something, what to prioritize, or what would work best, "
         "choose internal_context. These are problems for the Partner Agent to "

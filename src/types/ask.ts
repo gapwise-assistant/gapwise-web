@@ -38,7 +38,20 @@ export interface AskResponse {
   conclusion?: string;
 }
 
-export type AskRoute = 'web_research' | 'internal_context';
+export type AskRoute = 'web_research' | 'internal_context' | 'graph_reasoning';
+
+export interface AskGraphReasoningTrace {
+  startingNodeIds: string[];
+  selectedNodeIds: string[];
+  selectedEdges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    type: string;
+  }>;
+  nodeCount: number;
+  edgeCount: number;
+}
 
 export interface AskExecution {
   route: AskRoute;
@@ -68,6 +81,8 @@ export interface AskResult {
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  /** Development-only routing diagnostics; removed from the public API response. */
+  graphReasoning?: AskGraphReasoningTrace;
 }
 
 export interface AskChatSession {

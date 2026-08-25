@@ -390,6 +390,28 @@ describe('Context Pack retrieval and durable memory policy', () => {
     expect(suggestionsPack.relevantEvidence[0].excerpt).toContain('green things');
   });
 
+  it('builds graph context only when graph reasoning is requested', () => {
+    const project = createGoldenDemoProject();
+
+    const normalPack = buildContextPack({
+      userId: 'demo-user',
+      query: 'What is the most important consequence?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+    });
+    const graphPack = buildContextPack({
+      userId: 'demo-user',
+      query: 'What is the most important consequence?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      graphReasoning: true,
+    });
+
+    expect(normalPack.graphContext).toBeUndefined();
+    expect(graphPack.graphContext).toMatchObject({ projectGoal: project.goal });
+    expect(graphPack.graphContext?.nodes.length).toBeLessThanOrEqual(16);
+  });
+
   it('does not promote transient statements to durable memory', () => {
     const decision = shouldPromoteToDurableMemory('Today I feel tired and distracted.');
     expect(decision.promote).toBe(false);

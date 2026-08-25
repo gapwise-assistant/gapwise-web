@@ -1,4 +1,4 @@
-import { ContextPack, ContextPackInput, DurableMemory } from '@/types/contextPack';
+import { AskGraphContext, ContextPack, ContextPackInput, DurableMemory } from '@/types/contextPack';
 import { AskResearchEvidence, RelevantConversationExcerpt } from '@/types/ask';
 import { ClarityNode } from '@/types/clarity';
 import { SafeCalendarEvent } from '@/types/google';
@@ -6,6 +6,7 @@ import { rankNodes, rankSources, relevanceScore, tokenize } from '@/lib/retrieva
 import { memoriesFromProfile } from '@/lib/memory/store';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { canonicalOpenQuestions, canonicalResolvedQuestions } from '@/lib/questions/canonical';
+import { buildAskGraphContext } from '@/lib/ask/graphContext';
 
 const DEFAULT_LIMITS = {
   activeGoals: 3,
@@ -246,6 +247,9 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
         };
       })()
     : baseReasoningProject;
+  const graphContext: AskGraphContext | undefined = input.graphReasoning
+    ? buildAskGraphContext(reasoningProject, input.query)
+    : undefined;
 
   const activeGoals = rankNodes(
     input.query,
@@ -391,6 +395,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     contradictions,
     relevantConversationExcerpts,
     researchEvidence,
+    ...(graphContext ? { graphContext } : {}),
     includedContextIds: Array.from(includedContextIds),
   };
 }

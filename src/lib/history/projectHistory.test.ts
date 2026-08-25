@@ -176,8 +176,8 @@ describe('project history', () => {
         relatedNodeIds: ['decision_venue'],
       }],
       relationships: [{
-        sourceNodeIndex: 0,
-        targetNodeId: 'decision_venue',
+        sourceRef: 'new:0',
+        targetRef: 'decision_venue',
         type: 'informs',
         confidence: 0.9,
       }],

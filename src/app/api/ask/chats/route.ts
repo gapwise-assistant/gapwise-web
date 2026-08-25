@@ -49,7 +49,7 @@ const messageSchema = z.object({
   openQuestions: z.array(z.object({ id: z.string(), text: z.string() })).optional(),
   searchSuggestions: z.object({ renderedContent: z.string().optional(), webSearchQueries: z.array(z.string()).optional() }).optional(),
   execution: z.object({
-    route: z.enum(['web_research', 'internal_context']),
+    route: z.enum(['web_research', 'internal_context', 'graph_reasoning']),
     agent: z.string(),
     toolCalls: z.array(z.string()),
   }).optional(),

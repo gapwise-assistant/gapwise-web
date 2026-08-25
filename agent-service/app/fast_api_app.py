@@ -295,6 +295,12 @@ async def route_ask(
         f"Saved trusted context supplied by Gapwise (may be empty):\n{request.trusted_context}\n\n"
         "Use both inputs. Choose internal_context when the current message contains useful project material "
         "that the Partner Agent can analyze or use to ask one focused follow-up question. "
+        "Choose graph_reasoning when the question requires reasoning across multiple canonical project "
+        "nodes or persisted relationships, including consequences, downstream impact, blockers, "
+        "dependencies, conflicts, tradeoffs, or prerequisite chains. Do not choose it for simple "
+        "fact lookups, summaries, ordinary conversation, or generic explanations of a prior answer. "
+        "If a tradeoff requires tracing relationships among multiple project nodes, prefer graph_reasoning "
+        "over internal_context. "
         "Choose web_research only when current or external information must be verified outside Gapswise."
     )
     try:

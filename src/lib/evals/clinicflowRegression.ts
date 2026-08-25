@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createProjectFromInput } from '@/lib/projects/createProject';
-import { IngestSourceInput, PrecomputedSourceNode } from '@/lib/context/ingestion';
+import { IngestSourceInput, PrecomputedRelationship, PrecomputedSourceNode } from '@/lib/context/ingestion';
 import { Project } from '@/types/clarity';
 
 /**
@@ -76,6 +76,7 @@ function baselineSource(
   filename: string,
   hash: string,
   derivedNodes: PrecomputedSourceNode[],
+  relationships: PrecomputedRelationship[] = [],
 ): ClinicFlowRegressionSource {
   return {
     sourceId,
@@ -89,6 +90,7 @@ function baselineSource(
     processingStatus: 'completed',
     relevance: 'relevant',
     derivedNodes,
+    relationships,
   };
 }
 
@@ -117,6 +119,13 @@ export function clinicFlowBaselineSources(): ClinicFlowRegressionSource[] {
       node(CLINICFLOW_NODE_IDS.budget, 'CONSTRAINT', 'The ClinicFlow pilot budget is capped at $45,000 with one integration engineer at 40% capacity and no weekend support.', 0.82, [
         'Budget and capacity limit the safe pilot shape.',
       ]),
+    ], [
+      { sourceRef: 'new:1', targetRef: 'new:0', type: 'blocks', confidence: 0.96 },
+      { sourceRef: 'new:2', targetRef: 'new:0', type: 'blocks', confidence: 0.96 },
+      { sourceRef: 'new:3', targetRef: 'new:0', type: 'blocks', confidence: 0.94 },
+      { sourceRef: 'new:4', targetRef: 'new:0', type: 'informs', confidence: 0.86 },
+      { sourceRef: 'new:5', targetRef: 'new:0', type: 'blocks', confidence: 0.94 },
+      { sourceRef: 'new:6', targetRef: 'new:0', type: 'informs', confidence: 0.88 },
     ]),
     baselineSource('clinic_src_clinical_notes', '02-clinical-operations-notes.md', 'clinicflow_hash_02', [
       node(CLINICFLOW_NODE_IDS.authority, 'UNKNOWN', questions.authority, 0.98, [
@@ -200,8 +209,8 @@ export function clinicFlowRetryTestSource(): ClinicFlowRegressionSource {
       },
     ],
     relationships: [
-      { sourceNodeIndex: 0, targetNodeId: CLINICFLOW_NODE_IDS.retry, type: 'resolves', confidence: 0.99 },
-      { sourceNodeIndex: 1, targetNodeId: CLINICFLOW_NODE_IDS.decision, type: 'informs', confidence: 0.92 },
+      { sourceRef: 'new:0', targetRef: CLINICFLOW_NODE_IDS.retry, type: 'resolves', confidence: 0.99 },
+      { sourceRef: 'new:1', targetRef: CLINICFLOW_NODE_IDS.decision, type: 'informs', confidence: 0.92 },
     ],
   };
 }
