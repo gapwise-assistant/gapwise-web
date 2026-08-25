@@ -110,10 +110,10 @@ export async function answerQuestion(params: {
   throw new StorageError('This unresolved question was not found for the requested user and scope.', 'VALIDATION_ERROR');
 }
 
-function findAnswerUnderstanding(project: Project, question: string, previousAnswer: string) {
+function findAnswerUnderstanding(project: Project, question: string, previousAnswer: string, nodeId?: string) {
   const gap = project.nodes.find(
     (node) =>
-      node.text === question &&
+      (nodeId ? node.id === nodeId : node.text === question) &&
       node.status === 'RESOLVED' &&
       (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
   );
@@ -134,6 +134,7 @@ export async function editAnsweredQuestion(params: {
   userId: string;
   projectId: string;
   historyTimestamp: string;
+  nodeId?: string;
   question: string;
   previousAnswer: string;
   answer: string;
@@ -145,18 +146,24 @@ export async function editAnsweredQuestion(params: {
   }
 
   const updated = JSON.parse(JSON.stringify(owner)) as Project;
-  const historyItem = updated.history.find(
-    (item) =>
+  const stableHistoryItem = params.nodeId
+    ? updated.history.find((item) =>
+      item.timestamp === params.historyTimestamp &&
+      item.nodeId === params.nodeId &&
+      item.answer === params.previousAnswer
+    )
+    : undefined;
+  const historyItem = stableHistoryItem ?? updated.history.find((item) =>
       item.timestamp === params.historyTimestamp &&
       (item.question === params.question || params.question.includes(item.question) || item.question.includes(params.question)) &&
       item.answer === params.previousAnswer
-  );
+    );
   if (!historyItem) {
     throw new StorageError('This answered question was not found in the requested project.', 'VALIDATION_ERROR');
   }
 
   const now = new Date().toISOString();
-  const linked = findAnswerUnderstanding(updated, historyItem.question, historyItem.answer);
+  const linked = findAnswerUnderstanding(updated, historyItem.question, historyItem.answer, historyItem.nodeId ?? params.nodeId);
   if (linked) {
     const classification = classifyAnswer(linked.gap ?? {
       type: 'UNKNOWN',
@@ -178,7 +185,9 @@ export async function editAnsweredQuestion(params: {
       });
     }
     historyItem.graph_diff_summary = `Resolved "${historyItem.question}" -> ${classification.type}: "${classification.text}"`;
+    historyItem.nodeId ??= linked.gap?.id;
   }
+  historyItem.projectId ??= owner.id;
   historyItem.answer = params.answer;
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
@@ -201,23 +210,30 @@ export async function editAnsweredQuestion(params: {
 
 function reopenInContext(project: Project, params: {
   historyTimestamp: string;
+  nodeId?: string;
   question: string;
   previousAnswer: string;
 }): { context: Project; historyTimestamp: string } {
   const updated = JSON.parse(JSON.stringify(project)) as Project;
-  const historyItem = updated.history.find(
-    (item) =>
+  const stableHistoryItem = params.nodeId
+    ? updated.history.find((item) =>
+      item.timestamp === params.historyTimestamp &&
+      item.nodeId === params.nodeId &&
+      item.answer === params.previousAnswer
+    )
+    : undefined;
+  const historyItem = stableHistoryItem ?? updated.history.find((item) =>
       item.timestamp === params.historyTimestamp &&
       item.question === params.question &&
       item.answer === params.previousAnswer
-  );
+    );
   if (!historyItem) {
     throw new StorageError('This answered question was not found in the requested context.', 'VALIDATION_ERROR');
   }
 
   const gap = updated.nodes.find(
     (node) =>
-      node.text === historyItem.question &&
+      ((historyItem.nodeId ?? params.nodeId) ? node.id === (historyItem.nodeId ?? params.nodeId) : node.text === historyItem.question) &&
       (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') &&
       node.status === 'RESOLVED'
   );
@@ -261,6 +277,7 @@ export async function reopenAnsweredQuestion(params: {
   userId: string;
   projectId?: string;
   historyTimestamp: string;
+  nodeId?: string;
   question: string;
   previousAnswer: string;
 }): Promise<ReopenAnsweredQuestionResult> {

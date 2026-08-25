@@ -302,6 +302,7 @@ export interface DecisionValueAssessment {
 }
 
 export type ProjectHistoryEventType =
+  | 'project_started'
   | 'context_added'
   | 'decision_resolved'
   | 'gap_resolved'
@@ -411,6 +412,9 @@ export interface Project {
     answer: string;
     timestamp: string;
     graph_diff_summary: string;
+    /** Stable identity for the canonical question this answer resolves. */
+    nodeId?: string;
+    projectId?: string;
   }[];
   historyEvents?: ProjectHistoryEvent[];
   created_at: string;

@@ -284,4 +284,58 @@ describe('POST /api/ask/research', () => {
     expect(retryResponse.status).toBe(200);
     expect(storage.saveAskResearch).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({ status: 'confirmed' }));
   });
+
+  it('recovers pending Use as my decision by matching the stored decision outcome', async () => {
+    const decisionChat = {
+      ...chat,
+      target: { type: 'decision' as const, id: 'decision_1', text: 'Choose the pilot format.' },
+    };
+    storage.getAskChats.mockResolvedValue([decisionChat]);
+    vi.mocked(listProjects).mockResolvedValue([
+      {
+        id: 'project_a',
+        nodes: [{
+          id: 'decision_1',
+          text: 'Choose the pilot format.',
+          decision_outcome: 'Run one evening session.',
+          type: 'DECISION',
+          status: 'RESOLVED',
+        }],
+      },
+    ] as never);
+    const pendingRecord = {
+      id: 'research_pending_decision',
+      userId: 'demo-user',
+      chatId: 'chat_1',
+      assistantMessageId: 'assistant_non_web',
+      projectId: 'project_a',
+      text: 'Run one evening session.',
+      sources: [],
+      retrievedAt: '2026-08-20T10:01:00.000Z',
+      createdAt: '2026-08-20T10:01:00.000Z',
+      updatedAt: '2026-08-20T10:01:00.000Z',
+      action: 'use_as_decision' as const,
+      targetDecisionId: 'decision_1',
+      status: 'pending' as const,
+      provenance: 'user_confirmed_ai_response' as const,
+    };
+    storage.getAskResearch.mockResolvedValue([pendingRecord]);
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      action: 'use_as_decision',
+      chatId: 'chat_1',
+      assistantMessageId: 'assistant_non_web',
+      projectId: 'project_a',
+      targetDecisionId: 'decision_1',
+      text: 'The full discussion should not be used for recovery.',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(storage.saveAskResearch).toHaveBeenCalledWith('demo-user', expect.objectContaining({
+      id: 'research_pending_decision',
+      status: 'confirmed',
+    }));
+    expect(confirmDecision).not.toHaveBeenCalled();
+  });
 });

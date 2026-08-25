@@ -31,7 +31,7 @@ interface GapRow {
 }
 
 function rowKey(item: AnsweredQuestion): string {
-  return `${item.timestamp}-${item.question}`;
+  return item.nodeId ? `answered:${item.nodeId}:${item.timestamp}` : `${item.timestamp}-${item.question}`;
 }
 
 function sortGaps(left: GapRow, right: GapRow): number {
@@ -133,7 +133,7 @@ export function ProjectQuestionsList({
       return;
     }
     if (gap.answeredQuestion) {
-      onEditAnsweredQuestion(gap.answeredQuestion, projectId);
+      onEditAnsweredQuestion(gap.answeredQuestion, gap.answeredQuestion.projectId ?? projectId);
       return;
     }
     if (gap.question) {

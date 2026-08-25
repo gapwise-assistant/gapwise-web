@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, CircleAlert, History, Sparkles } from 'lucide-react';
 import type { Project } from '@/types/clarity';
 import { authFetch } from '@/lib/auth/client';
@@ -29,6 +29,61 @@ function severityClasses(severity: 'high' | 'medium' | 'watch'): string {
   if (severity === 'high') return 'border-rose-800/80 bg-rose-950/20 text-rose-200';
   if (severity === 'medium') return 'border-amber-800/80 bg-amber-950/20 text-amber-200';
   return 'border-slate-700 bg-slate-900 text-slate-300';
+}
+
+function overviewProjectStateKey(project: Project): string {
+  return JSON.stringify({
+    id: project.id,
+    title: project.title,
+    goal: project.goal,
+    deadline: project.deadline ?? null,
+    nodes: project.nodes
+      .filter((node) => node.status !== 'DEPRECATED')
+      .map((node) => ({
+        id: node.id,
+        type: node.type,
+        text: node.text,
+        status: node.status,
+        decision_outcome: node.decision_outcome ?? null,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    edges: project.edges
+      .map((edge) => ({ source: edge.source, target: edge.target, type: edge.type }))
+      .sort((left, right) => `${left.source}:${left.type}:${left.target}`.localeCompare(`${right.source}:${right.type}:${right.target}`)),
+    answers: project.history
+      .map((entry) => ({ question: entry.question, answer: entry.answer, graph_diff_summary: entry.graph_diff_summary }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  });
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Loading project overview">
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-3">
+            <div className="h-2.5 w-28 animate-pulse rounded bg-slate-800" />
+            <div className="h-6 w-44 animate-pulse rounded bg-slate-800" />
+          </div>
+          <div className="h-8 w-24 animate-pulse rounded-full bg-slate-800" />
+        </div>
+        <div className="mt-5 space-y-2">
+          <div className="h-3 w-full animate-pulse rounded bg-slate-800" />
+          <div className="h-3 w-4/5 animate-pulse rounded bg-slate-800" />
+          <div className="h-3 w-3/5 animate-pulse rounded bg-slate-800" />
+        </div>
+      </section>
+      {[0, 1].map((item) => (
+        <section key={item} className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <div className="h-4 w-32 animate-pulse rounded bg-slate-800" />
+          <div className="mt-4 space-y-3">
+            <div className="h-3 w-full animate-pulse rounded bg-slate-800" />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-slate-800" />
+          </div>
+        </section>
+      ))}
+    </div>
+  );
 }
 
 function OverviewLinks({
@@ -77,11 +132,20 @@ export function ProjectOverview({
   const [assessment, setAssessment] = useState<ProjectOverviewAssessment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasFailed, setHasFailed] = useState(false);
+  const [loadedRequestIdentity, setLoadedRequestIdentity] = useState<string | null>(null);
+  const [failedRequestIdentity, setFailedRequestIdentity] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+  const projectStateKey = useMemo(() => overviewProjectStateKey(project), [project]);
+  const requestIdentity = `${userId}:${project.id}:${projectStateKey}:${refreshKey}`;
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++requestSequence.current;
     setIsLoading(true);
     setHasFailed(false);
+    setAssessment(null);
+    setLoadedRequestIdentity(null);
+    setFailedRequestIdentity(null);
 
     void authFetch('/api/internal/project-overview', {
       method: 'POST',
@@ -92,43 +156,37 @@ export function ProjectOverview({
       .then(async (response) => {
         if (!response.ok) throw new Error('Project overview assessment failed.');
         const body = await response.json() as { assessment?: ProjectOverviewAssessment | null };
-        setAssessment(body.assessment ?? null);
+        if (requestId !== requestSequence.current || controller.signal.aborted) return;
+        if (!body.assessment) throw new Error('Project overview assessment unavailable.');
+        setAssessment(body.assessment);
+        setLoadedRequestIdentity(requestIdentity);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (requestId !== requestSequence.current || controller.signal.aborted) return;
         setAssessment(null);
         setHasFailed(true);
+        setFailedRequestIdentity(requestIdentity);
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (requestId === requestSequence.current && !controller.signal.aborted) setIsLoading(false);
+      });
 
     return () => controller.abort();
-  }, [project.id, project.updated_at, refreshKey, userId]);
+  }, [project.id, projectStateKey, refreshKey, requestIdentity, userId]);
 
-  const basics = useMemo(() => {
-    const activeNodes = project.nodes.filter((node) => node.status !== 'DEPRECATED');
-    return {
-      openDecisions: activeNodes.filter((node) => node.type === 'DECISION' && node.status === 'OPEN').length,
-      openQuestions: activeNodes.filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type) && node.status === 'OPEN').length,
-      openRisks: activeNodes.filter((node) => node.type === 'RISK' && node.status === 'OPEN').length,
-    };
-  }, [project.nodes]);
+  const hasCurrentAssessment = Boolean(assessment && loadedRequestIdentity === requestIdentity);
+  const hasCurrentError = hasFailed && failedRequestIdentity === requestIdentity;
 
-  if (isLoading && !assessment) {
-    return (
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Project assessment</p>
-        <p className="mt-3 text-sm text-slate-400">Building a current view of this project...</p>
-      </section>
-    );
-  }
+  if (isLoading || (!hasCurrentAssessment && !hasCurrentError)) return <OverviewSkeleton />;
 
-  if (hasFailed || !assessment) {
+  if (hasCurrentError || !assessment) {
     return (
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Project assessment</p>
         <h2 className="mt-2 text-lg font-extrabold text-slate-100">Overview is being updated.</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">
-          The AI assessment is not available yet. The current project state includes {basics.openDecisions} open decision{basics.openDecisions === 1 ? '' : 's'}, {basics.openQuestions} unresolved question{basics.openQuestions === 1 ? '' : 's'}, and {basics.openRisks} open risk{basics.openRisks === 1 ? '' : 's'}.
+          The current overview is unavailable. Try again shortly.
         </p>
         <div className="mt-4">
           <OverviewLinks onViewGaps={onViewGaps} onViewHistory={onViewHistory} onViewToday={onViewToday} />

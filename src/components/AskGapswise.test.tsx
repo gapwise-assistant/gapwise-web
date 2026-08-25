@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
+import { describe, expect, it, vi } from 'vitest';
+import { askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, refreshAskProjectBeforeCompletion, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 function chat(id: string, question: string, messagesCount = 1): ChatSession {
@@ -56,6 +56,24 @@ describe('Ask chat picker', () => {
 });
 
 describe('Ask research persistence state', () => {
+  it('waits for the project refresh before reporting an answer or decision mutation complete', async () => {
+    let resolveRefresh!: () => void;
+    const refresh = vi.fn(() => new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    }));
+    const completion = vi.fn();
+
+    const pendingCompletion = refreshAskProjectBeforeCompletion(refresh).then(completion);
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(completion).not.toHaveBeenCalled();
+
+    resolveRefresh();
+    await pendingCompletion;
+
+    expect(completion).toHaveBeenCalledOnce();
+  });
+
   it('restores saved and confirmed actions from persisted research records', () => {
     const status = researchStatusFromRecords([
       { assistantMessageId: 'assistant_saved', action: 'save' },

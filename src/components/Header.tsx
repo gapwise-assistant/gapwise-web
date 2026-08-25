@@ -38,6 +38,7 @@ interface HeaderProps {
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
   onOpenSettings: () => void;
+  isSettingsOpen: boolean;
   accountLabel?: string;
   demoMode?: boolean;
 }
@@ -72,6 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectEverything,
   onOpenNewProject,
   onOpenSettings,
+  isSettingsOpen,
   accountLabel,
   demoMode = false,
 }) => {
@@ -313,7 +315,9 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onOpenSettings}
             title={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
             aria-label={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
-            className={`h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-300 sm:h-auto sm:w-auto ${activeTab === 'settings' ? 'border-cyan-800 text-cyan-300' : ''}`}
+            aria-expanded={isSettingsOpen}
+            aria-controls="settings-drawer"
+            className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-300 sm:h-auto sm:w-auto"
           >
             <Settings2 className="w-4 h-4" />
           </button>

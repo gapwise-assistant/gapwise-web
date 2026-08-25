@@ -9,7 +9,7 @@ import { addSourceCitations } from '@/lib/ask/citations';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
-import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { AskSourceModal } from '@/components/AskSourceModal';
 
 interface AskGapswiseProps {
   userId: string;
@@ -20,7 +20,6 @@ interface AskGapswiseProps {
   onInitialPromptSent?: () => void;
   newChatPrompt?: { id: string; text: string; target?: AskTarget } | null;
   onNewChatPromptOpened?: () => void;
-  onViewSource?: (source: AskSource) => void;
   onProjectContextChanged?: () => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
 }
@@ -247,6 +246,12 @@ export function askResponseAction(
   return canUseAskConclusion(message) ? 'use_as_answer' : null;
 }
 
+export async function refreshAskProjectBeforeCompletion(
+  onProjectUpdated?: () => void | Promise<void>,
+): Promise<void> {
+  await onProjectUpdated?.();
+}
+
 export function canUseAskDecisionConclusion(
   message: Pick<ChatMessage, 'outcome' | 'conclusion'>,
 ): boolean {
@@ -307,7 +312,6 @@ export function AskGapswise({
   onInitialPromptSent,
   newChatPrompt,
   onNewChatPromptOpened,
-  onViewSource,
   onProjectContextChanged,
   onProjectUpdated,
 }: AskGapswiseProps) {
@@ -335,16 +339,9 @@ export function AskGapswise({
   const [hiddenProposalKeys, setHiddenProposalKeys] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const sourcesPanelRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSentRef = useRef<string | null>(null);
   const handledNewChatPromptRef = useRef<string | null>(null);
-
-  useDismissibleModal(
-    () => setSelectedSources(null),
-    sourcesPanelRef,
-    Boolean(selectedSources),
-  );
 
   const activeChat = useMemo(() => {
     if (draftChat && draftChat.id === activeChatId) return draftChat;
@@ -442,13 +439,16 @@ export function AskGapswise({
             ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
           }),
         });
-        const data = await response.json() as { topQuestions?: unknown[]; error?: string };
+        const data = await response.json() as { topQuestions?: unknown[]; otherQuestions?: unknown[]; error?: string };
         if (!response.ok) throw new Error(data.error ?? 'Suggestions are unavailable.');
         const top = (data.topQuestions ?? [])
           .filter((question): question is string => typeof question === 'string')
           .slice(0, 3);
+        const other = (data.otherQuestions ?? [])
+          .filter((question): question is string => typeof question === 'string')
+          .slice(0, 3);
         if (!isMounted) return;
-        setSuggestedQuestions({ top, other: [] });
+        setSuggestedQuestions({ top, other });
       } catch (caught) {
         if (!isMounted) return;
         setSuggestedQuestions(null);
@@ -477,7 +477,6 @@ export function AskGapswise({
     const found = message.sources?.find((candidate) => candidate.id === sourceId);
     if (found) {
       setSelectedSources([found]);
-      onViewSource?.(found);
     }
   };
 
@@ -547,11 +546,11 @@ export function AskGapswise({
       if (researchAction.mode === 'save_as_context') {
         setSavedContextMessageIds((current) => new Set(current).add(researchAction.message.id));
       } else if (researchAction.mode === 'use_as_answer') {
+        await refreshAskProjectBeforeCompletion(onProjectUpdated);
         setConfirmedAnswerMessageIds((current) => new Set(current).add(researchAction.message.id));
-        void onProjectUpdated?.();
       } else if (researchAction.mode === 'use_as_decision') {
+        await refreshAskProjectBeforeCompletion(onProjectUpdated);
         setConfirmedDecisionMessageIds((current) => new Set(current).add(researchAction.message.id));
-        void onProjectUpdated?.();
       } else {
         setSavedResearchMessageIds((current) => new Set(current).add(researchAction.message.id));
       }
@@ -844,7 +843,7 @@ export function AskGapswise({
                             <button
                               key={source.id}
                               type="button"
-                              onClick={() => setSelectedSources([source])}
+                              onClick={() => openSource(message, source.id)}
                               title={displayTitle}
                               className="min-h-9 max-w-full truncate rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-left text-[10px] font-semibold text-cyan-300 hover:border-cyan-700"
                             >
@@ -1101,30 +1100,7 @@ export function AskGapswise({
       )}
 
       {selectedSources && (
-        <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">
-          <aside ref={sourcesPanelRef} className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-950 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:h-full sm:max-h-none sm:rounded-none sm:border-l sm:border-t-0 sm:border-b-0 sm:border-r-0 sm:p-6 sm:pb-6">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-              <h2 className="text-lg font-bold text-slate-100">Why / Sources</h2>
-              <button type="button" onClick={() => setSelectedSources(null)} className="h-9 w-9 rounded-lg border border-slate-800 text-slate-400 hover:text-slate-100">
-                <X className="mx-auto h-4 w-4" />
-              </button>
-            </div>
-            <div className="mt-4 space-y-4">
-              {selectedSources.map((source) => (
-                <div key={source.id} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                  <h3 className="text-sm font-bold text-cyan-300">{humanizeSourceTitle(source.title)}</h3>
-                  {source.url && (
-                    <a href={source.url} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-xs text-slate-400 underline">
-                      {source.url}
-                    </a>
-                  )}
-                  <p className="mt-2 text-xs leading-relaxed text-slate-300">{source.excerpt}</p>
-                  {source.reason && <p className="mt-2 text-[11px] text-slate-500">{source.reason}</p>}
-                </div>
-              ))}
-            </div>
-          </aside>
-        </div>
+        <AskSourceModal sources={selectedSources} onClose={() => setSelectedSources(null)} />
       )}
     </div>
   );

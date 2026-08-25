@@ -5,7 +5,7 @@ import { Today } from '@/components/Today';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 
 describe('Today', () => {
-  it('hides Open Questions when there are no visible questions', () => {
+  it('shows a loading skeleton instead of local or stale attention data', () => {
     const project = createProjectFromInput({
       name: 'Decision complete',
       goal: 'Complete the project.',
@@ -36,7 +36,8 @@ describe('Today', () => {
       />,
     );
 
+    expect(html).toContain('Loading Today');
     expect(html).not.toContain('Open questions · 0');
-    expect(html).not.toContain('No visible questions right now.');
+    expect(html).not.toContain('Nothing needs your attention right now');
   });
 });

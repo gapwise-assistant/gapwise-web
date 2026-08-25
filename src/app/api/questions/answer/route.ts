@@ -23,6 +23,7 @@ const editRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   projectId: z.string().trim().min(1),
   historyTimestamp: z.string().datetime(),
+  nodeId: z.string().trim().min(1).optional(),
   question: z.string().trim().min(1).max(5000),
   previousAnswer: z.string().trim().min(1).max(5000),
   answer: z.string().trim().min(1).max(5000),
@@ -33,6 +34,7 @@ const reopenRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   projectId: z.string().trim().min(1).optional(),
   historyTimestamp: z.string().datetime(),
+  nodeId: z.string().trim().min(1).optional(),
   question: z.string().trim().min(1).max(5000),
   previousAnswer: z.string().trim().min(1).max(5000),
 });

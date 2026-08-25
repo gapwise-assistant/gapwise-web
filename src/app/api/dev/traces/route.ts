@@ -4,6 +4,7 @@ import { latestDecisionMapActivity, listTraces, recordTrace, updateLatestDecisio
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelPolicy } from '@/lib/agents/modelPolicy';
 import { isDemoMode } from '@/lib/runtime/demoMode';
+import { isLocalhostRequest } from '@/lib/runtime/localhost';
 import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';
 import {
   buildDecisionMapActivityFingerprintFromDebug,
@@ -14,7 +15,15 @@ import {
 
 export const runtime = 'nodejs';
 
+function rejectNonLocalhost(request: Request): NextResponse | null {
+  return isLocalhostRequest(request)
+    ? null
+    : NextResponse.json({ error: 'Decision Map activity is available only on localhost.' }, { status: 404 });
+}
+
 export async function GET(request: Request) {
+  const rejected = rejectNonLocalhost(request);
+  if (rejected) return rejected;
   const url = new URL(request.url);
   try {
     const userId = await requireAuthenticatedUserId(request, url.searchParams.get('userId') ?? undefined);
@@ -61,6 +70,8 @@ const decisionMapTraceSchema = z.object({
  * feed as server-side graph work. No project data is modified.
  */
 export async function POST(request: Request) {
+  const rejected = rejectNonLocalhost(request);
+  if (rejected) return rejected;
   const parsed = decisionMapTraceSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid Decision Map debug trace.' }, { status: 400 });
   try {

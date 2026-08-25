@@ -57,7 +57,8 @@ describe('decision workspace', () => {
     });
 
     expect(updated.nodes.filter((node) => node.type === 'DECISION')).toHaveLength(1);
-    expect(updated.nodes.find((node) => node.id === 'node_decision_track')?.text).toBe('Build the four-minute persona demo');
+    expect(updated.nodes.find((node) => node.id === 'node_decision_track')?.text).toBe('Build Gapwise: Find the question that unlocks the next decision');
+    expect(updated.nodes.find((node) => node.id === 'node_decision_track')?.decision_outcome).toBe('Build the four-minute persona demo');
     expect(updated.nodes.find((node) => node.id === 'unknown_target_user')?.status).toBe('RESOLVED');
     expect(updated.edges.some((edge) => edge.source === 'node_decision_track' && edge.target === 'unknown_target_user' && edge.type === 'resolves')).toBe(true);
     expect(updated.history.at(-1)?.answer).toBe('Build the four-minute persona demo');
@@ -73,6 +74,8 @@ describe('decision workspace', () => {
     const decision = updated.nodes.find((node) => node.id === 'node_decision_track');
 
     expect(decision).toBeDefined();
+    expect(decision?.text).toBe('Build Gapwise: Find the question that unlocks the next decision');
+    expect(decision?.decision_outcome).toBe('Ask a helper to act as a spotter.');
     expect(decisionQuestionForDisplay(updated, decision!)).toBe('Build Gapwise: Find the question that unlocks the next decision');
   });
 

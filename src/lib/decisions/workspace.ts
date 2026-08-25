@@ -59,23 +59,13 @@ export interface ConfirmDecisionInput {
   resolveQuestionIds?: string[];
 }
 
-function normalizedDecisionText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
 /**
- * A decision node keeps its confirmed value in `text` for graph compatibility.
- * The decision's original question is retained in confirmation history and is
- * the stable, readable title for presentation surfaces.
+ * A decision keeps its original question in `text` and stores the selected
+ * outcome separately. This keeps the decision identity stable after it is
+ * resolved while allowing presentation surfaces to show the question.
  */
-export function decisionQuestionForDisplay(project: Project, decision: ClarityNode): string {
-  const currentText = normalizedDecisionText(decision.text);
-  const confirmation = [...(project.history ?? [])].reverse().find((entry) =>
-    entry.graph_diff_summary.startsWith('Decision confirmed')
-      && normalizedDecisionText(entry.answer) === currentText
-      && entry.question.trim(),
-  );
-  return confirmation?.question.trim() || decision.text;
+export function decisionQuestionForDisplay(_project: Project, decision: ClarityNode): string {
+  return decision.text;
 }
 
 function cloneProject(project: Project): Project {
@@ -339,7 +329,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
 
   const now = new Date().toISOString();
   const previousText = decision.text;
-  decision.text = finalText;
+  decision.decision_outcome = finalText;
   decision.status = 'RESOLVED';
   decision.confidence = 1;
   decision.updated_at = now;

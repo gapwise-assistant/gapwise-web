@@ -23,6 +23,7 @@ import { buildDecisionMapActivityFingerprint, decisionMapWarningCodes } from '@/
 import { relationshipGroupsForNode } from '@/lib/graph/relationshipContext';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { DecisionMapActivity } from '@/components/DecisionMapActivity';
+import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
   ssr: false,
@@ -96,10 +97,15 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
   const [rendererDiagnostics, setRendererDiagnostics] = useState<DecisionMapRendererDiagnostics | null>(null);
   const [traceRefreshKey, setTraceRefreshKey] = useState(0);
+  const [isLocalhost, setIsLocalhost] = useState(false);
   const fullscreenPanelRef = useRef<HTMLDivElement | null>(null);
   const lastRendererSnapshotKeyRef = useRef<string | null>(null);
 
   useDismissibleModal(() => setIsFullscreen(false), fullscreenPanelRef, isFullscreen);
+
+  useEffect(() => {
+    setIsLocalhost(isLocalhostBrowser());
+  }, []);
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -139,7 +145,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   // renderer. This deliberately uses renderer visibility and positions so it
   // can distinguish projection issues from layout/rendering issues.
   useEffect(() => {
-    if (process.env.NODE_ENV === 'production') return;
+    if (!isLocalhost) return;
 
     // Use only the renderer snapshot for the canonical All view.
     const rendererSnapshot = rendererDiagnostics?.view === view ? rendererDiagnostics : undefined;
@@ -192,12 +198,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       components,
       isolatedNodeIds: components.filter((component) => component.edgeCount === 0).flatMap((component) => component.nodeIds),
     });
-  }, [project, projection, rendererDiagnostics, view, viewport.zoom]);
+  }, [isLocalhost, project, projection, rendererDiagnostics, view, viewport.zoom]);
 
   // Renderer state is useful developer detail, but it is not a semantic map
   // event. Update the latest event in place rather than appending a record.
   useEffect(() => {
-    if (!rendererDiagnostics || !userId) return;
+    if (!isLocalhost || !rendererDiagnostics || !userId) return;
     const positions = Object.entries(rendererDiagnostics.positions)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, point]) => [id, point.x, point.y]);
@@ -252,12 +258,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [focusAssessment, focusMode, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
+  }, [focusAssessment, focusMode, isLocalhost, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
 
   // Persist one event for a meaningful project/focus change. This effect does
   // not depend on selection, view, layout, viewport, or renderer diagnostics.
   useEffect(() => {
-    if (!userId) return;
+    if (!isLocalhost || !userId) return;
     const timer = window.setTimeout(() => {
       const semanticProjection = buildDecisionMapProjection(project, focusAssessment);
       const semanticDebug = buildDecisionMapDebugTrace(project, {
@@ -288,7 +294,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [project, userId, focusAssessment?.actionNodeId]);
+  }, [isLocalhost, project, userId, focusAssessment?.actionNodeId]);
 
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
@@ -466,7 +472,9 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
           </div>
         </header>
 
-        <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
+        {isLocalhost && (
+          <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
+        )}
 
         <div className="flex max-w-full shrink-0 items-center justify-between gap-3 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
           <span className="rounded-lg border border-cyan-800 bg-cyan-950 px-3 py-2 text-xs font-medium text-cyan-300">

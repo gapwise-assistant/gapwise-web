@@ -41,7 +41,7 @@ describe('Bakery journey demo', () => {
     const result = await loadBakeryJourneyDemoForUser('bakery-journey-user');
     const historyTypes = result.project.historyEvents?.map((event) => event.type);
     const locationDecision = result.project.nodes.find((node) =>
-      node.type === 'DECISION' && node.status === 'RESOLVED' && node.text === BAKERY_JOURNEY_LOCATION_DECISION,
+      node.type === 'DECISION' && node.status === 'RESOLVED' && node.decision_outcome === BAKERY_JOURNEY_LOCATION_DECISION,
     );
 
     expect(result.project.id).toBe(BAKERY_JOURNEY_DEMO_ID);
@@ -50,21 +50,23 @@ describe('Bakery journey demo', () => {
     expect(result.project.deadline).toBeUndefined();
     expect(result.project.sources.map((source) => source.filename)).toEqual(BAKERY_JOURNEY_SOURCES.map((source) => source.filename));
     expect(historyTypes).toEqual([
+      'project_started',
       'context_added',
       'context_added',
       'context_added',
       'decision_resolved',
     ]);
     expect(locationDecision).toBeDefined();
-    expect(result.project.historyEvents?.[0].sourceId).toBe(BAKERY_JOURNEY_SOURCES[0].id);
-    expect(result.project.historyEvents?.[1].sourceId).toBe(BAKERY_JOURNEY_SOURCES[1].id);
-    expect(result.project.historyEvents?.[2].sourceId).toBe(BAKERY_JOURNEY_SOURCES[2].id);
+    const contextEvents = result.project.historyEvents?.filter((event) => event.type === 'context_added') ?? [];
+    expect(contextEvents[0]?.sourceId).toBe(BAKERY_JOURNEY_SOURCES[0].id);
+    expect(contextEvents[1]?.sourceId).toBe(BAKERY_JOURNEY_SOURCES[1].id);
+    expect(contextEvents[2]?.sourceId).toBe(BAKERY_JOURNEY_SOURCES[2].id);
 
     const reloaded = await (getStorageProvider() as MockStorageProvider).getProject('bakery-journey-user', result.project.id);
     expect(reloaded?.historyEvents).toEqual(result.project.historyEvents);
 
     const repeated = await loadBakeryJourneyDemoForUser('bakery-journey-user');
-    expect(repeated.project.historyEvents).toHaveLength(4);
+    expect(repeated.project.historyEvents).toHaveLength(5);
     expect(await (getStorageProvider() as MockStorageProvider).listProjects('bakery-journey-user')).toHaveLength(1);
   });
 });

@@ -7,6 +7,64 @@ import { generateAttentionCandidates } from '@/lib/attention/candidates';
 const briefStore = new Map<string, DailyBrief>();
 const feedbackStore = new Map<string, RecommendationStatus>();
 
+function attentionStateKey(params: {
+  project: Project;
+  memories: DurableMemory[];
+  contextPack?: ContextPack;
+}): string {
+  return JSON.stringify({
+    project: {
+      id: params.project.id,
+      title: params.project.title,
+      goal: params.project.goal,
+      deadline: params.project.deadline ?? null,
+      nodes: params.project.nodes
+        .filter((node) => node.status !== 'DEPRECATED')
+        .map((node) => ({
+          id: node.id,
+          type: node.type,
+          text: node.text,
+          status: node.status,
+          confidence: node.confidence,
+          impact: node.impact,
+          decision_outcome: node.decision_outcome ?? null,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      edges: params.project.edges
+        .map((edge) => ({ source: edge.source, target: edge.target, type: edge.type }))
+        .sort((left, right) => `${left.source}:${left.type}:${left.target}`.localeCompare(`${right.source}:${right.type}:${right.target}`)),
+      sources: params.project.sources
+        .map((source) => ({
+          id: source.id,
+          filename: source.filename,
+          type: source.type,
+          content: source.content,
+          derived_node_ids: [...source.derived_node_ids].sort(),
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      history: params.project.history
+        .map((entry) => ({ question: entry.question, answer: entry.answer, graph_diff_summary: entry.graph_diff_summary }))
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    },
+    memories: params.memories
+      .map((memory) => ({
+        category: memory.category,
+        text: memory.text,
+        source: memory.source,
+        confidence: memory.confidence,
+        status: memory.status ?? 'active',
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    commitments: (params.contextPack?.upcomingCommitments ?? [])
+      .map((node) => ({
+        type: node.type,
+        text: node.text,
+        status: node.status,
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  });
+}
+
 export function periodForDate(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
@@ -22,7 +80,7 @@ export function generateDailyBrief(params: {
   now?: Date;
 }): DailyBrief {
   const period = params.period ?? periodForDate();
-  const key = `${params.userId}:${params.project.id}:${period}`;
+  const key = `${params.userId}:${params.project.id}:${period}:${attentionStateKey(params)}`;
   if (!params.force && briefStore.has(key)) return briefStore.get(key)!;
 
   const recommendations = generateAttentionCandidates(params)

@@ -1,5 +1,5 @@
 export type PrimaryDestination = 'today' | 'ask' | 'scope';
-export type AppDestination = PrimaryDestination | 'settings';
+export type AppDestination = PrimaryDestination;
 
 export const PRIMARY_NAVIGATION: ReadonlyArray<{ id: PrimaryDestination; label: string }> = [
   { id: 'today', label: 'Today' },

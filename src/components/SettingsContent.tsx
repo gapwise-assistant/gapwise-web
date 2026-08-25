@@ -9,7 +9,7 @@ import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { GoogleWorkspaceSignals } from '@/types/google';
 
-interface SettingsDestinationProps {
+export interface SettingsContentProps {
   userId: string;
   accountLabel?: string;
   scope: AppScope;
@@ -24,7 +24,7 @@ interface SettingsDestinationProps {
   onSignOut: () => void;
 }
 
-export const SettingsDestination: React.FC<SettingsDestinationProps> = ({
+export const SettingsContent: React.FC<SettingsContentProps> = ({
   userId,
   accountLabel,
   scope,
@@ -52,58 +52,53 @@ export const SettingsDestination: React.FC<SettingsDestinationProps> = ({
   };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">
-      <header className="border-b border-slate-800 pb-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">SETTINGS</p>
-        <h1 className="mt-2 text-2xl font-extrabold text-slate-100">Settings</h1>
-        <p className="mt-2 max-w-2xl text-sm text-slate-400">
-          Manage connected accounts, memories, preferences, and your account.
-        </p>
-      </header>
-
-      <section className="border-b border-slate-800 pb-8">
+    <div className="mx-auto w-full max-w-full">
+      <section className="border-b border-slate-800 px-5 py-6 sm:px-6">
         <ConnectedContext
           userId={userId}
           project={connectionProject}
           onImportSources={importWorkspaceSignals}
+          variant="drawer"
         />
       </section>
 
-      <section>
+      <section className="border-b border-slate-800 px-5 py-6 sm:px-6">
         <MemoryView
           profile={profile}
           memories={memories}
           onUpdateProfile={onUpdateProfile}
           onUpdateMemories={onUpdateMemories}
           section="memory"
+          variant="drawer"
         />
       </section>
 
-      <section>
+      <section className="border-b border-slate-800 px-5 py-6 sm:px-6">
         <MemoryView
           profile={profile}
           memories={memories}
           onUpdateProfile={onUpdateProfile}
           onUpdateMemories={onUpdateMemories}
           section="preferences"
+          variant="drawer"
         />
       </section>
 
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <UserCircle className="h-6 w-6 text-cyan-300" />
-            <div>
-              <h2 className="text-lg font-extrabold text-slate-100">Account</h2>
-              <p className="text-sm text-slate-400">{accountLabel ?? 'Signed-in Google account'}</p>
+      <section className="px-5 py-6 sm:px-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <UserCircle className="h-5 w-5 shrink-0 text-cyan-300" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-slate-100">Account</h2>
+              <p className="mt-1 truncate text-xs text-slate-500">{accountLabel ?? 'Signed-in Google account'}</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onSignOut}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-rose-800 bg-rose-950 px-3 py-2 text-xs font-semibold text-rose-200 sm:min-h-0"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition-colors hover:border-rose-700 hover:text-rose-200"
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-3.5 w-3.5" />
             Sign out
           </button>
         </div>

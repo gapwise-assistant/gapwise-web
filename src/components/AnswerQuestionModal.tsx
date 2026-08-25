@@ -119,7 +119,7 @@ export function AnswerQuestionModal({
     const recommendedOptionId = target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '';
     setSelectedOptionId(recommendedOptionId);
     setSimulationOptionId('');
-  }, [target]);
+  }, [target.projectId, target.nodeId, target.historyTimestamp, target.initialAnswer]);
 
   const sources = (target.explanation?.evidence ?? []).filter((source) => source.title.trim());
   const whatThisAffects = (target.explanation?.whatThisBlocks ?? []).filter((item) => item.trim());
@@ -129,6 +129,8 @@ export function AnswerQuestionModal({
   const hasOptions = Boolean(decisionSupport && (decisionSupport.options.length > 0 || decisionSupport.recommendation));
   const selectedOption = decisionSupport?.options.find((option) => option.id === selectedOptionId);
   const simulatedOption = decisionSupport?.options.find((option) => option.id === simulationOptionId);
+  const missingSavedAnswer = target.mode === 'edit'
+    && (typeof target.initialAnswer !== 'string' || !target.initialAnswer.trim());
 
   const toggleSection = (section: ResolveSection) => {
     setOpenSections((current) => current.includes(section)
@@ -177,7 +179,12 @@ export function AnswerQuestionModal({
           </div>
         </header>
 
-        {saved ? (
+        {missingSavedAnswer ? (
+          <div className="mt-5 rounded-xl border border-rose-800 bg-rose-950/30 p-4" role="alert">
+            <p className="text-sm font-bold text-rose-200">The saved response could not be loaded.</p>
+            <p className="mt-1 text-xs leading-relaxed text-rose-300/80">This resolved gap was not opened with a valid saved answer, so it was not opened in an empty editor.</p>
+          </div>
+        ) : saved ? (
           <div className="mt-5 rounded-xl border border-emerald-800 bg-emerald-950/30 p-4">
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />

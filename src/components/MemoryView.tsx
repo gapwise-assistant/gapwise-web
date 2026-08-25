@@ -14,6 +14,7 @@ interface MemoryViewProps {
   onUpdateProfile: (updated: UserMemoryProfile) => void;
   onUpdateMemories: (updated: DurableMemory[]) => void;
   section?: 'all' | 'memory' | 'preferences';
+  variant?: 'page' | 'drawer';
 }
 
 const categories: MemoryCategory[] = ['career', 'communication', 'learning', 'current_priorities', 'custom'];
@@ -24,6 +25,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   onUpdateProfile,
   onUpdateMemories,
   section = 'all',
+  variant = 'page',
 }) => {
   const [formData, setFormData] = useState<UserMemoryProfile>(profile);
   const [draftMemory, setDraftMemory] = useState('');
@@ -55,6 +57,147 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
     setEditingId(null);
     setEditingText('');
   };
+
+  if (variant === 'drawer') {
+    return (
+      <div className="w-full space-y-7">
+        {showMemory && (
+          <>
+            <div>
+              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-100">
+                <Plus className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+                What Gapwise remembers
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">Add a preference, priority, or personal detail Gapwise should remember.</p>
+              <textarea
+                rows={4}
+                value={draftMemory}
+                onChange={(event) => setDraftMemory(event.target.value)}
+                placeholder="Write something Gapwise should remember..."
+                className="mt-4 min-h-24 w-full resize-y rounded-xl border border-slate-800 bg-slate-950 px-3 py-3 text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-600"
+              />
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleAddMemory}
+                  disabled={!draftMemory.trim()}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                  Remember
+                </button>
+              </div>
+              {savedMessage && <p className="mt-2 text-xs text-emerald-300">{savedMessage}</p>}
+            </div>
+
+            <div className="border-t border-slate-800 pt-6">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-100">
+                <Brain className="h-4 w-4 text-fuchsia-300" aria-hidden="true" />
+                Durable memory
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">Information Gapwise can use across conversations.</p>
+              <div className="mt-4 space-y-6">
+                {categories.map((category) => {
+                  const categoryMemories = visibleMemories.filter((memory) => memory.category === category);
+                  const categoryLabel = category.replace('_', ' ');
+                  return (
+                    <section key={category}>
+                      <h3 className="text-xs font-bold capitalize text-slate-300">{categoryLabel}</h3>
+                      {categoryMemories.length === 0 ? (
+                        <p className="mt-2 text-xs text-slate-600">No active memories</p>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {categoryMemories.map((memory) => (
+                            <div key={memory.id} className="rounded-lg border border-slate-800/80 bg-slate-900/60 p-3">
+                              {editingId === memory.id ? (
+                                <textarea
+                                  rows={3}
+                                  value={editingText}
+                                  onChange={(event) => setEditingText(event.target.value)}
+                                  className="w-full resize-y rounded-lg border border-slate-800 bg-slate-950 p-2 text-xs leading-relaxed text-slate-100 outline-none focus:border-cyan-600"
+                                />
+                              ) : (
+                                <p className="text-sm leading-relaxed text-slate-200">{memory.text}</p>
+                              )}
+                              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-500">
+                                <span className="text-emerald-300">{memory.last_confirmed_at ? 'Confirmed' : 'Active'}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{categoryLabel}</span>
+                                <span className="ml-auto flex items-center gap-2">
+                                  {editingId === memory.id ? (
+                                    <button type="button" onClick={() => handleSaveEdit(memory)} className="font-semibold text-cyan-200 hover:text-cyan-100">Save</button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingId(memory.id);
+                                        setEditingText(memory.text);
+                                      }}
+                                      className="font-semibold text-cyan-200 hover:text-cyan-100"
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
+                                  <button type="button" onClick={() => onUpdateMemories(confirmMemory(memories, memory.id))} className="font-semibold text-emerald-300 hover:text-emerald-200">Confirm</button>
+                                  <button type="button" onClick={() => onUpdateMemories(forgetMemory(memories, memory.id))} className="font-semibold text-slate-500 hover:text-rose-200">Forget</button>
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
+
+        {showPreferences && (
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-100">Preferences</h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">Choose how Gapwise communicates and uses evidence.</p>
+            </div>
+            <div className="space-y-4 text-xs">
+              <label className="block">
+                <span className="block font-semibold text-slate-300">Answer density</span>
+                <select value={formData.answer_density} onChange={(event) => setFormData({ ...formData, answer_density: event.target.value as UserMemoryProfile['answer_density'] })} className="mt-1.5 min-h-10 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-slate-200 outline-none focus:border-cyan-600">
+                  <option value="concise">Concise</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="detailed">Detailed</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="block font-semibold text-slate-300">Question frequency</span>
+                <select value={formData.question_frequency} onChange={(event) => setFormData({ ...formData, question_frequency: event.target.value as UserMemoryProfile['question_frequency'] })} className="mt-1.5 min-h-10 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-slate-200 outline-none focus:border-cyan-600">
+                  <option value="low">Low</option>
+                  <option value="moderate">Moderate</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="block font-semibold text-slate-300">Evidence preference</span>
+                <select value={formData.evidence_preference} onChange={(event) => setFormData({ ...formData, evidence_preference: event.target.value as UserMemoryProfile['evidence_preference'] })} className="mt-1.5 min-h-10 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-slate-200 outline-none focus:border-cyan-600">
+                  <option value="research_first">Research first</option>
+                  <option value="intuition_allowed">Intuition allowed</option>
+                  <option value="strict_data">Strict data</option>
+                </select>
+              </label>
+            </div>
+            <div className="flex justify-end">
+              <button type="submit" className="inline-flex items-center gap-1.5 rounded-md border border-cyan-700 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-100 hover:border-cyan-500">
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                Save preferences
+              </button>
+            </div>
+            {savedMessage && <p className="text-xs text-emerald-300">{savedMessage}</p>}
+          </form>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-3 py-5 sm:px-6 sm:py-8 lg:px-8">

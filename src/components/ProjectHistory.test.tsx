@@ -5,12 +5,31 @@ import { ProjectHistory } from '@/components/ProjectHistory';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 
 describe('ProjectHistory', () => {
-  it('shows an empty state for a project with no meaningful history', () => {
+  it('shows the project start marker for a newly created project', () => {
     const html = renderToStaticMarkup(
       <ProjectHistory project={createProjectFromInput({ name: 'Empty', goal: 'Start carefully.' })} />,
     );
 
-    expect(html).toContain('No project history yet.');
+    expect(html).toContain('Project start');
+    expect(html).toContain('Project started');
+    expect(html).toContain('Created this project with its initial goal.');
+  });
+
+  it('synthesizes a display-only project start for older projects', () => {
+    const project = createProjectFromInput({ name: 'Legacy', goal: 'Keep the work safe.' }, '2026-08-20T12:00:00.000Z');
+    project.historyEvents = [{
+      id: 'legacy_event',
+      projectId: project.id,
+      createdAt: '2026-08-21T12:00:00.000Z',
+      type: 'context_added',
+      title: 'Context added',
+      summary: 'A later note was added.',
+    }];
+
+    const html = renderToStaticMarkup(<ProjectHistory project={project} />);
+
+    expect(html.indexOf('Project started')).toBeLessThan(html.indexOf('Context added'));
+    expect(html).toContain(`dateTime="${project.created_at}"`);
   });
 
   it('renders events chronologically, collapsed with expandable details, and shows Now', () => {
@@ -40,6 +59,8 @@ describe('ProjectHistory', () => {
 
     expect(html.indexOf('Planning context added')).toBeLessThan(html.indexOf('Decision made'));
     expect(html).toContain('Show details');
+    expect(html).toContain('dateTime="2026-08-22T12:00:00.000Z"');
+    expect(html).toContain('dateTime="2026-08-23T12:00:00.000Z"');
     expect(html).toContain('NOW');
   });
 });

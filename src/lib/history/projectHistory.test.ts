@@ -12,6 +12,14 @@ import {
   historyCurrentFocus,
 } from '@/lib/history/projectHistory';
 
+function eventOf(project: ReturnType<typeof createProjectFromInput>, type: 'project_started' | 'context_added' | 'decision_resolved' | 'goal_changed') {
+  return project.historyEvents?.find((event) => event.type === type);
+}
+
+function latestEventOf(project: ReturnType<typeof createProjectFromInput>, type: 'project_started' | 'context_added' | 'decision_resolved' | 'goal_changed') {
+  return [...(project.historyEvents ?? [])].reverse().find((event) => event.type === type);
+}
+
 describe('project history', () => {
   it('records one compact event for meaningful context ingestion', async () => {
     const project = createProjectFromInput({ name: 'Workshop', goal: 'Run a useful workshop.' });
@@ -36,13 +44,13 @@ describe('project history', () => {
       ],
     }, DEFAULT_USER_PROFILE);
 
-    expect(updated.historyEvents).toHaveLength(1);
-    expect(updated.historyEvents?.[0]).toMatchObject({
+    expect(updated.historyEvents).toHaveLength(2);
+    expect(eventOf(updated, 'context_added')).toMatchObject({
       type: 'context_added',
       sourceId: 'source_workshop',
       sourceNodeIds: ['node_venue', 'node_schedule'],
     });
-    expect(updated.historyEvents?.[0].changes).toHaveLength(2);
+    expect(eventOf(updated, 'context_added')?.changes).toHaveLength(2);
   });
 
   it('does not create timeline noise when repeated context adds no semantic change', async () => {
@@ -60,7 +68,8 @@ describe('project history', () => {
       sourceId: 'source_repeat_2',
     }, DEFAULT_USER_PROFILE);
 
-    expect(repeated.historyEvents).toHaveLength(1);
+    expect(repeated.historyEvents).toHaveLength(2);
+    expect(repeated.historyEvents?.filter((event) => event.type === 'context_added')).toHaveLength(1);
   });
 
   it('records a decision outcome and downstream graph changes', () => {
@@ -83,12 +92,12 @@ describe('project history', () => {
       customDecision: 'Use the community hall.',
     });
 
-    expect(updated.historyEvents).toHaveLength(1);
-    expect(updated.historyEvents?.[0]).toMatchObject({
+    expect(updated.historyEvents).toHaveLength(2);
+    expect(eventOf(updated, 'decision_resolved')).toMatchObject({
       type: 'decision_resolved',
       summary: 'Use the community hall.',
     });
-    expect(updated.historyEvents?.[0].changes).toEqual(expect.arrayContaining([
+    expect(eventOf(updated, 'decision_resolved')?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'resolved', nodeId: 'decision_venue' }),
     ]));
     expect(updated.nodes.find((node) => node.id === 'decision_venue')?.status).toBe('RESOLVED');
@@ -103,7 +112,7 @@ describe('project history', () => {
     });
     const loaded = collectionsToProject(projectToCollections('history-user', changed), changed.id);
 
-    expect(changed.historyEvents).toHaveLength(1);
+    expect(changed.historyEvents).toHaveLength(2);
     expect(loaded?.historyEvents).toEqual(changed.historyEvents);
   });
 
@@ -137,15 +146,17 @@ describe('project history', () => {
       }],
     }, DEFAULT_USER_PROFILE);
 
-    const originalChange = second.historyEvents?.[0].changes?.find((change) => change.nodeId === 'decision_location');
+    const firstContextEvent = eventOf(first, 'context_added');
+    const secondContextEvent = latestEventOf(second, 'context_added');
+    const originalChange = firstContextEvent?.changes?.find((change) => change.nodeId === 'decision_location');
     expect(originalChange?.snapshot).toMatchObject({
       nodeId: 'decision_location',
       text: 'Choose the launch location.',
       type: 'DECISION',
       status: 'OPEN',
     });
-    expect(second.historyEvents?.[0].changes?.[0].text).toBe('Choose the launch location.');
-    expect(second.historyEvents?.[1].changes?.[0].snapshot?.text).toBe('Use the community hall for the first event.');
+    expect(secondContextEvent?.changes?.[0].text).toBe('Use the community hall for the first event.');
+    expect(secondContextEvent?.changes?.[0].snapshot?.text).toBe('Use the community hall for the first event.');
   });
 
   it('reports existing downstream nodes as affected without repeating learned nodes', async () => {
@@ -183,7 +194,7 @@ describe('project history', () => {
       }],
     }, DEFAULT_USER_PROFILE);
 
-    const event = second.historyEvents?.[1];
+    const event = latestEventOf(second, 'context_added');
     expect(event?.changes?.map((change) => change.nodeId)).toEqual(['evidence_convenience']);
     expect(event?.affectedNodes).toEqual([expect.objectContaining({
       nodeId: 'decision_venue',
@@ -209,8 +220,9 @@ describe('project history', () => {
       }],
     }, DEFAULT_USER_PROFILE);
 
-    expect(updated.historyEvents?.[0].affectedNodes).toBeUndefined();
-    expect(updated.historyEvents?.[0].affectedNodeIds).toBeUndefined();
+    const event = eventOf(updated, 'context_added');
+    expect(event?.affectedNodes).toBeUndefined();
+    expect(event?.affectedNodeIds).toBeUndefined();
   });
 
   it('captures focus transitions without treating equivalent wording as a new focus', () => {
@@ -288,8 +300,9 @@ describe('project history', () => {
       filename: 'focus context',
       createdAt: '2026-08-23T12:00:00.000Z',
     });
-    expect(changed.historyEvents?.[0].focusBefore?.actionNodeId).toBe('gap_venue');
-    expect(changed.historyEvents?.[0].focusAfter?.actionNodeId).toBe('gap_schedule');
+    const focusEvent = eventOf(changed, 'context_added');
+    expect(focusEvent?.focusBefore?.actionNodeId).toBe('gap_venue');
+    expect(focusEvent?.focusAfter?.actionNodeId).toBe('gap_schedule');
 
     const equivalent = JSON.parse(JSON.stringify(project)) as typeof project;
     equivalent.active_question = { ...project.active_question, question: 'Which venue is available right now?' };
@@ -298,7 +311,7 @@ describe('project history', () => {
       filename: 'same focus',
       createdAt: '2026-08-23T12:01:00.000Z',
     });
-    expect(same.historyEvents ?? []).toHaveLength(0);
+    expect(same.historyEvents ?? []).toHaveLength(1);
     expect(historyCurrentFocus(changed, {
       title: 'What date is available?',
       actionNodeId: 'gap_schedule',
@@ -320,7 +333,7 @@ describe('project history', () => {
       ],
     }, DEFAULT_USER_PROFILE);
 
-    expect(updated.historyEvents?.[0].summary).toBe('4 things learned\n1 fact · 1 evidence · 1 preference · 1 constraint');
+    expect(eventOf(updated, 'context_added')?.summary).toBe('4 things learned\n1 fact · 1 evidence · 1 preference · 1 constraint');
   });
 
   it('records real decision consequences and excludes unrelated nodes', () => {
@@ -385,7 +398,7 @@ describe('project history', () => {
       decisionNodeId: 'decision_venue',
       customDecision: 'Use the community hall.',
     });
-    const event = updated.historyEvents?.[0];
+    const event = eventOf(updated, 'decision_resolved');
 
     expect(event?.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'resolved', nodeId: 'decision_venue' }),
@@ -401,11 +414,12 @@ describe('project history', () => {
     unrelatedDecision.status = 'RESOLVED';
     const unrelatedRisk = unrelatedMutation.nodes.find((node) => node.id === 'unrelated_risk')!;
     unrelatedRisk.status = 'RESOLVED';
-    const isolatedEvent = appendDecisionResolvedHistory(project, unrelatedMutation, {
+    const isolatedProject = appendDecisionResolvedHistory(project, unrelatedMutation, {
       nodeId: 'decision_venue',
       question: 'Choose the venue.',
       answer: 'Use the community hall.',
-    }).historyEvents?.[0];
+    });
+    const isolatedEvent = latestEventOf(isolatedProject, 'decision_resolved');
     expect(isolatedEvent?.changes?.some((change) => change.nodeId === 'unrelated_risk')).toBe(false);
   });
 

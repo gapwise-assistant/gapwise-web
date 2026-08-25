@@ -30,6 +30,9 @@ export interface FirestoreNode extends BaseEntity {
   y?: number;
   question_role?: 'canonical' | 'alias' | 'subquestion' | 'assumption' | 'related';
   canonical_question_id?: string;
+  decision_outcome?: string;
+  canonical_node_id?: string;
+  reconciliation_classification?: Project['nodes'][number]['reconciliation_classification'];
   question_aliases?: string[];
   reconciliation_confidence?: number;
   reconciliation_reason?: string;
@@ -82,6 +85,7 @@ export interface FirestoreConversation extends BaseEntity {
   question: string;
   answer: string;
   graph_diff_summary: string;
+  nodeId?: string;
 }
 
 export interface FirestoreRecommendation extends BaseEntity {
@@ -119,6 +123,19 @@ export interface ProjectOverviewAssessmentCacheRecord {
   projectId: string;
   projectStateVersion: string;
   assessment: ProjectOverviewAssessment;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AskSuggestionsCacheRecord {
+  id: string;
+  userId: string;
+  projectId?: string;
+  scopeKey: string;
+  projectStateVersion: string;
+  topQuestions: string[];
+  otherQuestions: string[];
+  generatedBy: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -161,6 +178,8 @@ export interface StorageProvider {
   saveFocusAssessment(userId: string, record: FocusAssessmentCacheRecord): Promise<void>;
   getProjectOverviewAssessment(userId: string, cacheId: string): Promise<ProjectOverviewAssessmentCacheRecord | null>;
   saveProjectOverviewAssessment(userId: string, record: ProjectOverviewAssessmentCacheRecord): Promise<void>;
+  getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null>;
+  saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void>;
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;

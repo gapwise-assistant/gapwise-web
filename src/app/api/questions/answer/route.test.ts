@@ -62,6 +62,7 @@ describe('POST /api/questions/answer', () => {
       userId: 'demo-user',
       projectId: context.id,
       historyTimestamp: '2026-08-11T10:00:00.000Z',
+      nodeId: 'unknown_target_user',
       question: 'What is the primary user?',
       previousAnswer: 'Independent builders.',
       answer: 'Technical founders.',
@@ -70,6 +71,7 @@ describe('POST /api/questions/answer', () => {
     expect(response.status).toBe(200);
     expect(editAnsweredQuestion).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'demo-user',
+      nodeId: 'unknown_target_user',
       answer: 'Technical founders.',
     }));
     await expect(response.json()).resolves.toMatchObject({

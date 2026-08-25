@@ -6,7 +6,7 @@ import { Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
 import { FeedbackEvent } from '@/types/feedback';
-import { generateDailyBrief, updateRecommendationStatus } from '@/lib/attention/generateBrief';
+import { updateRecommendationStatus } from '@/lib/attention/generateBrief';
 import { buildComingUp, buildTodayQuestions, openTodayDecisions, todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import {
   hasUsefulSuggestedAnswer,
@@ -43,6 +43,85 @@ interface TodayProps {
   onViewReasoningPath?: (nodeId: string) => void;
 }
 
+type TodayLoadState = 'loading' | 'ready' | 'error';
+
+function todayScopeKey(scope: AppScope): string {
+  return scope.type === 'project' ? `project:${scope.projectId}` : 'everything';
+}
+
+function todayProjectStateKey(
+  project: Project,
+  memories: DurableMemory[],
+  scope: AppScope,
+): string {
+  return JSON.stringify({
+    scope: todayScopeKey(scope),
+    project: {
+      id: project.id,
+      title: project.title,
+      goal: project.goal,
+      deadline: project.deadline ?? null,
+      nodes: project.nodes
+        .filter((node) => node.status !== 'DEPRECATED')
+        .map((node) => ({
+          id: node.id,
+          type: node.type,
+          text: node.text,
+          status: node.status,
+          confidence: node.confidence,
+          impact: node.impact,
+          decision_outcome: node.decision_outcome ?? null,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      edges: project.edges
+        .map((edge) => ({ source: edge.source, target: edge.target, type: edge.type }))
+        .sort((left, right) => `${left.source}:${left.type}:${left.target}`.localeCompare(`${right.source}:${right.type}:${right.target}`)),
+    },
+    memories: memories
+      .map((memory) => ({
+        category: memory.category,
+        text: memory.text,
+        source: memory.source,
+        confidence: memory.confidence,
+        status: memory.status ?? 'active',
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  });
+}
+
+function TodaySkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Loading Today">
+      <div className="grid grid-cols-3 gap-2">
+        {[0, 1, 2].map((item) => <div key={item} className="h-16 animate-pulse rounded-xl border border-slate-800 bg-slate-900" />)}
+      </div>
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="h-2.5 w-28 animate-pulse rounded bg-slate-800" />
+        <div className="mt-4 h-5 w-4/5 animate-pulse rounded bg-slate-800" />
+        <div className="mt-3 h-9 w-36 animate-pulse rounded bg-slate-800" />
+      </section>
+      {[0, 1].map((item) => (
+        <section key={item} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+          <div className="h-2.5 w-24 animate-pulse rounded bg-slate-800" />
+          <div className="mt-4 space-y-3">
+            <div className="h-4 w-5/6 animate-pulse rounded bg-slate-800" />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-slate-800" />
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function TodayUnavailable() {
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center">
+      <h2 className="text-sm font-bold text-slate-200">Today is temporarily unavailable</h2>
+      <p className="mt-2 text-xs text-slate-500">The current attention assessment could not be loaded.</p>
+    </section>
+  );
+}
+
 function decisionForQuestion(project: Project, nodeId: string): string | undefined {
   const edge = project.edges.find((candidate) =>
     ['blocks', 'depends_on', 'affects', 'informs'].includes(candidate.type) &&
@@ -62,8 +141,14 @@ function answeredQuestionItems(project: Project): OpenQuestionRowItem[] {
     .slice()
     .reverse()
     .flatMap((historyItem) => {
-      const group = resolvedQuestions.find((candidate) => semanticallyEquivalentQuestion(candidate.canonical.text, historyItem.question));
-      const node = group?.canonical;
+      const stableNode = historyItem.nodeId
+        ? project.nodes.find((candidate) => candidate.id === historyItem.nodeId)
+        : undefined;
+      const group = !stableNode
+        ? resolvedQuestions.find((candidate) => semanticallyEquivalentQuestion(candidate.canonical.text, historyItem.question))
+        : undefined;
+      const node = stableNode ?? group?.canonical;
+      if (node && (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION' || node.status !== 'RESOLVED')) return [];
       if (!node || seen.has(node.id)) return [];
       seen.add(node.id);
       const question = todayQuestionFromNode(project, node);
@@ -103,10 +188,13 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   return 'Resolve these before the next important project decision.';
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVersion, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
+  const [loadState, setLoadState] = useState<TodayLoadState>('loading');
+  const [loadedRequestKey, setLoadedRequestKey] = useState<string | null>(null);
+  const [failedRequestKey, setFailedRequestKey] = useState<string | null>(null);
   const [questionSuggestions, setQuestionSuggestions] = useState<Record<string, TodayQuestionSuggestion>>({});
   const [questionPresentations, setQuestionPresentations] = useState<Record<string, TodayQuestionPresentation>>({});
   const [questionSuggestionWarning, setQuestionSuggestionWarning] = useState('');
@@ -115,26 +203,42 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
   const [hiddenQuestions, setHiddenQuestions] = useState<Record<string, TodayQuestion>>({});
   const [hiddenQuestionsExpanded, setHiddenQuestionsExpanded] = useState(false);
 
-  const localBrief: DailyBrief = useMemo(
-    () => generateDailyBrief({ userId, project, memories, feedbackEvents, force: Boolean(refreshCounter) }),
-    [userId, project, memories, feedbackEvents, refreshCounter]
+  const requestStateKey = useMemo(
+    () => todayProjectStateKey(project, memories, scope),
+    [project, memories, scope],
   );
-  const brief = serverBrief ?? localBrief;
-
-  React.useEffect(() => {
-    // A graph answer or durable-memory update invalidates the server snapshot;
-    // show the locally recalculated brief immediately while the fresh server
-    // brief is fetched below.
-    setServerBrief(null);
-    setFocusAssessment(null);
-  }, [project.updated_at, projectRefreshVersion, memories]);
+  const requestKey = `${userId}:${requestStateKey}:refresh:${refreshCounter}`;
+  const emptyBrief = useMemo<DailyBrief>(() => ({
+    id: `today-loading-${userId}`,
+    userId,
+    period: '',
+    generated_at: '',
+    recommendations: [],
+  }), [userId]);
+  const brief = serverBrief ?? emptyBrief;
+  const requestSequence = React.useRef(0);
+  const previousRequestKey = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++requestSequence.current;
+    const force = refreshCounter > 0 || (
+      previousRequestKey.current !== null && previousRequestKey.current !== requestKey
+    );
+    previousRequestKey.current = requestKey;
+    setServerBrief(null);
+    setFocusAssessment(null);
+    setLoadedRequestKey(null);
+    setFailedRequestKey(null);
+    setLoadState('loading');
     authFetch('/api/attention/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, force: true, ...(scope.type === 'project' ? { projectId: scope.projectId } : {}) }),
+      body: JSON.stringify({
+        userId,
+        ...(force ? { force: true } : {}),
+        ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+      }),
       signal: controller.signal,
     })
       .then((response) => {
@@ -142,17 +246,24 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
         return response.json();
       })
       .then((body) => {
+        if (requestId !== requestSequence.current || controller.signal.aborted) return;
+        if (!body?.brief) throw new Error('Attention brief unavailable');
         setServerBrief(body.brief as DailyBrief);
         setFocusAssessment((body.focusAssessment as FocusAssessment | null) ?? null);
+        setLoadedRequestKey(requestKey);
+        setLoadState('ready');
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (requestId !== requestSequence.current || controller.signal.aborted) return;
         setServerBrief(null);
         setFocusAssessment(null);
+        setFailedRequestKey(requestKey);
+        setLoadState('error');
       });
 
     return () => controller.abort();
-  }, [userId, scope, refreshCounter, project.updated_at, projectRefreshVersion]);
+  }, [requestKey, refreshCounter, scope, userId]);
 
   React.useEffect(() => {
     setHiddenRecommendations({});
@@ -307,7 +418,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
       });
 
     return () => controller.abort();
-  }, [userId, project.id, project.title, project.updated_at, projectRefreshVersion, scope.type, scope.type === 'project' ? scope.projectId : '', questionPlanKey]);
+  }, [questionPlanKey, requestStateKey, userId]);
 
   const handleHide = (recommendation: AttentionCandidate) => {
     setHiddenRecommendations((current) => ({
@@ -400,6 +511,10 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
   const hasResolvedGaps = answeredItems.length > 0 || project.nodes.some((node) =>
     node.status === 'RESOLVED' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(node.type),
   );
+  const isCurrentReady = loadState === 'ready'
+    && loadedRequestKey === requestKey
+    && serverBrief !== null;
+  const isCurrentError = loadState === 'error' && failedRequestKey === requestKey;
 
   return (
     <div className="mx-auto max-w-[1080px] space-y-5 px-3 py-4 sm:px-6 sm:py-6">
@@ -427,9 +542,11 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
         </div>
       </div>
 
-      {questionSuggestionWarning && (
-        <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
-      )}
+      {isCurrentReady ? (
+        <>
+          {questionSuggestionWarning && (
+            <p className="text-xs text-amber-300" role="status">{questionSuggestionWarning}</p>
+          )}
 
       {showRecommendedFocus && focusGuidance && (
         <RecommendedFocus
@@ -526,7 +643,12 @@ export const Today: React.FC<TodayProps> = ({ userId, project, projectRefreshVer
           </p>
         )}
       </section>
-
+        </>
+      ) : isCurrentError ? (
+        <TodayUnavailable />
+      ) : (
+        <TodaySkeleton />
+      )}
     </div>
   );
 };

@@ -15,6 +15,7 @@ import {
   FirestoreNode,
   FirestoreSource,
   FocusAssessmentCacheRecord,
+  AskSuggestionsCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
   StorageProvider,
 } from '@/lib/storage/types';
@@ -33,11 +34,12 @@ interface MockDatabase {
       askResearch: AskResearchEvidence[];
       focusAssessments: FocusAssessmentCacheRecord[];
       projectOverviewAssessments: ProjectOverviewAssessmentCacheRecord[];
+      askSuggestionAssessments: AskSuggestionsCacheRecord[];
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments';
 
 const EMPTY_USER = {
   contexts: [],
@@ -55,6 +57,7 @@ const EMPTY_USER = {
   askResearch: [],
   focusAssessments: [],
   projectOverviewAssessments: [],
+  askSuggestionAssessments: [],
 };
 
 export class MockStorageProvider implements StorageProvider {
@@ -97,6 +100,7 @@ export class MockStorageProvider implements StorageProvider {
       askResearch: current.askResearch ?? [],
       focusAssessments: current.focusAssessments ?? [],
       projectOverviewAssessments: current.projectOverviewAssessments ?? [],
+      askSuggestionAssessments: current.askSuggestionAssessments ?? [],
     };
     await this.writeDb(db);
   }
@@ -228,6 +232,14 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'projectOverviewAssessments', { ...record, userId });
   }
 
+  async getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null> {
+    return (await this.getUser(userId)).askSuggestionAssessments?.find((record) => record.id === cacheId) ?? null;
+  }
+
+  async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
+    await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return (await this.getUser(userId)).feedback;
   }
@@ -278,6 +290,7 @@ export class MockStorageProvider implements StorageProvider {
       askResearch: [],
       focusAssessments: [],
       projectOverviewAssessments: [],
+      askSuggestionAssessments: [],
     };
     await this.writeDb(db);
   }
@@ -307,6 +320,7 @@ export class MockStorageProvider implements StorageProvider {
       askResearch: user?.askResearch ?? [],
       focusAssessments: user?.focusAssessments ?? [],
       projectOverviewAssessments: user?.projectOverviewAssessments ?? [],
+      askSuggestionAssessments: user?.askSuggestionAssessments ?? [],
     };
   }
 

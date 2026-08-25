@@ -410,6 +410,64 @@ describe('askGapswise', () => {
     expect(result.conclusion).toBeUndefined();
   });
 
+  it('uses the final streamed Ask envelope and normalizes lowercase proposal types', async () => {
+    const finalAnswer = 'A one-day CSV delay could weaken confidence in the pilot results.';
+    const intermediate = [
+      '```json',
+      '{',
+      '  "answer": "A partial',
+      'response",',
+      '  "outcome": "exploration",',
+      '  "contextProposals": []',
+      '}',
+      '```',
+    ].join('\n');
+    const finalEnvelope = `\`\`\`json\n${JSON.stringify({
+      answer: finalAnswer,
+      outcome: 'exploration',
+      contextProposals: [{
+        type: 'risk',
+        text: 'Consistent CSV delays could undermine pilot credibility.',
+        reasoning: 'The evaluation depends on timely data from all five properties.',
+        status: 'OPEN',
+      }],
+    }, null, 2)}\n\`\`\``;
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith('/api/internal/context-pack')) {
+        return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      }
+      if (target.endsWith('/internal/ask-route')) {
+        return jsonResponse({ route: 'internal_context', reason: 'Project risk question.' });
+      }
+      if (target.endsWith('/api/internal/focus-assessment')) return new Response('', { status: 404 });
+      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_streamed_json' });
+      if (target.endsWith('/run_sse')) {
+        return textResponse([
+          `data: ${JSON.stringify({ content: { parts: [{ text: intermediate }] } })}`,
+          `data: ${JSON.stringify({ content: { parts: [{ text: finalEnvelope }] } })}`,
+          '',
+        ].join('\n'));
+      }
+      throw new Error(`Unexpected fetch ${target}`);
+    }));
+
+    const result = await askGapswise({
+      userId: 'demo-user',
+      message: 'Could late CSV files undermine the pilot results?',
+    });
+
+    expect(result.answer).toBe(finalAnswer);
+    expect(result.answer).not.toContain('```json');
+    expect(result.contextProposals).toEqual([expect.objectContaining({
+      type: 'RISK',
+      text: 'Consistent CSV delays could undermine pilot credibility.',
+      reasoning: 'The evaluation depends on timely data from all five properties.',
+      status: 'OPEN',
+    })]);
+  });
+
   it('returns a structured conclusion only for a supplied open question target', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const target = String(url);

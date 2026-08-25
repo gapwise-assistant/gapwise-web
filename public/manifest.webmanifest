@@ -8,7 +8,7 @@
   "theme_color": "#0891b2",
   "icons": [
     {
-      "src": "/icons/gapwise-g-v2.png",
+      "src": "/icons/gapwise-g.png",
       "sizes": "1263x1245",
       "type": "image/png",
       "purpose": "any maskable"

@@ -9,6 +9,7 @@ interface IntegrationSettingsProps {
   onConnect: (name: GoogleIntegrationName) => void;
   onDisconnect: (name: GoogleIntegrationName) => void;
   onUpdate: (integration: GoogleIntegrationState) => void;
+  variant?: 'page' | 'drawer';
 }
 
 const iconByName = {
@@ -23,15 +24,54 @@ const labelByName = {
   drive: 'Google Drive',
 };
 
+const descriptionByName = {
+  calendar: 'Upcoming commitments',
+  gmail: 'Relevant messages',
+  drive: 'Selected documents',
+};
+
 export const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({
   integration,
   onConnect,
   onDisconnect,
   onUpdate,
+  variant = 'page',
 }) => {
   const isAvailable = integration.name === 'calendar';
   const isConnected = isAvailable && integration.status === 'connected';
-  const statusText = isConnected ? 'Connected' : 'Not connected';
+  const statusText = isConnected ? 'Connected' : isAvailable ? 'Connect' : 'Unavailable';
+
+  if (variant === 'drawer') {
+    return (
+      <article className="flex min-h-14 items-center gap-3 py-3">
+        <span className="shrink-0 text-cyan-300" aria-hidden="true">{iconByName[integration.name]}</span>
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-xs font-bold text-slate-200">{labelByName[integration.name]}</h3>
+          <p className="mt-0.5 truncate text-[11px] text-slate-500">{descriptionByName[integration.name]}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className={`text-[10px] font-semibold ${isConnected ? 'text-emerald-300' : 'text-slate-500'}`}>{statusText}</span>
+          {isConnected ? (
+            <button
+              type="button"
+              onClick={() => onDisconnect(integration.name)}
+              className="rounded-md px-1.5 py-1 text-[10px] font-semibold text-slate-500 transition-colors hover:text-rose-200"
+            >
+              Disconnect
+            </button>
+          ) : isAvailable ? (
+            <button
+              type="button"
+              onClick={() => onConnect(integration.name)}
+              className="rounded-md px-1.5 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-950/50"
+            >
+              Connect
+            </button>
+          ) : null}
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">

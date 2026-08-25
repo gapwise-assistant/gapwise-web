@@ -165,16 +165,20 @@ const askProposalTypeSchema = z.enum([
   'GOAL', 'KNOWN', 'CONSTRAINT', 'ASSUMPTION', 'DECISION', 'UNKNOWN',
   'EVIDENCE', 'EXPERIMENT', 'RISK', 'NEXT_ACTION', 'PREFERENCE',
 ]);
+const normalizedAskProposalTypeSchema = z.preprocess(
+  (value) => typeof value === 'string' ? value.trim().toUpperCase() : value,
+  askProposalTypeSchema,
+);
 const askProposalStatusSchema = z.enum(['OPEN', 'RESOLVED', 'DEFERRED']);
 const askContextProposalSchema = z.object({
-  type: askProposalTypeSchema,
+  type: normalizedAskProposalTypeSchema,
   text: z.string().trim().min(1).max(1200),
   reasoning: z.string().trim().min(1).max(1200).optional(),
   status: askProposalStatusSchema,
   sourceMessageId: z.string().trim().min(1).optional(),
 });
 const legacyAskProposalSchema = z.object({
-  type: askProposalTypeSchema,
+  type: normalizedAskProposalTypeSchema,
   text: z.string().trim().min(1).max(1200),
   reasoning: z.string().trim().min(1).max(1200).optional(),
   suggestedStatus: askProposalStatusSchema.optional(),
@@ -338,15 +342,20 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function structuredAskResponseFromText(text: string): AskResponse | undefined {
+function structuredAskJsonCandidates(text: string): string[] {
   const candidates = [text.trim()];
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
-  if (fenced) candidates.push(fenced);
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
+    const fenced = match[1]?.trim();
+    if (fenced) candidates.push(fenced);
+  }
   const objectStart = text.indexOf('{');
   const objectEnd = text.lastIndexOf('}');
   if (objectStart >= 0 && objectEnd > objectStart) candidates.push(text.slice(objectStart, objectEnd + 1));
+  return Array.from(new Set(candidates.filter(Boolean))).reverse();
+}
 
-  for (const candidate of candidates) {
+function structuredAskResponseFromText(text: string): AskResponse | undefined {
+  for (const candidate of structuredAskJsonCandidates(text)) {
     try {
       const parsed = askResponseSchema.safeParse(JSON.parse(candidate));
       if (parsed.success) {
@@ -368,6 +377,24 @@ function structuredAskResponseFromText(text: string): AskResponse | undefined {
     }
   }
   return undefined;
+}
+
+function answerFromStructuredAskText(text: string): string | undefined {
+  for (const candidate of structuredAskJsonCandidates(text)) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const answer = (parsed as Record<string, unknown>).answer;
+      if (typeof answer === 'string' && answer.trim()) return answer.trim();
+    } catch {
+      // Try the next streamed candidate.
+    }
+  }
+  return undefined;
+}
+
+function looksLikeStructuredAskText(text: string): boolean {
+  return /["']answer["']\s*:/.test(text) && /["']outcome["']\s*:/.test(text);
 }
 
 function webSourceId(url: string): string {
@@ -510,11 +537,22 @@ async function runAdkTurn(
   const textChunks = events.flatMap(textFromAdkEvent);
   const rawAnswer = compactAdkTextChunks(textChunks);
   if (!rawAnswer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
-  const responseEnvelope = structuredResponse
-    ? [...textChunks.map(structuredAskResponseFromText), structuredAskResponseFromText(rawAnswer)].find(
-      (candidate): candidate is AskResponse => Boolean(candidate)
-    )
-    : undefined;
+  const responseEnvelopes = structuredResponse
+    ? [...textChunks, rawAnswer]
+      .map(structuredAskResponseFromText)
+      .filter((candidate): candidate is AskResponse => Boolean(candidate))
+    : [];
+  const responseEnvelope = responseEnvelopes.at(-1);
+  const structuredAnswer = responseEnvelope?.answer
+    ?? (structuredResponse
+      ? [...textChunks, rawAnswer]
+        .map(answerFromStructuredAskText)
+        .filter((answer): answer is string => Boolean(answer))
+        .at(-1)
+      : undefined);
+  if (structuredResponse && !structuredAnswer && looksLikeStructuredAskText(rawAnswer)) {
+    throw new AskAgentError('Gemini returned an invalid structured Ask response.', { stage: 'gemini' });
+  }
   logAskDebug('adk-response', {
     status: response.status,
     eventCount: events.length,
@@ -522,7 +560,7 @@ async function runAdkTurn(
     structuredResponse: responseEnvelope,
   });
   return {
-    answer: responseEnvelope?.answer ?? rawAnswer,
+    answer: structuredAnswer ?? rawAnswer,
     ...(responseEnvelope ? { response: responseEnvelope } : {}),
     ...webSourcesFromAdkEvents(events),
   };

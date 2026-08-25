@@ -1,4 +1,5 @@
 import { StorageError } from '@/lib/storage/types';
+import { isLocalhostRequest as isLocalhostHostRequest } from '@/lib/runtime/localhost';
 
 export function isDemoMode(): boolean {
   return process.env.GAPSWISE_DEMO_MODE?.trim().toLowerCase() === 'true';
@@ -10,15 +11,7 @@ export function isDemoMode(): boolean {
  */
 export function isLocalhostRequest(request: Request): boolean {
   if (process.env.NODE_ENV === 'production') return false;
-  try {
-    const hostname = new URL(request.url).hostname;
-    return hostname === 'localhost'
-      || hostname === '127.0.0.1'
-      || hostname === '0.0.0.0'
-      || hostname === '::1';
-  } catch {
-    return false;
-  }
+  return isLocalhostHostRequest(request);
 }
 
 export function assertExternalServicesAllowed(service: string): void {

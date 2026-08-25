@@ -6,6 +6,8 @@ import { buildSuggestionRequestMessage, parseSuggestedQuestions } from '@/lib/as
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
+import { loadProjectForScope } from '@/lib/storage';
+import { getCachedAskSuggestions } from '@/lib/ask/suggestionsCache';
 
 export const runtime = 'nodejs';
 
@@ -49,32 +51,67 @@ export async function POST(request: Request) {
   }
 
   try {
-    if (isDemoMode() || parsed.data.projectId === CAREER_CONFLICT_DEMO_ID) {
-      const groups = await generateLocalAskSuggestions({
-        userId,
-        projectId: parsed.data.projectId,
-      });
-      return NextResponse.json({
-        topQuestions: groups.top,
-        otherQuestions: groups.other,
-        generatedBy: 'local-context',
-      });
-    }
-
-    const result = await askGapswise({
+    const loaded = await loadProjectForScope(userId, parsed.data.projectId);
+    const scopeKey = loaded.scope.type === 'project'
+      ? `project:${loaded.scope.projectId}`
+      : 'everything';
+    const cached = await getCachedAskSuggestions({
       userId,
-      projectId: parsed.data.projectId,
-      message: buildSuggestionRequestMessage(parsed.data.scopeLabel),
-      structuredResponse: false,
+      project: loaded.project,
+      ...(loaded.scope.type === 'project' ? { projectId: loaded.scope.projectId } : {}),
+      scopeKey,
+      generate: async () => {
+        if (isDemoMode() || parsed.data.projectId === CAREER_CONFLICT_DEMO_ID) {
+          const groups = await generateLocalAskSuggestions({
+            userId,
+            projectId: parsed.data.projectId,
+          });
+          return { suggestions: groups, generatedBy: 'local-context', cacheable: true };
+        }
+
+        try {
+          const result = await askGapswise({
+            userId,
+            projectId: parsed.data.projectId,
+            message: buildSuggestionRequestMessage(parsed.data.scopeLabel),
+            structuredResponse: false,
+          });
+          const suggestions = parseSuggestedQuestions(result.answer);
+          if (!suggestions.top.length && !suggestions.other.length) {
+            throw new AskAgentError('Gemini returned no structured contextual suggestions.', { stage: 'gemini' });
+          }
+          return { suggestions, generatedBy: 'gapswise-agent', cacheable: true };
+        } catch (error) {
+          const stage = failureStage(error);
+          const errorMessage = error instanceof Error ? error.message : 'unknown-error';
+          const fallback = await generateLocalAskSuggestions({
+            userId,
+            projectId: parsed.data.projectId,
+          });
+          console.error(
+            '[Gapwise Ask suggestions]',
+            `stage=${stage}`,
+            'fallback=local-context',
+            `hasProjectScope=${Boolean(parsed.data.projectId)}`,
+            `scopeLabelLength=${parsed.data.scopeLabel.length}`,
+            `message=${errorMessage.replace(/\s+/g, ' ').slice(0, 240)}`,
+          );
+          return {
+            suggestions: fallback,
+            generatedBy: 'local-fallback',
+            cacheable: false,
+            warning: 'Using saved context for these suggestions while AI is unavailable.',
+            stage,
+          };
+        }
+      },
     });
-    const suggestions = parseSuggestedQuestions(result.answer);
-    if (!suggestions.top.length && !suggestions.other.length) {
-      throw new AskAgentError('Gemini returned no structured contextual suggestions.', { stage: 'gemini' });
-    }
     return NextResponse.json({
-      topQuestions: suggestions.top,
-      otherQuestions: suggestions.other,
-      generatedBy: 'gapswise-agent',
+      topQuestions: cached.top,
+      otherQuestions: cached.other,
+      generatedBy: cached.generatedBy,
+      ...(cached.warning ? { warning: cached.warning } : {}),
+      ...(cached.stage ? { stage: cached.stage } : {}),
     });
   } catch (error) {
     const stage = failureStage(error);

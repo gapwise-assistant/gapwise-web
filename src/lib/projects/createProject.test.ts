@@ -34,5 +34,13 @@ describe('createProjectFromInput', () => {
         source_refs: [],
       }),
     ]);
+    expect(project.historyEvents).toEqual([{
+      id: 'project_find-a-new-job_1786449600000:history:project_started:2026-08-11T12:00:00.000Z',
+      projectId: 'project_find-a-new-job_1786449600000',
+      createdAt: '2026-08-11T12:00:00.000Z',
+      type: 'project_started',
+      title: 'Project started',
+      summary: 'Created this project with its initial goal.',
+    }]);
   });
 });

@@ -124,7 +124,8 @@ async function resolutionMatchesPendingDecision(
     decision
       && decision.type === 'DECISION'
       && decision.status === 'RESOLVED'
-      && normalizedAnswer(decision.text) === normalizedAnswer(pendingText),
+      && typeof decision.decision_outcome === 'string'
+      && normalizedAnswer(decision.decision_outcome) === normalizedAnswer(pendingText),
   );
 }
 

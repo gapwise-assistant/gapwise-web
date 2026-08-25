@@ -127,6 +127,16 @@ describe('Attention Engine and Daily Brief', () => {
     expect(forced.id).toBe(first.id);
   });
 
+  it('invalidates the cached brief when semantic project state changes', () => {
+    const project = createGoldenDemoProject();
+    const first = generateDailyBrief({ userId: 'demo-user', project, memories: [], period: '2026-08-10' });
+
+    project.nodes[0].text = `${project.nodes[0].text} with a confirmed pilot scope`;
+    const second = generateDailyBrief({ userId: 'demo-user', project, memories: [], period: '2026-08-10' });
+
+    expect(second).not.toBe(first);
+  });
+
   it('ranks an important Calendar meeting in 60 minutes highly', () => {
     const project = createGoldenDemoProject();
     const now = new Date('2026-08-11T20:00:00Z');

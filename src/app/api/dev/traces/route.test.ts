@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { recordTrace } from '@/lib/observability/trace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { POST } from './route';
+import { GET, POST } from './route';
 
 vi.mock('@/lib/observability/trace', () => ({
   latestDecisionMapActivity: vi.fn(),
@@ -56,5 +56,24 @@ describe('POST /api/dev/traces', () => {
       contextIds: ['goal'],
     }));
     await expect(response.json()).resolves.toEqual({ id: 'trace_decision_map' });
+  });
+
+  it('rejects trace writes outside localhost', async () => {
+    const response = await POST(new NextRequest('https://preview.gapwise.example/api/dev/traces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }));
+
+    expect(response.status).toBe(404);
+    expect(requireAuthenticatedUserId).not.toHaveBeenCalled();
+    expect(recordTrace).not.toHaveBeenCalled();
+  });
+
+  it('rejects trace reads outside localhost', async () => {
+    const response = await GET(new NextRequest('https://preview.gapwise.example/api/dev/traces?userId=trace-user'));
+
+    expect(response.status).toBe(404);
+    expect(requireAuthenticatedUserId).not.toHaveBeenCalled();
   });
 });

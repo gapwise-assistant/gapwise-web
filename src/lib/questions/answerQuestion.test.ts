@@ -42,6 +42,8 @@ describe('answerQuestion', () => {
     });
     expect(result.context.history.at(-1)).toMatchObject({
       answer: 'The primary user is an independent hackathon builder.',
+      nodeId: 'unknown_target_user',
+      projectId: owner.id,
     });
     expect(saveProject).toHaveBeenCalledWith('demo-user', result.context);
   });
@@ -133,6 +135,65 @@ describe('answerQuestion', () => {
       text: 'The primary user is an independent hackathon builder.',
     }));
     expect(saveProject).toHaveBeenCalledWith('demo-user', result.context);
+  });
+
+  it('edits by the canonical history node when presentation wording changes', async () => {
+    const owner = createGoldenDemoProject();
+    const answered = resolveGap(
+      owner,
+      'unknown_target_user',
+      'The primary user is an independent hackathon builder.',
+    );
+    const historyItem = answered.history.at(-1)!;
+    const questionNode = answered.nodes.find((node) => node.id === historyItem.nodeId)!;
+    questionNode.text = 'Which audience is the project serving?';
+    vi.mocked(listProjects).mockResolvedValue([answered]);
+
+    const result = await editAnsweredQuestion({
+      userId: 'demo-user',
+      projectId: answered.id,
+      historyTimestamp: historyItem.timestamp,
+      nodeId: questionNode.id,
+      question: 'Which audience is the project serving?',
+      previousAnswer: historyItem.answer,
+      answer: 'The project serves focused technical founders.',
+    });
+
+    expect(result.context.history.filter((item) => item.nodeId === questionNode.id)).toHaveLength(1);
+    expect(result.context.history.find((item) => item.nodeId === questionNode.id)).toMatchObject({
+      answer: 'The project serves focused technical founders.',
+      nodeId: questionNode.id,
+    });
+  });
+
+  it('keeps editing older history records working through the legacy fallback', async () => {
+    const owner = createGoldenDemoProject();
+    const answered = resolveGap(
+      owner,
+      'unknown_target_user',
+      'The primary user is an independent hackathon builder.',
+    );
+    const historyItem = answered.history.at(-1)!;
+    const legacyQuestion = historyItem.question;
+    const questionNode = answered.nodes.find((node) => node.id === historyItem.nodeId)!;
+    delete historyItem.nodeId;
+    questionNode.text = 'Which audience is the project serving?';
+    vi.mocked(listProjects).mockResolvedValue([answered]);
+
+    const result = await editAnsweredQuestion({
+      userId: 'demo-user',
+      projectId: answered.id,
+      historyTimestamp: historyItem.timestamp,
+      nodeId: questionNode.id,
+      question: legacyQuestion,
+      previousAnswer: historyItem.answer,
+      answer: 'The project serves technical founders.',
+    });
+
+    expect(result.context.history.find((item) => item.timestamp === historyItem.timestamp)).toMatchObject({
+      answer: 'The project serves technical founders.',
+      nodeId: questionNode.id,
+    });
   });
 
   it('reclassifies the linked understanding when an answer is edited', async () => {

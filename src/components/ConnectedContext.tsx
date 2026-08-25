@@ -11,12 +11,14 @@ interface ConnectedContextProps {
   userId: string;
   project: Project;
   onImportSources: (signals: GoogleWorkspaceSignals) => void;
+  variant?: 'page' | 'drawer';
 }
 
 export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   userId,
   project,
   onImportSources,
+  variant = 'page',
 }) => {
   const [integrations, setIntegrations] = useState<GoogleIntegrationState[]>([]);
   const [message, setMessage] = useState('');
@@ -78,30 +80,22 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   };
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-extrabold text-slate-100 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-300" />
+          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-100">
+            <ShieldCheck className="h-4 w-4 text-emerald-300" />
             Connections
           </h2>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
             {demoMode
               ? 'Local fixtures are active. No Google account or API is being contacted.'
               : 'Connect trusted accounts Gapwise can read from. Calendar uses the real OAuth connection.'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleSync}
-          className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-200 hover:text-cyan-300 flex items-center gap-2"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh connections
-        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <div className={variant === 'drawer' ? 'divide-y divide-slate-800/80' : 'grid grid-cols-1 gap-3 lg:grid-cols-3'}>
         {integrations.map((integration) => (
           <IntegrationSettings
             key={integration.name}
@@ -109,11 +103,21 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
             onConnect={handleConnect}
             onDisconnect={(name) => mutate({ action: 'disconnect', name })}
             onUpdate={(updated) => mutate({ action: 'update', integration: updated })}
+            variant={variant}
           />
         ))}
       </div>
 
+      <button
+        type="button"
+        onClick={handleSync}
+        className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition-colors hover:border-cyan-700 hover:text-cyan-200"
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+        Refresh connections
+      </button>
+
       {message && <p className="text-xs text-emerald-300">{message}</p>}
-    </section>
+    </div>
   );
 };

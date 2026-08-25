@@ -5,7 +5,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { getCachedFocusAssessment } from '@/lib/focus/focusCache';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import {
-  getCachedProjectOverviewAssessment,
+  getProjectOverviewAssessmentWithMetadata,
 } from '@/lib/overview/projectOverviewCache';
 import { loadProjectForScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
       // Overview can still be assessed without the tactical Focus input.
     }
 
-    const assessment = await getCachedProjectOverviewAssessment(
+    const result = await getProjectOverviewAssessmentWithMetadata(
       userId,
       project,
       project.historyEvents ?? [],
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       contextPack,
     );
 
-    return NextResponse.json({ assessment });
+    return NextResponse.json(result);
   } catch (error) {
     const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED'
       ? 403

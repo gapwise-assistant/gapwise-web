@@ -15,12 +15,13 @@ import {
   FirestoreNode,
   FirestoreSource,
   FocusAssessmentCacheRecord,
+  AskSuggestionsCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -263,6 +264,21 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'projectOverviewAssessments', record);
   }
 
+  async getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null> {
+    try {
+      const snapshot = await this.collection(userId, 'askSuggestionAssessments').doc(cacheId).get();
+      return snapshot.exists
+        ? this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!)
+        : null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
+    await this.save(userId, 'askSuggestionAssessments', record);
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return this.list<FirestoreFeedback>(userId, 'feedback');
   }
@@ -315,6 +331,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'askResearch',
       'focusAssessments',
       'projectOverviewAssessments',
+      'askSuggestionAssessments',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();

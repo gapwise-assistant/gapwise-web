@@ -7,13 +7,12 @@ import { Today } from '@/components/Today';
 import { AskGapswise } from '@/components/AskGapswise';
 import type { ContextEntry } from '@/components/ContextInbox';
 import { ScopeDestination } from '@/components/YouDestination';
-import { SettingsDestination } from '@/components/SettingsDestination';
+import { SettingsDrawer } from '@/components/SettingsDrawer';
 import { IdontKnowModal, type IdontKnowStrategyResult } from '@/components/IdontKnowModal';
 import { AnswerQuestionModal, AnswerQuestionTarget } from '@/components/AnswerQuestionModal';
 import { TracePanel } from '@/components/dev/TracePanel';
 import { Project, UserMemoryProfile, CandidateGap } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
-import { AskSource } from '@/lib/ask/adkClient';
 import type { AskTarget } from '@/types/ask';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
@@ -408,6 +407,7 @@ export default function Home() {
   const [memories, setMemories] = useState<DurableMemory[]>([]);
   const [feedbackEvents, setFeedbackEvents] = useState<FeedbackEvent[]>([]);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [askInitialPrompt, setAskInitialPrompt] = useState('');
   const [askNewChatPrompt, setAskNewChatPrompt] = useState<{ id: string; text: string; target?: AskTarget } | null>(null);
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
@@ -426,6 +426,7 @@ export default function Home() {
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
   const [idontKnowProjectId, setIdontKnowProjectId] = useState<string | null>(null);
   const [answerTarget, setAnswerTarget] = useState<AnswerQuestionTarget | null>(null);
+  const [answerTargetError, setAnswerTargetError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [storageMessage, setStorageMessage] = useState('');
   const [contextEntry, setContextEntry] = useState<ContextEntry | null>(null);
@@ -896,6 +897,7 @@ export default function Home() {
     answerSuggestion?: TodayQuestion['answerSuggestion'],
     presentation?: Pick<TodayQuestion, 'presentationSummary'>,
   ) => {
+    setAnswerTargetError('');
     const owner = projects.find((candidate) => candidate.nodes.some((item) => item.id === node.id))
       ?? (generalContext.nodes.some((item) => item.id === node.id) ? generalContext : undefined);
     const questionContext: TodayQuestion = {
@@ -980,8 +982,36 @@ export default function Home() {
   }, [handleSelectProject, projects]);
 
   const openAnsweredQuestion = useCallback((item: Project['history'][number], projectId: string) => {
-    const owner = projects.find((candidate) => candidate.id === projectId);
-    const node = owner?.nodes.find((candidate) => candidate.text === item.question || item.question.includes(candidate.text));
+    const requestedProjectId = item.projectId ?? projectId;
+    const ownerByHistoryIdentity = projects.find((candidate) => candidate.history.some((historyItem) =>
+      historyItem.timestamp === item.timestamp
+      && historyItem.question === item.question
+      && historyItem.answer === item.answer
+    ));
+    const ownerByNodeIdentity = item.nodeId
+      ? projects.find((candidate) => candidate.nodes.some((node) => node.id === item.nodeId))
+      : undefined;
+    const owner = requestedProjectId === GENERAL_CONTEXT_ID
+      ? generalContext
+      : requestedProjectId === '__everything__'
+        ? ownerByNodeIdentity ?? ownerByHistoryIdentity
+        : projects.find((candidate) => candidate.id === requestedProjectId)
+        ?? (project.id === requestedProjectId ? project : undefined);
+    const node = owner?.nodes.find((candidate) => candidate.id === item.nodeId)
+      ?? (!item.nodeId
+        ? owner?.nodes.find((candidate) => candidate.text === item.question || item.question.includes(candidate.text))
+        : undefined);
+    if (
+      !owner
+      || typeof item.answer !== 'string'
+      || !item.answer.trim()
+      || (Boolean(item.nodeId) && !node)
+    ) {
+      setAnswerTarget(null);
+      setAnswerTargetError('The saved response could not be loaded.');
+      return;
+    }
+    setAnswerTargetError('');
     const questionContext = node ? {
       id: `question_${node.id}`,
       question: node.text,
@@ -992,11 +1022,11 @@ export default function Home() {
     const decision = owner && node ? findDecisionForNode(owner, node.id) : null;
     const decisionWorkspace = owner && node ? buildDecisionWorkspace(owner, node.id) : null;
     setAnswerTarget({
-      nodeId: node?.id,
+      nodeId: item.nodeId ?? node?.id,
       question: item.question,
       initialAnswer: item.answer,
       historyTimestamp: item.timestamp,
-      projectId,
+      projectId: requestedProjectId,
       mode: 'edit',
       decisionNodeId: decision?.id,
       decisionTitle: decision?.text,
@@ -1018,7 +1048,7 @@ export default function Home() {
         };
       })() : {}),
     });
-  }, [projects]);
+  }, [generalContext, project, projects]);
 
   const reopenAnsweredQuestion = useCallback(async (question: TodayQuestion) => {
     const owner = projects.find((candidate) => candidate.nodes.some((node) => question.sourceNodeIds.includes(node.id)))
@@ -1037,6 +1067,7 @@ export default function Home() {
           userId,
           projectId: requestedProjectId,
           historyTimestamp: question.historyTimestamp,
+          nodeId: question.sourceNodeIds.find((id) => !id.startsWith('gcal_')),
           question: graphQuestion,
           previousAnswer: question.initialAnswer ?? '',
         }),
@@ -1091,6 +1122,7 @@ export default function Home() {
         userId,
         projectId: answerTarget.projectId,
         historyTimestamp: answerTarget.historyTimestamp,
+        nodeId: answerTarget.nodeId,
         question: answerTarget.question,
         previousAnswer: answerTarget.initialAnswer,
         answer,
@@ -1277,7 +1309,8 @@ export default function Home() {
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
-        onOpenSettings={() => setActiveTab('settings')}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        isSettingsOpen={isSettingsOpen}
         accountLabel={auth.user?.displayName}
         demoMode={demoMode}
       />
@@ -1290,6 +1323,13 @@ export default function Home() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
             <div className="rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-xs text-amber-200">
               {storageMessage}
+            </div>
+          </div>
+        )}
+        {answerTargetError && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+            <div role="alert" className="rounded-xl border border-rose-800 bg-rose-950/40 px-4 py-3 text-xs text-rose-200">
+              {answerTargetError}
             </div>
           </div>
         )}
@@ -1311,6 +1351,8 @@ export default function Home() {
                   ?? question.projectId
                   ?? project.id;
                 openAnsweredQuestion({
+                  nodeId: question.sourceNodeIds.find((id) => !id.startsWith('gcal_')),
+                  projectId: question.projectId,
                   question: question.question,
                   answer: question.initialAnswer ?? '',
                   timestamp: question.historyTimestamp,
@@ -1356,17 +1398,6 @@ export default function Home() {
             onNewChatPromptOpened={() => setAskNewChatPrompt(null)}
             onProjectContextChanged={refreshProjectData}
             onProjectUpdated={refreshProjectData}
-            onViewSource={(source: AskSource) => {
-              if (source.kind === 'source') {
-                openContext({ sourceId: source.id, tab: 'recent' });
-                return;
-              }
-              if (source.kind === 'calendar') {
-                setActiveTab('settings');
-                return;
-              }
-              setActiveTab('scope');
-            }}
           />
         )}
         {activeTab === 'scope' && (
@@ -1403,8 +1434,12 @@ export default function Home() {
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
           />
         )}
-        {activeTab === 'settings' && (
-          <SettingsDestination
+        </>}
+      </main>
+
+      {isSettingsOpen && (
+        <SettingsDrawer
+          onClose={() => setIsSettingsOpen(false)}
             userId={userId}
             accountLabel={auth.user?.displayName}
             scope={scope}
@@ -1422,10 +1457,8 @@ export default function Home() {
             onUpdateProfile={handleUpdateProfile}
             onUpdateMemories={handleUpdateMemories}
             onSignOut={() => { void auth.signOut(); }}
-          />
-        )}
-        </>}
-      </main>
+        />
+      )}
 
       {idontKnowGap && (
         <IdontKnowModal
@@ -1451,7 +1484,10 @@ export default function Home() {
             setAnswerTarget(null);
             viewDecisionGraph(nodeId);
           }}
-          onClose={() => setAnswerTarget(null)}
+          onClose={() => {
+            setAnswerTarget(null);
+            setAnswerTargetError('');
+          }}
         />
       )}
       {decisionTarget && decisionProject && (

@@ -106,4 +106,46 @@ describe('AnswerQuestionModal', () => {
 
     expect(html).toContain('I don&#x27;t know yet');
   });
+
+  it('renders the complete saved answer, including multiline and encoded text, on the first render', () => {
+    const answer = 'First line\nSecond line with a non-breaking space\u00a0and <encoded> & text.';
+    const html = renderToStaticMarkup(
+      <AnswerQuestionModal
+        target={{
+          projectId: 'project_demo',
+          nodeId: 'question_demo',
+          historyTimestamp: '2026-08-25T12:00:00.000Z',
+          question: 'What should the project confirm?',
+          initialAnswer: answer,
+          mode: 'edit',
+        }}
+        onSubmit={vi.fn(async () => undefined)}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('First line\nSecond line with a non-breaking space');
+    expect(html).toContain('&lt;encoded&gt; &amp; text.');
+    expect(html).toMatch(/&nbsp;|\u00a0/);
+  });
+
+  it('shows an explicit error instead of an empty editor for a missing saved answer', () => {
+    const html = renderToStaticMarkup(
+      <AnswerQuestionModal
+        target={{
+          projectId: 'project_demo',
+          nodeId: 'question_demo',
+          historyTimestamp: '2026-08-25T12:00:00.000Z',
+          question: 'What should the project confirm?',
+          initialAnswer: '',
+          mode: 'edit',
+        }}
+        onSubmit={vi.fn(async () => undefined)}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('The saved response could not be loaded.');
+    expect(html).not.toContain('id="question-answer"');
+  });
 });

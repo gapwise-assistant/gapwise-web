@@ -1,4 +1,4 @@
-import { Project } from '@/types/clarity';
+import { Project, ProjectHistoryEvent } from '@/types/clarity';
 
 export interface CreateProjectInput {
   name: string;
@@ -27,6 +27,14 @@ export function createProjectFromInput(input: CreateProjectInput, createdAt = ne
   const deadline = input.deadline?.trim();
   const projectId = projectIdFor({ ...input, name: trimmedName, goal: trimmedGoal }, createdAt);
   const goalNodeId = `goal_${projectId}`;
+  const projectStarted: ProjectHistoryEvent = {
+    id: `${projectId}:history:project_started:${createdAt}`,
+    projectId,
+    createdAt,
+    type: 'project_started',
+    title: 'Project started',
+    summary: 'Created this project with its initial goal.',
+  };
 
   return {
     id: projectId,
@@ -58,6 +66,6 @@ export function createProjectFromInput(input: CreateProjectInput, createdAt = ne
     sources: [],
     active_question: null,
     history: [],
-    historyEvents: [],
+    historyEvents: [projectStarted],
   };
 }

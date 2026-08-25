@@ -74,6 +74,8 @@ export function resolveGap(
     answer: resolutionText,
     timestamp: now,
     graph_diff_summary: `Resolved "${gap.text}" -> ${classification.type}: "${classification.text}"`,
+    nodeId: gap.id,
+    projectId: updated.id,
   });
 
   updated.clarity_score = calculateClarityScore(updated);

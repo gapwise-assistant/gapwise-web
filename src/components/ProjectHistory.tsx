@@ -29,6 +29,30 @@ function dateLabel(value: string): string {
     : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
 }
 
+function timestampLabel(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+}
+
+function displayOnlyProjectStartedEvent(project: Project): ProjectHistoryEvent {
+  return {
+    id: `${project.id}:history:project_started:${project.created_at}:display`,
+    projectId: project.id,
+    createdAt: project.created_at,
+    type: 'project_started',
+    title: 'Project started',
+    summary: 'Created this project with its initial goal.',
+  };
+}
+
 function nodeType(project: Project, nodeId?: string): string | undefined {
   if (!nodeId) return undefined;
   return project.nodes.find((node) => node.id === nodeId)?.type.replace('_', ' ');
@@ -99,11 +123,13 @@ function HistoryEventCard({
     : event.changes ?? [];
 
   return (
-    <article className="relative rounded-xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5">
-      <span className="absolute -left-[1.56rem] top-5 h-3 w-3 rounded-full border-2 border-cyan-400 bg-slate-950" aria-hidden="true" />
+    <article className={`relative rounded-xl border bg-slate-900/80 p-4 sm:p-5 ${event.type === 'project_started' ? 'border-emerald-800/80' : 'border-slate-800'}`}>
+      <span className={`absolute -left-[1.56rem] top-5 h-3 w-3 rounded-full border-2 bg-slate-950 ${event.type === 'project_started' ? 'border-emerald-400' : 'border-cyan-400'}`} aria-hidden="true" />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
+          {event.type === 'project_started' && <span className="mb-1 inline-flex rounded-full border border-emerald-700/80 bg-emerald-950/50 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-emerald-300">Project start</span>}
           <h3 className="text-sm font-extrabold text-slate-100">{event.title}</h3>
+          <time dateTime={event.createdAt} className="mt-1 block text-xs font-medium text-slate-500">{timestampLabel(event.createdAt)}</time>
           {source && <p className="mt-1 text-xs font-semibold text-cyan-300">{source}</p>}
         </div>
         {eventHasDetails(event) && (
@@ -183,8 +209,14 @@ export function ProjectHistory({ project, userId, onNavigateToSource }: ProjectH
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [sharedFocus, setSharedFocus] = useState<ProjectHistoryFocus | null | undefined>(undefined);
   const events = useMemo(
-    () => [...(project.historyEvents ?? [])].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    [project.historyEvents],
+    () => {
+      const persisted = [...(project.historyEvents ?? [])];
+      if (!persisted.some((event) => event.type === 'project_started')) {
+        persisted.push(displayOnlyProjectStartedEvent(project));
+      }
+      return persisted.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    },
+    [project],
   );
   React.useEffect(() => {
     if (!userId) {
