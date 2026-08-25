@@ -138,6 +138,64 @@ describe('AI context graph analysis', () => {
     expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('extraction_basis');
   });
 
+  it('does not persist an AI-derived Ask risk before proposal confirmation', async () => {
+    const riskText = 'If CSV files from one hotel consistently arrive a day late, pilot credibility could be undermined.';
+    const genAI = mockGenAI({
+      summary: 'The user is asking whether a hypothetical delay is worth tracking.',
+      operations: [{
+        op: 'ADD_CONTEXT',
+        nodeType: 'RISK',
+        text: riskText,
+        grounding: 'AI_DERIVED',
+        confidence: 0.9,
+        impact: 0.9,
+      }, {
+        op: 'ADD_CONTEXT',
+        nodeType: 'KNOWN',
+        text: 'The pilot currently receives CSV files from one hotel.',
+        grounding: 'SOURCE_ASSERTED',
+        confidence: 0.95,
+        impact: 0.7,
+      }],
+      relationships: [],
+    });
+
+    const beforeAdd = await processContextSource(projectWithGoal('Launch the Harbor Hotels pilot.'), input({
+      sourceId: 'src_hypothetical_ask',
+      semanticRole: 'ask_message',
+      content: 'The pilot currently receives CSV files from one hotel. If CSV files from one hotel consistently arrive a day late, could that undermine pilot credibility enough to track?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(beforeAdd.project.nodes.filter((node) => node.type === 'RISK')).toHaveLength(0);
+    expect(beforeAdd.project.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'KNOWN',
+        text: 'The pilot currently receives CSV files from one hotel.',
+      }),
+    ]));
+    expect(beforeAdd.project.sources.find((source) => source.id === 'src_hypothetical_ask')?.derived_node_ids).toHaveLength(1);
+
+    const afterAdd = await ingestContextSource(beforeAdd.project, {
+      sourceId: 'src_confirmed_proposal',
+      filename: 'Ask proposal.txt',
+      type: 'note',
+      content: riskText,
+      origin: 'user',
+      semanticRole: 'user_confirmed_proposal',
+      processingStatus: 'completed',
+      derivedNodes: [{
+        candidateRef: 'new:0',
+        type: 'RISK',
+        text: riskText,
+        status: 'OPEN',
+        confidence: 0.9,
+        impact: 0.9,
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(afterAdd.nodes.filter((node) => node.type === 'RISK' && node.text === riskText)).toHaveLength(1);
+  });
+
   it('does not persist a model-proposed action when the source is only a focus request', async () => {
     const genAI = mockGenAI({
       summary: 'The user asks Gapwise what to focus on.',

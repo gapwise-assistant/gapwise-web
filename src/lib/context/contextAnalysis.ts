@@ -89,13 +89,16 @@ const patchContextNodeTypeSchema = z.enum([
   'ASSUMPTION',
 ]);
 
+const operationGroundingSchema = z.enum(['SOURCE_ASSERTED', 'AI_DERIVED']);
+
 const projectPatchOperationSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('ADD_CONTEXT'),
     nodeType: patchContextNodeTypeSchema,
     text: z.string().min(1),
     confidence: z.number().min(0).max(1),
-    impact: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1).default(0.7),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
     targetNodeId: z.string().optional(),
     nodeId: z.string().optional(),
@@ -104,7 +107,8 @@ const projectPatchOperationSchema = z.discriminatedUnion('op', [
     op: z.literal('OPEN_DECISION'),
     text: z.string().min(1),
     confidence: z.number().min(0).max(1),
-    impact: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1).default(0.7),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
     targetNodeId: z.string().optional(),
     nodeId: z.string().optional(),
@@ -114,13 +118,15 @@ const projectPatchOperationSchema = z.discriminatedUnion('op', [
     targetNodeId: z.string().min(1),
     outcome: z.string().min(1),
     confidence: z.number().min(0).max(1),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
   }),
   z.object({
     op: z.literal('OPEN_UNKNOWN'),
     text: z.string().min(1),
     confidence: z.number().min(0).max(1),
-    impact: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1).default(0.7),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
     targetNodeId: z.string().optional(),
     nodeId: z.string().optional(),
@@ -130,13 +136,15 @@ const projectPatchOperationSchema = z.discriminatedUnion('op', [
     targetNodeId: z.string().min(1),
     answer: z.string().min(1),
     confidence: z.number().min(0).max(1),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
   }),
   z.object({
     op: z.literal('ADD_ACTION'),
     text: z.string().min(1),
     confidence: z.number().min(0).max(1),
-    impact: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1).default(0.7),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
     targetNodeId: z.string().optional(),
     nodeId: z.string().optional(),
@@ -144,6 +152,7 @@ const projectPatchOperationSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('NO_CHANGE'),
     confidence: z.number().min(0).max(1).optional(),
+    grounding: operationGroundingSchema.optional(),
     operationRef: z.string().optional(),
   }),
 ]);
@@ -369,6 +378,10 @@ function filterAiDerivedAskNodes(
 ): ContextAnalysis {
   if (input.semanticRole !== 'ask_message') return analysis;
 
+  // Ask operations are model-derived unless the model explicitly identifies
+  // them as directly stated by the user. Keep this gate before the shared
+  // ProjectPatch executor so hypothetical reasoning can only become a
+  // proposal, never canonical project state.
   const keptRefs = new Set(
     analysis.nodes
       .filter((node) => node.grounding === 'SOURCE_ASSERTED')
@@ -376,12 +389,28 @@ function filterAiDerivedAskNodes(
       .filter((ref): ref is string => Boolean(ref)),
   );
   const referenceIsKept = (ref: string): boolean => !ref.startsWith('new:') || keptRefs.has(ref);
+  const retainedOperationRefs = new Set(
+    analysis.operations
+      .map((operation, index) => operation.grounding === 'SOURCE_ASSERTED'
+        ? (operation.operationRef ?? `op:${index}`)
+        : undefined)
+      .filter((ref): ref is string => Boolean(ref)),
+  );
+  const operationReferenceIsKept = (ref: string): boolean => {
+    if (ref.startsWith('op:')) return retainedOperationRefs.has(ref);
+    if (ref.startsWith('new:')) return retainedOperationRefs.has(ref) || keptRefs.has(ref);
+    return true;
+  };
 
   return {
     ...analysis,
+    operations: analysis.operations.filter((operation) => operation.grounding === 'SOURCE_ASSERTED'),
     nodes: analysis.nodes.filter((node) => node.grounding === 'SOURCE_ASSERTED'),
     relationships: analysis.relationships.filter((relationship) =>
-      referenceIsKept(relationship.source_ref) && referenceIsKept(relationship.target_ref)
+      referenceIsKept(relationship.source_ref)
+      && referenceIsKept(relationship.target_ref)
+      && operationReferenceIsKept(relationship.source_ref)
+      && operationReferenceIsKept(relationship.target_ref)
     ),
     reconciliation: analysis.reconciliation.filter((item) =>
       Boolean(item.candidate_ref && keptRefs.has(item.candidate_ref))
@@ -443,10 +472,16 @@ function analysisOperations(analysis: ContextAnalysis): ProjectPatchOperation[] 
   const operations = analysis.operations.length > 0
     ? analysis.operations
     : legacyNodesToOperations(analysis);
-  return operations.map((operation, index) => ({
-    ...operation,
-    operationRef: operation.operationRef ?? `op:${index}`,
-  }));
+  return operations.map((operation, index) => {
+    const persistableOperation = {
+      ...operation,
+    } as ProjectPatchOperation & { grounding?: z.infer<typeof operationGroundingSchema> };
+    delete persistableOperation.grounding;
+    return {
+      ...persistableOperation,
+      operationRef: operation.operationRef ?? `op:${index}`,
+    };
+  });
 }
 
 function compactNode(node: ClarityNode): Record<string, unknown> {
@@ -592,6 +627,7 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     ...(input.semanticRole === 'ask_message' ? [
       'Semantic source role: USER ASK MESSAGE.',
       'Treat the current user message as first-class context. Operations must represent only clear project facts, uncertainties, preferences, choices, constraints, and commitments stated by the user. Reasoning-only content must use NO_CHANGE and must not become canonical project state.',
+      'For every operation, include grounding: SOURCE_ASSERTED when the user directly states, reports, confirms, rejects, or commits to the operation; use AI_DERIVED when the operation is inferred from a hypothetical, analytical, comparative, or advice-seeking part of the message. Only SOURCE_ASSERTED operations will be persisted from an Ask message.',
     ] : []),
     `Current compact project state, relevance-ranked for this source: ${projectSnapshot(project, input.content)}`,
   ].join('\n');
@@ -606,6 +642,13 @@ export async function analyzeContextItem(
   const genAI = input.genAI ?? getVertexGenAIClient();
   const reasoningProject = projectForReasoning(project);
   const prompt = analysisPrompt(input, reasoningProject);
+  const askOperationContract = input.semanticRole === 'ask_message';
+  const operationGroundingProperties = askOperationContract
+    ? { grounding: { type: Type.STRING, enum: ['SOURCE_ASSERTED', 'AI_DERIVED'] } }
+    : {};
+  const operationRequired = (fields: string[]): string[] => askOperationContract
+    ? [...fields, 'grounding']
+    : fields;
   const parts: Array<Record<string, unknown>> = [];
   if (input.storageUrl?.startsWith('gs://')) {
     parts.push({
@@ -632,18 +675,62 @@ export async function analyzeContextItem(
           operations: {
             type: Type.ARRAY,
             items: {
-              type: Type.OBJECT,
-              required: ['op', 'confidence'],
-              properties: {
-                op: { type: Type.STRING, enum: ['ADD_CONTEXT', 'OPEN_DECISION', 'RESOLVE_DECISION', 'OPEN_UNKNOWN', 'RESOLVE_UNKNOWN', 'ADD_ACTION', 'NO_CHANGE'] },
-                nodeType: { type: Type.STRING, enum: ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK', 'ASSUMPTION'] },
-                targetNodeId: { type: Type.STRING },
-                outcome: { type: Type.STRING },
-                text: { type: Type.STRING },
-                answer: { type: Type.STRING },
-                impact: { type: Type.NUMBER },
-                confidence: { type: Type.NUMBER },
-              },
+              anyOf: [
+                {
+                  type: Type.OBJECT,
+                  required: operationRequired(['op', 'nodeType', 'text', 'confidence', 'impact']),
+                  properties: {
+                    op: { type: Type.STRING, enum: ['ADD_CONTEXT'] },
+                    nodeType: { type: Type.STRING, enum: ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK', 'ASSUMPTION'] },
+                    text: { type: Type.STRING },
+                    confidence: { type: Type.NUMBER },
+                    impact: { type: Type.NUMBER },
+                    ...operationGroundingProperties,
+                  },
+                },
+                {
+                  type: Type.OBJECT,
+                  required: operationRequired(['op', 'text', 'confidence', 'impact']),
+                  properties: {
+                    op: { type: Type.STRING, enum: ['OPEN_DECISION', 'OPEN_UNKNOWN', 'ADD_ACTION'] },
+                    text: { type: Type.STRING },
+                    confidence: { type: Type.NUMBER },
+                    impact: { type: Type.NUMBER },
+                    ...operationGroundingProperties,
+                  },
+                },
+                {
+                  type: Type.OBJECT,
+                  required: operationRequired(['op', 'targetNodeId', 'outcome', 'confidence']),
+                  properties: {
+                    op: { type: Type.STRING, enum: ['RESOLVE_DECISION'] },
+                    targetNodeId: { type: Type.STRING },
+                    outcome: { type: Type.STRING },
+                    confidence: { type: Type.NUMBER },
+                    ...operationGroundingProperties,
+                  },
+                },
+                {
+                  type: Type.OBJECT,
+                  required: operationRequired(['op', 'targetNodeId', 'answer', 'confidence']),
+                  properties: {
+                    op: { type: Type.STRING, enum: ['RESOLVE_UNKNOWN'] },
+                    targetNodeId: { type: Type.STRING },
+                    answer: { type: Type.STRING },
+                    confidence: { type: Type.NUMBER },
+                    ...operationGroundingProperties,
+                  },
+                },
+                {
+                  type: Type.OBJECT,
+                  required: operationRequired(['op']),
+                  properties: {
+                    op: { type: Type.STRING, enum: ['NO_CHANGE'] },
+                    confidence: { type: Type.NUMBER },
+                    ...operationGroundingProperties,
+                  },
+                },
+              ],
             },
           },
           relationships: {

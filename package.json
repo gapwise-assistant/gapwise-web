@@ -12,7 +12,7 @@
     "lint": "npm run typecheck",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "vitest run",
-    "test:clinicflow": "vitest run src/lib/evals/clinicflowRegression.test.ts --reporter=verbose",
+    "test:cli nicflow": "vitest run src/lib/evals/clinicflowRegression.test.ts --reporter=verbose",
     "test:clinicflow:phase3": "vitest run src/lib/evals/clinicflowPhase3.test.ts --reporter=verbose",
     "eval:career-gap": "CAREER_GAP_REPORT=1 vitest run src/lib/evals/careerGapReport.test.ts --reporter=verbose",
     "eval:career-gap:live": "RUN_LIVE_GAP_EVAL=true vitest run src/lib/evals/careerGapLiveReport.test.ts --reporter=verbose",
