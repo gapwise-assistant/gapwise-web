@@ -6,6 +6,7 @@ import { analyzeContextItem, processContextSource, sanitizeCanonicalReconciliati
 import { ingestContextSource } from '@/lib/context/ingestion';
 import { rankGaps } from '@/lib/tools/graphTools';
 import { Project } from '@/types/clarity';
+import { openTodayDecisions } from '@/lib/today/sections';
 
 function projectWithGoal(goal = 'Plan a 10 day Japan trip for October'): Project {
   return createProjectFromInput({ name: 'Japan trip', goal }, '2026-08-13T12:00:00.000Z');
@@ -140,7 +141,7 @@ describe('AI context graph analysis', () => {
   it('does not persist a model-proposed action when the source is only a focus request', async () => {
     const genAI = mockGenAI({
       summary: 'The user asks Gapwise what to focus on.',
-      nodes: [{ type: 'NEXT_ACTION', text: 'Review the most important project gap.', confidence: 0.9, impact: 0.9 }],
+      nodes: [{ type: 'NEXT_ACTION', text: 'Review the most important project gap.', grounding: 'AI_DERIVED', confidence: 0.9, impact: 0.9 }],
     });
     const result = await processContextSource(projectWithGoal('Organize the first community event.'), input({
       sourceId: 'src_focus_request',
@@ -155,8 +156,8 @@ describe('AI context graph analysis', () => {
     const genAI = mockGenAI({
       summary: 'The user is comparing which activity deserves attention.',
       nodes: [
-        { type: 'NEXT_ACTION', text: 'Repair the fence first.', confidence: 0.9, impact: 0.9 },
-        { type: 'NEXT_ACTION', text: 'Prepare the garden first.', confidence: 0.9, impact: 0.8 },
+        { type: 'NEXT_ACTION', text: 'Repair the fence first.', grounding: 'AI_DERIVED', confidence: 0.9, impact: 0.9 },
+        { type: 'NEXT_ACTION', text: 'Prepare the garden first.', grounding: 'AI_DERIVED', confidence: 0.9, impact: 0.8 },
       ],
     });
     const result = await processContextSource(projectWithGoal('Prepare the garden for visitors.'), input({
@@ -173,8 +174,8 @@ describe('AI context graph analysis', () => {
     const genAI = mockGenAI({
       summary: 'The user is comparing priorities.',
       nodes: [
-        { type: 'DECISION', text: 'Decide whether repairing the fence is more important than labeling tools.', confidence: 0.9, impact: 0.9 },
-        { type: 'NEXT_ACTION', text: 'Repair the fence first.', confidence: 0.9, impact: 0.9 },
+        { type: 'DECISION', text: 'Decide whether repairing the fence is more important than labeling tools.', grounding: 'AI_DERIVED', confidence: 0.9, impact: 0.9 },
+        { type: 'NEXT_ACTION', text: 'Repair the fence first.', grounding: 'AI_DERIVED', confidence: 0.9, impact: 0.9 },
       ],
     });
     const result = await processContextSource(projectWithGoal('Prepare the garden for visitors.'), input({
@@ -299,7 +300,7 @@ describe('AI context graph analysis', () => {
     }), DEFAULT_USER_PROFILE, { genAI });
 
     const source = result.project.sources.find((candidate) => candidate.id === 'northstar-pricing-update');
-    expect(source?.derived_node_ids).toHaveLength(3);
+    expect(source?.derived_node_ids).toHaveLength(4);
     expect(source?.derived_node_ids).toEqual(expect.arrayContaining(['pilot-budget', 'csv-hours']));
     expect(result.project.nodes.filter((node) => node.id === 'pilot-budget')).toHaveLength(1);
     expect(result.project.nodes.filter((node) => node.id === 'csv-hours')).toHaveLength(1);
@@ -348,6 +349,158 @@ describe('AI context graph analysis', () => {
     const decisions = second.project.nodes.filter((node) => node.type === 'DECISION');
     expect(decisions).toHaveLength(1);
     expect(decisions[0]).toMatchObject({ id: originalDecision!.id, status: 'RESOLVED' });
+  });
+
+  it('preserves a resolved decision reconciled from a generic commitment statement', async () => {
+    const project = projectWithGoal('Launch the Atlas Retail pilot reliably.');
+    project.nodes.push({
+      id: 'atlas-scope-decision',
+      type: 'DECISION',
+      text: 'Choose the technical scope for the Atlas Retail pilot.',
+      status: 'OPEN',
+      confidence: 0.9,
+      impact: 0.95,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The technical scope is now resolved.',
+      nodes: [
+        {
+          type: 'DECISION',
+          text: 'Choose the technical scope for the Atlas Retail pilot.',
+          status: 'RESOLVED',
+          confidence: 0.98,
+          impact: 0.95,
+        },
+        {
+          type: 'KNOWN',
+          text: 'The pilot will use nightly CSV imports and named user accounts.',
+          confidence: 0.95,
+          impact: 0.8,
+        },
+      ],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'EQUIVALENT',
+        canonical_node_id: 'atlas-scope-decision',
+        same_atomic_proposition: true,
+        confidence: 0.98,
+        reason: 'The candidate records the outcome of the existing technical-scope decision.',
+      }],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_atlas_scope_resolution',
+      content: 'We have decided to use nightly CSV imports and named user accounts for the pilot and defer the real-time POS integration and SSO until after the pilot succeeds.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.find((node) => node.id === 'atlas-scope-decision')).toMatchObject({
+      type: 'DECISION',
+      status: 'RESOLVED',
+    });
+    const commitmentNodes = result.project.nodes.filter((node) =>
+      node.source_refs.includes('src_atlas_scope_resolution')
+      && /technical scope|nightly CSV|named user accounts/i.test(node.text)
+    );
+    expect(commitmentNodes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'PREFERENCE' }),
+    ]));
+    expect(commitmentNodes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'CONSTRAINT' }),
+    ]));
+    expect(commitmentNodes.filter((node) => node.type === 'KNOWN')).toHaveLength(1);
+    expect(result.project.nodes.filter((node) => node.type === 'DECISION')).toHaveLength(1);
+    expect(openTodayDecisions(result.project)).toHaveLength(0);
+  });
+
+  it('executes a model-declared decision change without creating commitment restatements', async () => {
+    const project = projectWithGoal('Launch the Atlas Retail pilot reliably.');
+    project.nodes.push({
+      id: 'atlas-change-decision',
+      type: 'DECISION',
+      text: 'Choose the technical scope for the Atlas Retail pilot.',
+      status: 'OPEN',
+      confidence: 0.9,
+      impact: 0.95,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The technical scope decision is resolved.',
+      canonical_changes: [{
+        operation: 'RESOLVE_DECISION',
+        targetNodeId: 'atlas-change-decision',
+        outcome: 'Use nightly CSV imports and named user accounts; defer POS integration and SSO until after the pilot.',
+        confidence: 0.99,
+      }],
+      nodes: [],
+      relationships: [],
+      reconciliation: [],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_atlas_canonical_change',
+      content: 'The team has settled the technical scope for the pilot.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.find((node) => node.id === 'atlas-change-decision')).toMatchObject({
+      status: 'RESOLVED',
+      text: 'Use nightly CSV imports and named user accounts; defer POS integration and SSO until after the pilot.',
+      source_refs: ['src_atlas_canonical_change'],
+    });
+    expect(result.project.nodes.filter((node) => node.source_refs.includes('src_atlas_canonical_change'))).toHaveLength(1);
+    expect(openTodayDecisions(result.project)).toHaveLength(0);
+  });
+
+  it('executes a model-declared unknown resolution through the existing answer workflow', async () => {
+    const project = projectWithGoal('Confirm the supplier before the launch.');
+    project.nodes.push({
+      id: 'supplier-delivery-unknown',
+      type: 'UNKNOWN',
+      text: 'Can the supplier deliver by Friday?',
+      status: 'OPEN',
+      confidence: 0.9,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'The supplier confirmed delivery by Friday.',
+      canonical_changes: [{
+        operation: 'RESOLVE_UNKNOWN',
+        targetNodeId: 'supplier-delivery-unknown',
+        answer: 'The supplier confirmed delivery by Friday.',
+        confidence: 0.98,
+      }],
+      nodes: [],
+      relationships: [],
+      reconciliation: [],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_supplier_confirmation',
+      content: 'The supplier confirmed delivery by Friday.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.find((node) => node.id === 'supplier-delivery-unknown')).toMatchObject({
+      status: 'RESOLVED',
+      source_refs: ['src_supplier_confirmation'],
+    });
+    expect(result.project.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'EVIDENCE',
+        text: 'The supplier confirmed delivery by Friday.',
+        source_refs: ['src_supplier_confirmation'],
+      }),
+    ]));
+    expect(result.project.sources.find((source) => source.id === 'src_supplier_confirmation')?.derived_node_ids).toHaveLength(1);
   });
 
   it('retains an independently resolvable decision child under an older compound decision', async () => {
@@ -735,6 +888,22 @@ describe('AI context graph analysis', () => {
         { type: 'CONSTRAINT', text: '$45k budget ceiling.', confidence: 0.95, impact: 0.95 },
         { type: 'KNOWN', text: 'Engineering estimates CSV at 80–120 hours.', confidence: 0.95, impact: 0.9 },
       ],
+      reconciliation: [
+        {
+          candidate_index: 0,
+          classification: 'EQUIVALENT',
+          canonical_node_id: 'constraint_pilot_budget',
+          confidence: 0.95,
+          reason: 'Same budget ceiling.',
+        },
+        {
+          candidate_index: 1,
+          classification: 'EQUIVALENT',
+          canonical_node_id: 'known_csv_hours',
+          confidence: 0.95,
+          reason: 'Same engineering estimate.',
+        },
+      ],
     });
 
     const result = await processContextSource(project, input({
@@ -864,7 +1033,6 @@ describe('AI context graph analysis', () => {
         { type: 'UNKNOWN', text: 'When can I pick up the keys to the community center room?', confidence: 0.9, impact: 0.9 },
         { type: 'UNKNOWN', text: 'Will the neighbor lend two more folding tables?', confidence: 0.9, impact: 0.9 },
         { type: 'DECISION', text: 'Decide whether people can bring books without registering or require advance registration.', confidence: 0.9, impact: 0.95 },
-        { type: 'DECISION', text: 'I need to decide whether people can bring books without registering or require advance registration.', confidence: 0.8, impact: 0.9 },
         { type: 'RISK', text: 'Rain is expected during the event weekend and the signs are not waterproof.', confidence: 0.9, impact: 0.95 },
         { type: 'PREFERENCE', text: 'The event should be manageable with two volunteers.', confidence: 0.8, impact: 0.7 },
         { type: 'NEXT_ACTION', text: 'Sort and label the books by category.', confidence: 0.9, impact: 0.8 },
@@ -903,12 +1071,6 @@ describe('AI context graph analysis', () => {
           type: 'DECISION',
           text: 'I am unsure whether to use a café or community room.',
           status: 'OPEN',
-          confidence: 0.9,
-          impact: 0.9,
-        },
-        {
-          type: 'UNKNOWN',
-          text: 'I am unsure whether to use a café or community room.',
           confidence: 0.9,
           impact: 0.9,
         },
@@ -971,9 +1133,8 @@ describe('AI context graph analysis', () => {
     expect(derived.some((node) => node.type === 'PREFERENCE')).toBe(false);
 
     const contextPrompt = JSON.stringify(genAI.models.generateContent.mock.calls[0]);
-    expect(contextPrompt).toContain('Explicit unresolved choice language such as needing to decide, choose, determine, select, or settle something represents an OPEN DECISION.');
-    expect(contextPrompt).toContain('Do not classify the subject of an explicit unresolved choice as a PREFERENCE merely because the source also contains preferences, constraints, or supporting evidence.');
-    expect(contextPrompt).toContain('A PREFERENCE expresses what the user favors; a DECISION represents a choice the user still needs to make.');
+    expect(contextPrompt).toContain('A user-controlled unresolved choice is a DECISION; missing external information is an UNKNOWN.');
+    expect(contextPrompt).toContain('A completed user commitment affecting an existing OPEN DECISION is primarily a RESOLVE_DECISION change');
   });
 
   it('does not turn an attractive or preferred option into a committed decision', async () => {
@@ -981,7 +1142,7 @@ describe('AI context graph analysis', () => {
       summary: 'The courtyard is attractive, but the venue choice remains open.',
       nodes: [
         {
-          type: 'DECISION',
+          type: 'PREFERENCE',
           text: 'Use the free courtyard for the first event.',
           confidence: 0.9,
           impact: 0.9,
@@ -1191,7 +1352,7 @@ describe('AI context graph analysis', () => {
     expect(questions).toHaveLength(4);
   });
 
-  it('allows a small goal-relevant inferred gap and rejects generic unknowns', async () => {
+  it('preserves model-selected uncertainties without a token-based goal filter', async () => {
     const genAI = mockGenAI({
       summary: 'The trip outline is missing a decision-driving budget.',
       nodes: [
@@ -1202,7 +1363,11 @@ describe('AI context graph analysis', () => {
     });
     const result = await processContextSource(projectWithGoal(), input(), DEFAULT_USER_PROFILE, { genAI });
     const unknowns = result.project.nodes.filter((node) => node.type === 'UNKNOWN');
-    expect(unknowns.map((node) => node.text)).toEqual(['What is the trip budget?']);
+    expect(unknowns.map((node) => node.text)).toEqual([
+      'What is the trip budget?',
+      'What should I do next?',
+      'What else should I consider?',
+    ]);
   });
 
   it('reconciles new evidence with assumptions and unresolved questions', async () => {
@@ -1398,7 +1563,7 @@ describe('AI context graph analysis', () => {
     expect(stages.map((stage) => stage.name)).toEqual([
       'Context Agent model analysis',
       'Model normalization and deduplication',
-      'Goal relevance filtering',
+      'Canonical interpretation validation',
       'Graph persistence',
       'Relationship validation',
       'Graph persistence result',
@@ -1461,7 +1626,7 @@ describe('AI context graph analysis', () => {
     expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a usable status question when the model is unavailable', async () => {
+  it('preserves the source without mutating canonical state when the model is unavailable', async () => {
     const genAI = {
       models: {
         generateContent: vi.fn().mockRejectedValue(new Error('Vertex unavailable')),
@@ -1473,11 +1638,11 @@ describe('AI context graph analysis', () => {
     }), DEFAULT_USER_PROFILE, { genAI });
 
     expect(result.error).toBe('Vertex unavailable');
-    expect(result.project.nodes.some((node) =>
-      node.type === 'UNKNOWN'
-      && node.source_refs.includes('src_unavailable_status')
-      && node.text === 'What current status is recorded for procedure authorization?'
-    )).toBe(true);
+    expect(result.project.sources.find((source) => source.id === 'src_unavailable_status')).toMatchObject({
+      processing_status: 'failed',
+      derived_node_ids: [],
+    });
+    expect(result.project.nodes.some((node) => node.source_refs.includes('src_unavailable_status'))).toBe(false);
   });
 
   it('keeps context analysis isolated to the project supplied to it', async () => {

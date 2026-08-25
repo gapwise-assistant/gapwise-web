@@ -296,6 +296,29 @@ async function loadNorthstarPilotDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadHarborHotelsCheckpointViaAPI(userId: string, checkpoint: 'early' | 'middle' | 'late'): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+}> {
+  const res = await authFetch(`/api/projects/harbor-hotels/${checkpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `The Harbor Hotels ${checkpoint} checkpoint could not be loaded.`);
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -395,6 +418,9 @@ export default function Home() {
   const [isLoadingBakeryDemo, setIsLoadingBakeryDemo] = useState(false);
   const [isLoadingBakeryJourneyDemo, setIsLoadingBakeryJourneyDemo] = useState(false);
   const [isLoadingNorthstarPilotDemo, setIsLoadingNorthstarPilotDemo] = useState(false);
+  const [isLoadingHarborEarly, setIsLoadingHarborEarly] = useState(false);
+  const [isLoadingHarborMiddle, setIsLoadingHarborMiddle] = useState(false);
+  const [isLoadingHarborLate, setIsLoadingHarborLate] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -419,9 +445,15 @@ export default function Home() {
             ? 'Bakery journey'
             : isLoadingNorthstarPilotDemo
               ? 'Northstar pilot'
-            : isLoadingDemo
-              ? 'demo'
-              : null;
+              : isLoadingHarborEarly
+                ? 'Harbor Hotels · Early'
+                : isLoadingHarborMiddle
+                  ? 'Harbor Hotels · Middle'
+                  : isLoadingHarborLate
+                    ? 'Harbor Hotels · Late'
+              : isLoadingDemo
+                ? 'demo'
+                : null;
   const openContext = useCallback((entry: ContextEntry = { tab: 'recent' }) => {
     setContextEntry(entry);
     setActiveTab('scope');
@@ -758,6 +790,55 @@ export default function Home() {
       setIsLoadingNorthstarPilotDemo(false);
     }
   }, [userId]);
+
+  const loadHarborCheckpoint = useCallback(async (
+    checkpoint: 'early' | 'middle' | 'late',
+    setLoadingCheckpoint: React.Dispatch<React.SetStateAction<boolean>>,
+  ) => {
+    setLoadingCheckpoint(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadHarborHotelsCheckpointViaAPI(userId, checkpoint);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories([]);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, result.project.id);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, []);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : `The Harbor Hotels ${checkpoint} checkpoint failed.`);
+    } finally {
+      setLoadingCheckpoint(false);
+    }
+  }, [userId]);
+
+  const handleLoadHarborEarly = useCallback(() => {
+    void loadHarborCheckpoint('early', setIsLoadingHarborEarly);
+  }, [loadHarborCheckpoint]);
+
+  const handleLoadHarborMiddle = useCallback(() => {
+    void loadHarborCheckpoint('middle', setIsLoadingHarborMiddle);
+  }, [loadHarborCheckpoint]);
+
+  const handleLoadHarborLate = useCallback(() => {
+    void loadHarborCheckpoint('late', setIsLoadingHarborLate);
+  }, [loadHarborCheckpoint]);
 
   const handleResetDemo = async () => {
     try {
@@ -1135,6 +1216,9 @@ export default function Home() {
           isLoadingBakeryDemo={isLoadingBakeryDemo}
           isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
           isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
+          isLoadingHarborEarly={isLoadingHarborEarly}
+          isLoadingHarborMiddle={isLoadingHarborMiddle}
+          isLoadingHarborLate={isLoadingHarborLate}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
@@ -1147,6 +1231,9 @@ export default function Home() {
           onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
           onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
           onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
+          onLoadHarborEarly={handleLoadHarborEarly}
+          onLoadHarborMiddle={handleLoadHarborMiddle}
+          onLoadHarborLate={handleLoadHarborLate}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -1181,6 +1268,12 @@ export default function Home() {
         isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
         onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
         isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
+        onLoadHarborEarly={handleLoadHarborEarly}
+        isLoadingHarborEarly={isLoadingHarborEarly}
+        onLoadHarborMiddle={handleLoadHarborMiddle}
+        isLoadingHarborMiddle={isLoadingHarborMiddle}
+        onLoadHarborLate={handleLoadHarborLate}
+        isLoadingHarborLate={isLoadingHarborLate}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}

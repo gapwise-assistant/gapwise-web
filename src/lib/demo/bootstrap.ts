@@ -2,6 +2,8 @@ import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { processContextSource } from '@/lib/context/contextAnalysis';
 import { persistAskConversationContext } from '@/lib/ask/conversationContext';
+import { persistAskProposal } from '@/lib/ask/conversationContext';
+import { askGapswise, type AskResult } from '@/lib/ask/adkClient';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
@@ -54,6 +56,15 @@ import { rankGaps } from '@/lib/tools/graphTools';
 import type { TraceAgentRun, TraceGapAnalysis, TraceHandoff, TracePipelineStep } from '@/types/observability';
 import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
 import type { AskChatMessage, AskChatSession } from '@/types/ask';
+import { normalizeAskContextProposals, type AskContextProposal } from '@/types/ask';
+import {
+  HARBOR_HOTELS_ASKS,
+  HARBOR_HOTELS_CHAT_ID,
+  HARBOR_HOTELS_SOURCES,
+  createHarborHotelsProject,
+  sourcesForHarborCheckpoint,
+  type HarborHotelsCheckpoint,
+} from '@/lib/demo/harborHotels';
 
 export interface GoldenDemoBootstrapResult {
   project: Project;
@@ -115,6 +126,25 @@ export interface NorthstarPilotDemoBootstrapResult {
   scope: AppScope;
   memories: DurableMemory[];
   created: boolean;
+}
+
+export interface HarborHotelsAskActionReport {
+  ask: string;
+  answerReturned: boolean;
+  outcome?: AskResult['outcome'];
+  proposalCount: number;
+  dismissedProposalId?: string;
+  addedProposalId?: string;
+}
+
+export interface HarborHotelsBootstrapResult {
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  created: boolean;
+  checkpoint: HarborHotelsCheckpoint;
+  askActions: HarborHotelsAskActionReport[];
 }
 
 async function sharedHistoryFocus(userId: string, project: Project): Promise<ProjectHistoryFocus | undefined> {
@@ -630,5 +660,293 @@ export async function loadNorthstarPilotDemoForUser(userId: string): Promise<Nor
     scope,
     memories: [],
     created,
+  };
+}
+
+function assertHarborLiveAi(): void {
+  if (process.env.GAPSWISE_DEMO_MODE?.trim().toLowerCase() === 'true') {
+    throw new Error('Harbor Hotels checkpoints require live AI. Start Gapwise with GAPSWISE_DEMO_MODE=false.');
+  }
+  if (process.env.GAP_AGENT_MODE?.trim().toLowerCase() !== 'live') {
+    throw new Error('Harbor Hotels checkpoints require the live Gap Agent. Start Gapwise with "npm run dev:ai".');
+  }
+}
+
+async function replayHarborSource(userId: string, project: Project, source: (typeof HARBOR_HOTELS_SOURCES)[number]): Promise<Project> {
+  const processed = await processContextSource(project, {
+    sourceId: source.id,
+    filename: source.filename,
+    content: source.content,
+    type: 'note',
+    origin: 'user',
+  }, DEFAULT_USER_PROFILE, {
+    captureProcessingLog: process.env.NODE_ENV !== 'production',
+  });
+  if (processed.error) throw new Error(processed.error);
+
+  const refreshed = await refreshProjectGapRuntime({
+    userId,
+    project: processed.project,
+    profile: DEFAULT_USER_PROFILE,
+    memories: [],
+    route: '/api/projects/harbor-hotels',
+    label: `Harbor Hotels · ${source.filename}`,
+  });
+  const nextProject = refreshed.project;
+  await getStorageProvider().saveProject(userId, nextProject);
+  return nextProject;
+}
+
+function harborAssistantMessageId(userMessageId: string): string {
+  return `ask_assistant_${userMessageId}`;
+}
+
+function harborUserMessageId(turn: number): string {
+  return `harbor_hotels_user_${turn}`;
+}
+
+function harborAskCreatedAt(turn: number): string {
+  return `2026-08-24T12:${String(20 + turn).padStart(2, '0')}:00.000Z`;
+}
+
+async function runHarborAsk(params: {
+  userId: string;
+  project: Project;
+  message: string;
+  turn: number;
+  sessionId?: string;
+}): Promise<{ project: Project; result: AskResult; assistantMessageId: string; proposal: AskContextProposal | undefined }> {
+  const storage = getStorageProvider();
+  const userMessageId = harborUserMessageId(params.turn);
+  const assistantMessageId = harborAssistantMessageId(userMessageId);
+  const createdAt = harborAskCreatedAt(params.turn);
+  const existingChat = (await storage.getAskChats(params.userId)).find((chat) => chat.id === HARBOR_HOTELS_CHAT_ID);
+  const chat: AskChatSession = {
+    id: HARBOR_HOTELS_CHAT_ID,
+    userId: params.userId,
+    scopeType: 'project',
+    projectId: params.project.id,
+    title: 'Harbor Hotels MVP evaluation',
+    ...(existingChat?.adkSessionId || params.sessionId
+      ? { adkSessionId: existingChat?.adkSessionId ?? params.sessionId }
+      : {}),
+    createdAt: existingChat?.createdAt ?? createdAt,
+    updatedAt: createdAt,
+  };
+  await storage.saveAskChat(params.userId, chat);
+
+  const ingested = await persistAskConversationContext({
+    userId: params.userId,
+    chatId: HARBOR_HOTELS_CHAT_ID,
+    messageId: userMessageId,
+    text: params.message,
+    projectId: params.project.id,
+    captureProcessingLog: process.env.NODE_ENV !== 'production',
+  });
+  const projectAfterUserMessage = await storage.getProject(params.userId, params.project.id);
+  if (!projectAfterUserMessage) throw new Error('The Harbor Hotels project disappeared during Ask ingestion.');
+
+  const result = await askGapswise({
+    userId: params.userId,
+    message: params.message,
+    ...(chat.adkSessionId ? { sessionId: chat.adkSessionId } : {}),
+    projectId: params.project.id,
+    chatId: HARBOR_HOTELS_CHAT_ID,
+    excludeMessageId: userMessageId,
+    excludeSourceId: ingested.sourceId,
+    openQuestions: ingested.openQuestions,
+  });
+  const contextProposals = normalizeAskContextProposals(
+    result.contextProposals?.length ? result.contextProposals : result.proposals,
+  ).map((proposal, index) => ({
+    ...proposal,
+    id: proposal.id ?? `proposal_${assistantMessageId}_${index}`,
+    sourceMessageId: proposal.sourceMessageId ?? assistantMessageId,
+  }));
+
+  await storage.saveAskMessage(params.userId, {
+    id: userMessageId,
+    chatId: HARBOR_HOTELS_CHAT_ID,
+    userId: params.userId,
+    projectId: params.project.id,
+    role: 'user',
+    text: params.message,
+    sources: [],
+    createdAt,
+    openQuestionIds: ingested.openQuestionIds,
+    openQuestions: ingested.openQuestions,
+  });
+  await storage.saveAskMessage(params.userId, {
+    id: assistantMessageId,
+    chatId: HARBOR_HOTELS_CHAT_ID,
+    userId: params.userId,
+    projectId: params.project.id,
+    role: 'assistant',
+    text: result.answer,
+    sources: result.sources,
+    createdAt,
+    openQuestionIds: result.openQuestionIds ?? ingested.openQuestionIds,
+    openQuestions: result.openQuestions ?? ingested.openQuestions,
+    ...(result.outcome ? { outcome: result.outcome } : {}),
+    ...(result.resolvesQuestionId ? { resolvesQuestionId: result.resolvesQuestionId } : {}),
+    ...(result.conclusion ? { conclusion: result.conclusion } : {}),
+    ...(contextProposals.length ? { contextProposals, proposals: contextProposals } : {}),
+    ...(result.execution ? { execution: result.execution } : {}),
+  });
+  await storage.saveAskChat(params.userId, {
+    ...chat,
+    ...(result.sessionId ? { adkSessionId: result.sessionId } : {}),
+    updatedAt: createdAt,
+  });
+
+  return {
+    project: projectAfterUserMessage,
+    result: { ...result, contextProposals, proposals: contextProposals },
+    assistantMessageId,
+    proposal: contextProposals.find((candidate) => candidate.type === 'RISK') ?? contextProposals[0],
+  };
+}
+
+async function markHarborProposalAdded(params: {
+  userId: string;
+  projectId: string;
+  assistantMessageId: string;
+  proposal: AskContextProposal;
+}): Promise<Project> {
+  const project = await persistAskProposal(params);
+  const storage = getStorageProvider();
+  const messages = await storage.getAskMessages(params.userId);
+  const assistant = messages.find((message) => message.id === params.assistantMessageId);
+  if (assistant) {
+    const proposals = normalizeAskContextProposals(assistant.contextProposals ?? assistant.proposals)
+      .map((candidate) => candidate.id === params.proposal.id
+        ? { ...candidate, confirmationStatus: 'added' as const }
+        : candidate);
+    await storage.saveAskMessage(params.userId, {
+      ...assistant,
+      contextProposals: proposals,
+      proposals,
+    });
+  }
+  return project;
+}
+
+/**
+ * Builds a Harbor Hotels checkpoint by replaying user-authored sources through
+ * live Context Agent, ProjectPatch, graph persistence, Gap Agent, and Ask
+ * flows. It intentionally has no precomputed nodes, edges, or simulated
+ * Decision Map trace.
+ */
+export async function loadHarborHotelsCheckpointForUser(
+  userId: string,
+  checkpoint: HarborHotelsCheckpoint,
+): Promise<HarborHotelsBootstrapResult> {
+  assertHarborLiveAi();
+  const storage = getStorageProvider();
+  const existing = (await storage.listProjects(userId)).find((project) => project.id === `harbor-hotels-${checkpoint}`);
+  await storage.resetUserData(userId);
+  clearTracesForUser(userId);
+
+  let project = createHarborHotelsProject(checkpoint);
+  await storage.saveProject(userId, project);
+  for (const source of sourcesForHarborCheckpoint('early')) {
+    project = await replayHarborSource(userId, project, source);
+  }
+
+  const askActions: HarborHotelsAskActionReport[] = [];
+  let sessionId: string | undefined;
+  if (checkpoint !== 'early') {
+    for (const source of HARBOR_HOTELS_SOURCES.slice(3, 5)) {
+      project = await replayHarborSource(userId, project, source);
+    }
+
+    const retentionAsk = await runHarborAsk({
+      userId,
+      project,
+      message: HARBOR_HOTELS_ASKS.retentionRisk,
+      turn: 1,
+      sessionId,
+    });
+    sessionId = retentionAsk.result.sessionId;
+    project = retentionAsk.project;
+    askActions.push({
+      ask: HARBOR_HOTELS_ASKS.retentionRisk,
+      answerReturned: Boolean(retentionAsk.result.answer),
+      outcome: retentionAsk.result.outcome,
+      proposalCount: retentionAsk.result.contextProposals?.length ?? 0,
+      ...(retentionAsk.proposal ? { dismissedProposalId: retentionAsk.proposal.id } : {}),
+    });
+
+    const reliabilityAsk = await runHarborAsk({
+      userId,
+      project,
+      message: HARBOR_HOTELS_ASKS.dataReliabilityRisk,
+      turn: 2,
+      sessionId,
+    });
+    sessionId = reliabilityAsk.result.sessionId;
+    project = reliabilityAsk.project;
+    let addedProposalId: string | undefined;
+    if (reliabilityAsk.proposal) {
+      project = await markHarborProposalAdded({
+        userId,
+        projectId: project.id,
+        assistantMessageId: reliabilityAsk.assistantMessageId,
+        proposal: reliabilityAsk.proposal,
+      });
+      const refreshed = await refreshProjectGapRuntime({
+        userId,
+        project,
+        profile: DEFAULT_USER_PROFILE,
+        memories: [],
+        route: '/api/projects/harbor-hotels',
+        label: 'Harbor Hotels · added Ask proposal',
+      });
+      project = refreshed.project;
+      await storage.saveProject(userId, project);
+      addedProposalId = reliabilityAsk.proposal.id;
+    }
+    askActions.push({
+      ask: HARBOR_HOTELS_ASKS.dataReliabilityRisk,
+      answerReturned: Boolean(reliabilityAsk.result.answer),
+      outcome: reliabilityAsk.result.outcome,
+      proposalCount: reliabilityAsk.result.contextProposals?.length ?? 0,
+      ...(addedProposalId ? { addedProposalId } : {}),
+    });
+  }
+
+  if (checkpoint === 'late') {
+    for (const source of HARBOR_HOTELS_SOURCES.slice(5)) {
+      project = await replayHarborSource(userId, project, source);
+    }
+
+    const weekendSupportAsk = await runHarborAsk({
+      userId,
+      project,
+      message: HARBOR_HOTELS_ASKS.weekendSupportTradeoff,
+      turn: 3,
+      sessionId,
+    });
+    project = weekendSupportAsk.project;
+    askActions.push({
+      ask: HARBOR_HOTELS_ASKS.weekendSupportTradeoff,
+      answerReturned: Boolean(weekendSupportAsk.result.answer),
+      outcome: weekendSupportAsk.result.outcome,
+      proposalCount: weekendSupportAsk.result.contextProposals?.length ?? 0,
+    });
+  }
+
+  await storage.saveProject(userId, project);
+  const scope: AppScope = { type: 'project', projectId: project.id };
+  await storage.setAppScope(userId, scope);
+
+  return {
+    project,
+    projects: await storage.listProjects(userId),
+    activeProjectId: project.id,
+    scope,
+    created: !existing,
+    checkpoint,
+    askActions,
   };
 }

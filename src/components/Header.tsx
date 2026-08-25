@@ -27,6 +27,12 @@ interface HeaderProps {
   isLoadingBakeryJourneyDemo?: boolean;
   onLoadNorthstarPilotDemo?: () => void;
   isLoadingNorthstarPilotDemo?: boolean;
+  onLoadHarborEarly?: () => void;
+  isLoadingHarborEarly?: boolean;
+  onLoadHarborMiddle?: () => void;
+  isLoadingHarborMiddle?: boolean;
+  onLoadHarborLate?: () => void;
+  isLoadingHarborLate?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -55,6 +61,12 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingBakeryJourneyDemo = false,
   onLoadNorthstarPilotDemo,
   isLoadingNorthstarPilotDemo = false,
+  onLoadHarborEarly,
+  isLoadingHarborEarly = false,
+  onLoadHarborMiddle,
+  isLoadingHarborMiddle = false,
+  onLoadHarborLate,
+  isLoadingHarborLate = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -66,7 +78,7 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo;
+  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo || isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate;
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
@@ -156,7 +168,7 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo) && (
+          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo || onLoadHarborEarly || onLoadHarborMiddle || onLoadHarborLate) && (
             <div ref={demoMenuRef} className="relative">
               <button
                 type="button"
@@ -238,6 +250,46 @@ export const Header: React.FC<HeaderProps> = ({
                       {isLoadingNorthstarPilotDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-violet-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-violet-300" />}
                       {isLoadingNorthstarPilotDemo ? 'Loading Northstar pilot…' : 'Northstar pilot'}
                     </button>
+                  )}
+                  {(onLoadHarborEarly || onLoadHarborMiddle || onLoadHarborLate) && (
+                    <div className="mt-1 border-t border-slate-800 pt-1">
+                      <p className="px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-slate-500">
+                        Harbor Hotels · live AI checkpoints
+                      </p>
+                      {onLoadHarborEarly && (
+                        <button
+                          type="button"
+                          onClick={() => { setDemoMenuOpen(false); onLoadHarborEarly(); }}
+                          disabled={isAnyDemoLoading}
+                          className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isLoadingHarborEarly ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-cyan-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />}
+                          {isLoadingHarborEarly ? 'Building Harbor Hotels · Early…' : 'Harbor Hotels · Early'}
+                        </button>
+                      )}
+                      {onLoadHarborMiddle && (
+                        <button
+                          type="button"
+                          onClick={() => { setDemoMenuOpen(false); onLoadHarborMiddle(); }}
+                          disabled={isAnyDemoLoading}
+                          className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-amber-200 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isLoadingHarborMiddle ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-amber-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-amber-300" />}
+                          {isLoadingHarborMiddle ? 'Building Harbor Hotels · Middle…' : 'Harbor Hotels · Middle'}
+                        </button>
+                      )}
+                      {onLoadHarborLate && (
+                        <button
+                          type="button"
+                          onClick={() => { setDemoMenuOpen(false); onLoadHarborLate(); }}
+                          disabled={isAnyDemoLoading}
+                          className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-200 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isLoadingHarborLate ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-emerald-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-emerald-300" />}
+                          {isLoadingHarborLate ? 'Building Harbor Hotels · Late…' : 'Harbor Hotels · Late'}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

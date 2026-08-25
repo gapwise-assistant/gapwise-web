@@ -37,6 +37,104 @@ export type ReconciliationClassification =
   | 'BROADER_THAN_EXISTING'
   | 'DISTINCT';
 
+export type NodeGrounding =
+  | 'SOURCE_ASSERTED'
+  | 'HYPOTHETICAL'
+  | 'AI_DERIVED';
+
+export type CanonicalChange =
+  | {
+      operation: 'RESOLVE_DECISION';
+      targetNodeId: string;
+      outcome: string;
+      confidence: number;
+    }
+  | {
+      operation: 'OPEN_DECISION';
+      text: string;
+      confidence: number;
+    }
+  | {
+      operation: 'RESOLVE_UNKNOWN';
+      targetNodeId: string;
+      answer: string;
+      confidence: number;
+    }
+  | {
+      operation: 'NO_CHANGE';
+      confidence: number;
+    };
+
+export type ProjectPatchContextNodeType =
+  | 'KNOWN'
+  | 'EVIDENCE'
+  | 'CONSTRAINT'
+  | 'PREFERENCE'
+  | 'RISK'
+  | 'ASSUMPTION';
+
+export type ProjectPatchOperation =
+  | {
+      op: 'ADD_CONTEXT';
+      nodeType: ProjectPatchContextNodeType;
+      text: string;
+      confidence: number;
+      impact: number;
+      operationRef?: string;
+      targetNodeId?: string;
+      nodeId?: string;
+    }
+  | {
+      op: 'OPEN_DECISION';
+      text: string;
+      confidence: number;
+      impact: number;
+      operationRef?: string;
+      targetNodeId?: string;
+      nodeId?: string;
+    }
+  | {
+      op: 'RESOLVE_DECISION';
+      targetNodeId: string;
+      outcome: string;
+      confidence: number;
+      operationRef?: string;
+    }
+  | {
+      op: 'OPEN_UNKNOWN';
+      text: string;
+      confidence: number;
+      impact: number;
+      operationRef?: string;
+      targetNodeId?: string;
+      nodeId?: string;
+    }
+  | {
+      op: 'RESOLVE_UNKNOWN';
+      targetNodeId: string;
+      answer: string;
+      confidence: number;
+      operationRef?: string;
+    }
+  | {
+      op: 'ADD_ACTION';
+      text: string;
+      confidence: number;
+      impact: number;
+      operationRef?: string;
+      targetNodeId?: string;
+      nodeId?: string;
+    }
+  | {
+      op: 'NO_CHANGE';
+      confidence?: number;
+      operationRef?: string;
+    };
+
+export interface ProjectPatch {
+  operations: ProjectPatchOperation[];
+}
+
 export interface SourceRef {
   id: string;
   filename: string;
@@ -73,6 +171,8 @@ export interface ClarityNode {
   reconciliation_reason?: string;
   reconciliation_status?: 'reconciled' | 'fallback' | 'pending';
   reconciliation_classification?: ReconciliationClassification;
+  /** The chosen outcome is stored separately when the decision question text is preserved. */
+  decision_outcome?: string;
 }
 
 export interface ClarityEdge {

@@ -6,6 +6,7 @@
     "dev": "next dev",
     "dev:ai": "bash scripts/start-local-ai.sh",
     "scenario:ai": "node scripts/seed-live-ai-scenario.mjs",
+    "scenario:harbor": "node scripts/seed-live-harbor-hotels.mjs",
     "build": "next build --webpack",
     "start": "next start -p ${PORT:-3000}",
     "lint": "npm run typecheck",

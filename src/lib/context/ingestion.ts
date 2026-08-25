@@ -1,17 +1,13 @@
-import { ClarityNode, ContextProcessingLog, ContextSource, EdgeType, Project, QuestionReconciliationSummary, ReconciliationClassification, UserMemoryProfile } from '@/types/clarity';
+import { CanonicalChange, ClarityNode, ContextProcessingLog, ContextSource, EdgeType, NodeGrounding, Project, ProjectPatchContextNodeType, ProjectPatchOperation, QuestionReconciliationSummary, ReconciliationClassification, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
-import { matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
 import {
   questionIdentityKey,
-  questionsShareSubject,
-  reconcileQuestionCandidate,
-  semanticallyEquivalentQuestion,
 } from '@/lib/questions/canonical';
 import { resolveQuestionReferences } from '@/lib/questions/presentation';
 import { appendContextAddedHistory } from '@/lib/history/projectHistory';
+import { applyProjectPatch, canonicalChangesToProjectPatch } from '@/lib/context/canonicalChanges';
 import {
-  ensureResolutionConsistency,
   relationshipHasSemanticSupport,
   semanticEdgeRejectionReason,
   writeSemanticEdge,
@@ -25,6 +21,7 @@ export interface PrecomputedSourceNode {
   candidateRef?: string;
   type: ClarityNode['type'];
   text: string;
+  grounding?: NodeGrounding;
   confidence: number;
   impact?: number;
   whyItMatters?: string[];
@@ -83,7 +80,9 @@ export interface IngestSourceInput {
   discardedAt?: string;
   reconciliationSummary?: QuestionReconciliationSummary;
   processingLog?: ContextProcessingLog;
+  operations?: ProjectPatchOperation[];
   derivedNodes?: PrecomputedSourceNode[];
+  canonicalChanges?: CanonicalChange[];
   relationships?: PrecomputedRelationship[];
 }
 
@@ -545,88 +544,11 @@ export function extractDeterministicFallbackNodes(content: string): PrecomputedS
   return fallbackNodesForSource(content);
 }
 
-function inferFallbackResolutionTargets(project: Project, content: string): ClarityNode[] {
-  const lower = content.toLowerCase();
-  if (!/\b(?:test|trial|experiment|demonstrated|confirmed|approved|completed|produced|passed|verified|shows?|recorded)\b/i.test(lower)) return [];
-
-  const lines = sentenceLines(content);
-  const unresolvedLines = lines.filter((line) => /\b(?:do|does|did)\s+(?:not|n't)\s+know\s+whether\b|(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b|\b(?:pending|under review|unconfirmed|unresolved|result unknown)\b|\b(?:would|could|might|should|will)\s+(?:not\s+)?(?:resolve|confirm|verify|test|accept)\b/i.test(line));
-  const positiveContent = lines
-    .filter((line) => /\b(?:returned|created|produced|passed|failed|rejected|approved|confirmed|verified|recorded|completed|received|shows?|demonstrated|succeeded|successfully|matched|resolved)\b/i.test(line))
-    .filter((line) => !/(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b/i.test(line))
-    .join(' ');
-  if (!positiveContent.trim()) return [];
-  const contentTokens = new Set(questionIdentityKey(positiveContent).split(' ').filter(Boolean));
-  const genericTokens = new Set(['current', 'status', 'record', 'recorded', 'confirm', 'confirmed', 'approval', 'approved', 'review', 'reviewed']);
-  return project.nodes.filter((node) => {
-    if (!['UNKNOWN', 'ASSUMPTION'].includes(node.type) || node.status !== 'OPEN') return false;
-    const questionTokens = questionIdentityKey(node.text).split(' ').filter((token) => !genericTokens.has(token));
-    const isExplicitlyPending = unresolvedLines.some((line) => {
-      const lineTokens = new Set(questionIdentityKey(line).split(' ').filter((token) => !genericTokens.has(token)));
-      const pendingOverlap = questionTokens.filter((token) => lineTokens.has(token)).length;
-      return pendingOverlap >= 2;
-    });
-    if (isExplicitlyPending) return false;
-    const overlap = questionTokens.filter((token) => contentTokens.has(token)).length;
-    return overlap >= 3;
-  });
-}
-
 export function summarizeExtraction(source: Pick<ContextSource, 'type' | 'content'>): string {
   if (source.type === 'image') return 'Image/screenshot added with user-visible text or description for provenance.';
   if (source.type === 'voice') return 'Voice note transcript or summary captured as personal context.';
   if (source.type === 'pdf') return 'PDF text/excerpt captured for graph extraction and retrieval.';
   return 'Text context captured for graph extraction and retrieval.';
-}
-
-function statusForNodeType(
-  type: ClarityNode['type'],
-  requestedStatus?: ClarityNode['status'],
-  sourceContent = '',
-  nodeText = '',
-): ClarityNode['status'] {
-  if (type === 'DECISION') {
-    if (requestedStatus === 'OPEN' || requestedStatus === 'RESOLVED') return requestedStatus;
-    if (matchesExplicitDecisionTitle(nodeText, sourceContent)) return 'OPEN';
-  }
-  return type === 'UNKNOWN' || type === 'ASSUMPTION' || type === 'RISK' || type === 'NEXT_ACTION' || type === 'GOAL' || type === 'EXPERIMENT'
-    ? 'OPEN'
-    : 'RESOLVED';
-}
-
-function nodeKey(type: ClarityNode['type'], text: string): string {
-  if (type === 'UNKNOWN' || type === 'ASSUMPTION') {
-    const key = questionIdentityKey(text);
-    if (key) return `${type}:question:${key}`;
-  }
-  return `${type}:${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
-}
-
-function canonicalContextNodeTypesCompatible(
-  left: ClarityNode['type'],
-  right: ClarityNode['type'],
-): boolean {
-  if (left === right) return true;
-  return isCanonicalContextNode(left) && isCanonicalContextNode(right);
-}
-
-function canonicalContextTargetTypesCompatible(
-  left: ClarityNode['type'],
-  right: ClarityNode['type'],
-  classification?: string,
-): boolean {
-  if (!canonicalContextNodeTypesCompatible(left, right)) return false;
-  return left === right
-    || classification === 'EQUIVALENT'
-    || classification === 'REFINES_EXISTING';
-}
-
-function isCanonicalContextNode(type: ClarityNode['type']): boolean {
-  return type === 'KNOWN' || type === 'EVIDENCE' || type === 'CONSTRAINT';
-}
-
-function fallbackStatusEquivalent(left: string, right: string): boolean {
-  return questionsShareSubject(left, right);
 }
 
 function mergeUnique(values: string[] | undefined, additions: string[] | undefined): string[] | undefined {
@@ -648,49 +570,78 @@ function reconciliationSummaryForNodes(nodes: PrecomputedSourceNode[]): Question
   };
 }
 
-function reconciliationNote(
-  relationship: EdgeType,
-  sourceFilename: string,
-  targetText: string
-): string | undefined {
-  if (relationship === 'contradicts') {
-    return `Questioned by newer evidence from ${sourceFilename}: ${targetText}`;
-  }
-  if (relationship === 'supersedes') {
-    return `Superseded by newer evidence from ${sourceFilename}: ${targetText}`;
-  }
-  if (relationship === 'resolves') {
-    return `Resolved by newer evidence from ${sourceFilename}: ${targetText}`;
-  }
-  return undefined;
+function reconciliationSummaryForOperations(
+  operations: ProjectPatchOperation[],
+): QuestionReconciliationSummary {
+  const unknownOperations = operations.filter((operation) =>
+    operation.op === 'OPEN_UNKNOWN' || operation.op === 'RESOLVE_UNKNOWN',
+  );
+  return {
+    candidate_count: unknownOperations.length,
+    canonical_merge_count: 0,
+    subquestion_count: 0,
+    assumption_count: 0,
+    new_question_count: operations.filter((operation) => operation.op === 'OPEN_UNKNOWN').length,
+    fallback_count: 0,
+    validation_status: 'passed',
+  };
 }
 
-function applyRelationshipState(
-  target: ClarityNode,
-  relationship: EdgeType,
-  sourceId: string,
-  sourceFilename: string,
-  now: string
-): void {
-  // A relationship is not automatically direct provenance. Only evidence
-  // relationships that can substantively update the target's understanding
-  // should add this source to its Evidence list. Structural links such as
-  // depends_on/blocks/affects must remain graph context without making the
-  // source appear to state the target question itself.
-  if (['supports', 'contradicts', 'resolves', 'supersedes'].includes(relationship)) {
-    target.source_refs = Array.from(new Set([...target.source_refs, sourceId]));
-  }
-  const note = reconciliationNote(relationship, sourceFilename, target.text);
-  if (note) target.why_it_matters = mergeUnique(target.why_it_matters, [note]);
-  target.updated_at = now;
+/**
+ * Compatibility adapter for deterministic/demo callers that still provide
+ * precomputed nodes. They are converted to ProjectPatch operations before
+ * mutation; no node-shaped persistence path remains.
+ */
+function operationsFromLegacyNodes(nodes: PrecomputedSourceNode[]): ProjectPatchOperation[] {
+  return nodes.map((node, index): ProjectPatchOperation | undefined => {
+    const operationRef = node.candidateRef ?? `new:${index}`;
+    const targetNodeId = ['PARAPHRASE', 'EQUIVALENT', 'REFINES_EXISTING', 'ASSUMPTION'].includes(node.questionClassification ?? '')
+      ? node.canonicalNodeId ?? node.canonicalQuestionId
+      : undefined;
+    const confidence = node.confidence;
+    const impact = node.impact ?? confidence;
 
-  if (relationship === 'contradicts' && ['KNOWN', 'ASSUMPTION', 'DECISION', 'EVIDENCE'].includes(target.type)) {
-    target.status = 'DEFERRED';
-  }
-  if (relationship === 'supersedes') target.status = 'DEPRECATED';
-  if (relationship === 'resolves' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(target.type)) {
-    target.status = 'RESOLVED';
-  }
+    if (node.type === 'DECISION') {
+      if (node.status === 'RESOLVED' && (node.canonicalNodeId ?? node.canonicalQuestionId)) {
+        return {
+          op: 'RESOLVE_DECISION',
+          targetNodeId: node.canonicalNodeId ?? node.canonicalQuestionId!,
+          outcome: node.text,
+          confidence,
+          operationRef,
+        };
+      }
+      return { op: 'OPEN_DECISION', text: node.text, confidence, impact, targetNodeId, nodeId: node.id, operationRef };
+    }
+    if (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') {
+      if (node.status === 'RESOLVED' && (node.canonicalNodeId ?? node.canonicalQuestionId)) {
+        return {
+          op: 'RESOLVE_UNKNOWN',
+          targetNodeId: node.canonicalNodeId ?? node.canonicalQuestionId!,
+          answer: node.text,
+          confidence,
+          operationRef,
+        };
+      }
+      return { op: 'OPEN_UNKNOWN', text: node.text, confidence, impact, targetNodeId, nodeId: node.id, operationRef };
+    }
+    if (node.type === 'NEXT_ACTION') {
+      return { op: 'ADD_ACTION', text: node.text, confidence, impact, targetNodeId, nodeId: node.id, operationRef };
+    }
+    if (['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK'].includes(node.type)) {
+      return {
+        op: 'ADD_CONTEXT',
+        nodeType: node.type as ProjectPatchContextNodeType,
+        text: node.text,
+        confidence,
+        impact,
+        targetNodeId,
+        nodeId: node.id,
+        operationRef,
+      };
+    }
+    return undefined;
+  }).filter((operation): operation is ProjectPatchOperation => Boolean(operation));
 }
 
 function relationshipRejection(
@@ -735,9 +686,9 @@ function persistValidatedRelationship(
     return { accepted: false, reason: 'redundant_relationship' };
   }
 
-  if (candidate.type !== 'satisfies') {
-    applyRelationshipState(targetNode, candidate.type, sourceId, sourceFilename, now);
-  }
+  // Relationship completion is descriptive metadata only. Canonical node
+  // lifecycle changes are performed exclusively by ProjectPatch operations or
+  // explicit answer/decision workflows.
   return { accepted: true };
 }
 
@@ -766,7 +717,6 @@ export function applyCanonicalRelationshipCandidates(
     else trace.rejectedRelationships.push(relationshipRejection(candidate, result.reason ?? 'rejected'));
   });
 
-  ensureResolutionConsistency(updated);
   return { project: updated, trace };
 }
 
@@ -779,36 +729,16 @@ export async function ingestContextSource(
   const now = new Date().toISOString();
   const sourceId = input.sourceId ?? makeId('src');
   const content = input.content.trim();
+  const processingStatus = input.processingStatus ?? (content ? 'completed' : 'failed');
   const previousSource = updated.sources.find((source) => source.id === sourceId);
   const previousDerivedNodeIds = new Set(previousSource?.derived_node_ids ?? []);
-  const shouldCreateNode = Boolean(content)
-    && ((input.processingStatus ?? (content ? 'completed' : 'failed')) !== 'failed' || Boolean(input.derivedNodes?.length));
+
   if (previousSource) {
-    if (shouldCreateNode) {
-      previousDerivedNodeIds.forEach((nodeId) => {
-        const previousNode = updated.nodes.find((node) => node.id === nodeId);
-        if (!previousNode) return;
-        const hasOtherActiveSource = previousNode.source_refs.some((ref) =>
-          ref !== sourceId && updated.sources.some((source) => source.id === ref && !source.discarded_at)
-        );
-        if (hasOtherActiveSource) return;
-        previousNode.status = 'DEPRECATED';
-        previousNode.why_it_matters = mergeUnique(previousNode.why_it_matters, [
-          `Retained as historical context after ${input.filename} was re-analyzed.`,
-        ]);
-        previousNode.updated_at = now;
-      });
-    }
     updated.sources = updated.sources.filter((source) => source.id !== sourceId);
   }
-  const processingStatus = input.processingStatus ?? (content ? 'completed' : 'failed');
-  // A completed/failed processing attempt must always have an observable end
-  // time. Older callers often supplied only a status, which made Context show
-  // both "Processed" and "Not processed yet" for the same source.
+
   const processedAt = input.processedAt
     ?? (processingStatus === 'completed' || processingStatus === 'failed' ? now : undefined);
-  const derivedNodes = input.derivedNodes ?? [];
-
   const newSource: ContextSource = {
     id: sourceId,
     filename: input.filename,
@@ -829,216 +759,91 @@ export async function ingestContextSource(
     extraction_hash: input.extractionHash,
     relevance: input.relevance ?? 'relevant',
     discarded_at: input.discardedAt ?? previousSource?.discarded_at,
-    reconciliation_summary: input.reconciliationSummary,
+    reconciliation_summary: input.reconciliationSummary
+      ?? (input.derivedNodes ? reconciliationSummaryForNodes(input.derivedNodes) : undefined),
     processing_log: input.processingLog,
   };
-
   updated.sources.push(newSource);
 
-  if (shouldCreateNode) {
-    // An explicitly supplied empty list is a successful model result with no
-    // derived nodes. Only callers that omit derivedNodes use deterministic
-    // demo/model-unavailable extraction.
-    const nodesToProcess = input.derivedNodes !== undefined
-      ? derivedNodes
-      : fallbackNodesForSource(content);
-    const nodeIds: string[] = [];
-    const nodeIdByCandidateRef = new Map<string, string>();
-    const currentSourceCanonicalNodeIds = new Set<string>();
+  const patchOperations = processingStatus === 'failed'
+    ? []
+    : input.operations
+      ?? (input.canonicalChanges
+        ? canonicalChangesToProjectPatch(input.canonicalChanges).operations
+        : input.derivedNodes !== undefined
+          ? operationsFromLegacyNodes(input.derivedNodes)
+          : operationsFromLegacyNodes(fallbackNodesForSource(content)));
+  const patchResult = applyProjectPatch(
+    updated,
+    { operations: patchOperations },
+    sourceId,
+    profile,
+    {
+      supersededNodeIds: processingStatus === 'failed' ? [] : [...previousDerivedNodeIds],
+    },
+  );
+  Object.assign(updated, patchResult.project);
 
-    nodesToProcess.forEach((node, nodeIndex) => {
-      const candidateRef = node.candidateRef ?? `new:${nodeIndex}`;
-      const deterministicReconciliation = (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-        ? reconcileQuestionCandidate(node, updated)
-        : undefined;
-      const questionClassification = node.questionClassification ?? deterministicReconciliation?.classification;
-      const siblingTargetId = node.canonicalCandidateRef
-        ? nodeIdByCandidateRef.get(node.canonicalCandidateRef)
-        : undefined;
-      const siblingTarget = siblingTargetId
-        ? updated.nodes.find((candidate) => candidate.id === siblingTargetId)
-        : undefined;
-      const validSiblingTarget = siblingTarget && (
-        siblingTarget.type === 'UNKNOWN'
-        || siblingTarget.type === 'ASSUMPTION'
-        || siblingTarget.type === 'DECISION'
-      )
-        ? siblingTarget
-        : undefined;
-      const canonicalNodeId = node.canonicalNodeId
-        ?? node.canonicalQuestionId
-        ?? validSiblingTarget?.canonical_node_id
-        ?? validSiblingTarget?.canonical_question_id
-        ?? validSiblingTarget?.id
-        ?? deterministicReconciliation?.canonicalQuestionId;
-      const reconciliationTargetCandidate = canonicalNodeId
-        ? updated.nodes.find((candidate) => candidate.id === canonicalNodeId)
-        : undefined;
-      const reconciliationTarget = reconciliationTargetCandidate && (
-        ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-          && (reconciliationTargetCandidate.type === 'UNKNOWN' || reconciliationTargetCandidate.type === 'ASSUMPTION'))
-        || (node.type === 'DECISION' && reconciliationTargetCandidate.type === 'DECISION')
-        || (isCanonicalContextNode(node.type)
-          && canonicalContextTargetTypesCompatible(
-            node.type,
-            reconciliationTargetCandidate.type,
-            questionClassification,
-          ))
-      )
-        ? reconciliationTargetCandidate
-        : undefined;
-      const effectiveCanonicalNodeId = reconciliationTarget ? canonicalNodeId : undefined;
-      const canonicalQuestionId = (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-        ? effectiveCanonicalNodeId
-        : undefined;
-      const key = nodeKey(node.type, node.text);
-      const exactExistingNode = updated.nodes.find((candidate) => nodeKey(candidate.type, candidate.text) === key);
-      const deterministicParaphraseTarget = deterministicReconciliation?.classification === 'PARAPHRASE'
-        && questionClassification !== 'SUBQUESTION'
-        && questionClassification !== 'ASSUMPTION';
-      const canonicalDecisionMerge = node.type === 'DECISION'
-        && (questionClassification === 'EQUIVALENT' || questionClassification === 'REFINES_EXISTING')
-        && reconciliationTarget;
-      let existingNode = ((
-        questionClassification === 'PARAPHRASE'
-        || questionClassification === 'EQUIVALENT'
-        || questionClassification === 'REFINES_EXISTING'
-        || deterministicParaphraseTarget
-      ) && reconciliationTarget)
-        ? reconciliationTarget
-        : exactExistingNode;
-      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalNodeId && !node.questionClassification) {
-        existingNode = updated.nodes.find((candidate) =>
-          (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
-          && semanticallyEquivalentQuestion(candidate.text, node.text)
-        );
-      }
-      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalNodeId && !node.questionClassification) {
-        existingNode = updated.nodes.find((candidate) =>
-          (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
-          && fallbackStatusEquivalent(node.text, candidate.text)
-        );
-      }
-      if (existingNode) {
-        const previousText = existingNode.text;
-        const previousStatus = existingNode.status;
-        if (node.questionClassification && !node.canonicalNodeId && !node.canonicalQuestionId && existingNode.reconciliation_status === 'fallback') {
-          existingNode.text = node.text;
-        }
-        existingNode.source_refs = Array.from(new Set([...existingNode.source_refs, sourceId]));
-        existingNode.confidence = Math.max(existingNode.confidence, node.confidence);
-        existingNode.impact = Math.max(existingNode.impact, node.impact ?? node.confidence);
-        existingNode.why_it_matters = mergeUnique(existingNode.why_it_matters, node.whyItMatters);
-        if (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') {
-          existingNode.question_aliases = Array.from(new Set([
-            ...(existingNode.question_aliases ?? []),
-            ...(node.questionAliases ?? []),
-            ...(previousText === existingNode.text ? [] : [previousText]),
-            ...(node.text === existingNode.text ? [] : [node.text]),
-          ].filter((text) => text && text !== existingNode.text)));
-          if (questionClassification === 'PARAPHRASE') existingNode.question_role = 'canonical';
-        }
-        existingNode.reconciliation_confidence = Math.max(
-          existingNode.reconciliation_confidence ?? 0,
-          node.reconciliationConfidence ?? deterministicReconciliation?.confidence ?? 0,
-        );
-        existingNode.reconciliation_reason = node.reconciliationReason ?? deterministicReconciliation?.reason ?? existingNode.reconciliation_reason;
-        existingNode.reconciliation_status = node.questionClassification ? 'reconciled' : 'fallback';
-        existingNode.reconciliation_classification = questionClassification ?? existingNode.reconciliation_classification;
-        if (
-          (canonicalDecisionMerge || isCanonicalContextNode(node.type))
-          && questionClassification === 'REFINES_EXISTING'
-          && (existingNode.type !== 'DECISION' || (existingNode.status === 'OPEN' && node.status === 'OPEN'))
-        ) {
-          existingNode.text = node.text;
-        }
-        existingNode.updated_at = now;
-        if (previousDerivedNodeIds.has(existingNode.id)) {
-          existingNode.status = statusForNodeType(existingNode.type, node.status, content, node.text);
-        } else if (node.status === 'RESOLVED' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(existingNode.type)) {
-          existingNode.status = 'RESOLVED';
-        } else if (existingNode.type === 'DECISION' && node.status === 'OPEN') {
-          existingNode.status = 'OPEN';
-        }
-        nodeIds.push(existingNode.id);
-        nodeIdByCandidateRef.set(candidateRef, existingNode.id);
-        if (existingNode.text !== previousText || existingNode.status !== previousStatus) {
-          currentSourceCanonicalNodeIds.add(existingNode.id);
-        }
-        return;
-      }
+  const persistedSource = updated.sources.find((source) => source.id === sourceId);
+  if (persistedSource) {
+    persistedSource.derived_node_ids = patchResult.createdNodeIds;
+    persistedSource.reconciliation_summary ??= reconciliationSummaryForOperations(patchOperations);
+  }
 
-      const createdNode: ClarityNode = {
-        id: node.id ?? makeId('node_ext'),
-        type: node.type,
-        text: node.text,
-        status: statusForNodeType(node.type, node.status, content, node.text),
-        confidence: node.confidence,
-        impact: node.impact ?? node.confidence,
-        source_refs: [sourceId],
-        why_it_matters: node.whyItMatters,
-        created_by: 'agent',
-        created_at: now,
-        updated_at: now,
-        x: 180 + Math.random() * 360,
-        y: 220 + Math.random() * 280,
-        question_role: (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-          ? (questionClassification === 'SUBQUESTION'
-            ? 'subquestion'
-            : questionClassification === 'ASSUMPTION'
-              ? 'assumption'
-              : questionClassification === 'RELATED_BUT_DISTINCT'
-                ? 'related'
-                : 'canonical')
-          : undefined,
-        canonical_question_id: canonicalQuestionId,
-        canonical_node_id: effectiveCanonicalNodeId,
-        question_aliases: node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'
-          ? Array.from(new Set((node.questionAliases ?? []).filter((text) => text && text !== node.text)))
-          : undefined,
-        reconciliation_confidence: node.reconciliationConfidence ?? deterministicReconciliation?.confidence,
-        reconciliation_reason: node.reconciliationReason ?? deterministicReconciliation?.reason,
-        reconciliation_status: node.questionClassification ? 'reconciled' : ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') ? 'fallback' : undefined),
-        reconciliation_classification: node.questionClassification,
-      };
-      updated.nodes.push(createdNode);
-      nodeIds.push(createdNode.id);
-      nodeIdByCandidateRef.set(candidateRef, createdNode.id);
-      currentSourceCanonicalNodeIds.add(createdNode.id);
+  if (input.processingLog) {
+    input.processingLog.stages.push({
+      name: 'ProjectPatch execution',
+      status: processingStatus === 'failed' ? 'skipped' : 'completed',
+      started_at: now,
+      duration_ms: 0,
+      input: { model_operations: patchOperations },
+      output: {
+        validated_operations: patchResult.validatedOperations,
+        executed_operations: patchResult.executedOperations,
+        rejected_operations: patchResult.rejectedOperations,
+        created_node_ids: patchResult.createdNodeIds,
+        updated_node_ids: patchResult.updatedNodeIds,
+        final_project_node_count: updated.nodes.length,
+      },
     });
+  }
 
-    newSource.derived_node_ids = nodeIds;
-    newSource.reconciliation_summary = input.reconciliationSummary ?? reconciliationSummaryForNodes(nodesToProcess);
+  const operationNodeIds = { ...patchResult.operationNodeIds };
+  patchOperations.forEach((operation, index) => {
+    const id = operationNodeIds[operation.operationRef ?? `op:${index}`];
+    if (!id) return;
+    operationNodeIds[`new:${index}`] = id;
+    if (operation.operationRef) operationNodeIds[operation.operationRef] = id;
+  });
 
-    const relationships: PrecomputedRelationship[] = [
-      ...(input.relationships ?? []),
-      ...nodesToProcess.flatMap((node, sourceNodeIndex) =>
-        node.relationship && node.relatedNodeIds?.length
-          ? node.relatedNodeIds.map((targetNodeId) => ({
-              sourceRef: node.candidateRef ?? `new:${sourceNodeIndex}`,
-              targetRef: targetNodeId,
-              type: node.relationship as EdgeType,
-              confidence: node.confidence,
-            }))
-          : []
-      ),
-    ];
+  const relationships: PrecomputedRelationship[] = [
+    ...(input.relationships ?? []),
+    ...(input.derivedNodes ?? []).flatMap((node, index) =>
+      node.relationship && node.relatedNodeIds?.length
+        ? node.relatedNodeIds.map((targetNodeId) => ({
+            sourceRef: node.candidateRef ?? `new:${index}`,
+            targetRef: targetNodeId,
+            type: node.relationship as EdgeType,
+            confidence: node.confidence,
+          }))
+        : []
+    ),
+  ];
+  const relationshipPersistenceTrace: RelationshipPersistenceTrace = {
+    acceptedRelationships: [],
+    rejectedRelationships: [],
+  };
 
-    const relationshipPersistenceTrace: RelationshipPersistenceTrace = {
-      acceptedRelationships: [],
-      rejectedRelationships: [],
-    };
+  if (processingStatus !== 'failed') {
     relationships.forEach((relationship) => {
-      const sourceNodeId = nodeIdByCandidateRef.get(relationship.sourceRef) ?? relationship.sourceRef;
-      const targetNodeId = nodeIdByCandidateRef.get(relationship.targetRef) ?? relationship.targetRef;
       const candidate: CanonicalRelationshipCandidate = {
-        sourceNodeId,
-        targetNodeId,
+        sourceNodeId: operationNodeIds[relationship.sourceRef] ?? relationship.sourceRef,
+        targetNodeId: operationNodeIds[relationship.targetRef] ?? relationship.targetRef,
         type: relationship.type,
         confidence: relationship.confidence,
       };
-      const sourceExists = updated.nodes.some((node) => node.id === sourceNodeId);
-      const targetExists = updated.nodes.some((node) => node.id === targetNodeId);
+      const sourceExists = updated.nodes.some((node) => node.id === candidate.sourceNodeId);
+      const targetExists = updated.nodes.some((node) => node.id === candidate.targetNodeId);
       if (!sourceExists || !targetExists) {
         relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(
           candidate,
@@ -1046,13 +851,12 @@ export async function ingestContextSource(
         ));
         return;
       }
-      const sourceIsCurrent = currentSourceCanonicalNodeIds.has(sourceNodeId);
-      const targetIsCurrent = currentSourceCanonicalNodeIds.has(targetNodeId);
+      const sourceIsCurrent = patchResult.createdNodeIds.includes(candidate.sourceNodeId)
+        || patchResult.updatedNodeIds.includes(candidate.sourceNodeId);
+      const targetIsCurrent = patchResult.createdNodeIds.includes(candidate.targetNodeId)
+        || patchResult.updatedNodeIds.includes(candidate.targetNodeId);
       if (!sourceIsCurrent && !targetIsCurrent) {
-        relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(
-          candidate,
-          'not_source_local',
-        ));
+        relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(candidate, 'not_source_local'));
         return;
       }
       const result = persistValidatedRelationship(
@@ -1066,43 +870,16 @@ export async function ingestContextSource(
       if (result.accepted) relationshipPersistenceTrace.acceptedRelationships.push(candidate);
       else relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(candidate, result.reason ?? 'rejected'));
     });
-    if (input.processingLog) {
-      input.processingLog.stages.push({
-        name: 'Relationship validation',
-        status: 'completed',
-        started_at: now,
-        duration_ms: 0,
-        output: relationshipPersistenceTrace,
-      });
-    }
+  }
 
-    // In the zero-cost/local path, a conclusive test or approval statement can
-    // answer an existing UNKNOWN even when no structured relationship was
-    // supplied by a model. Negative blocker statements intentionally do not
-    // resolve anything; they remain evidence on the open question.
-    const fallbackResolutionTargets = input.derivedNodes?.length
-      ? []
-      : inferFallbackResolutionTargets(updated, content);
-    const resolutionSourceId = nodeIds.find((nodeId) =>
-      fallbackResolutionTargets.every((target) => target.id !== nodeId)
-      && updated.nodes.some((node) => node.id === nodeId && ['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(node.type))
-    );
-    if (resolutionSourceId) {
-      fallbackResolutionTargets.forEach((targetNode) => {
-        const persisted = writeSemanticEdge(updated, {
-          id: makeId('edge_context'),
-          source: resolutionSourceId,
-          target: targetNode.id,
-          type: 'resolves',
-          confidence: 0.88,
-        });
-        if (persisted) applyRelationshipState(targetNode, 'resolves', sourceId, input.filename, now);
-      });
-    }
-
-    // Keep accepted completed-outcome edges and target lifecycle state
-    // consistent, including edges that point to an existing DECISION.
-    ensureResolutionConsistency(updated);
+  if (input.processingLog) {
+    input.processingLog.stages.push({
+      name: 'Relationship validation',
+      status: processingStatus === 'failed' ? 'skipped' : 'completed',
+      started_at: now,
+      duration_ms: 0,
+      output: relationshipPersistenceTrace,
+    });
   }
 
   const reasoningProject = projectForReasoning(updated);

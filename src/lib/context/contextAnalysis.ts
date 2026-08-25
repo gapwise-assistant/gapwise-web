@@ -1,15 +1,13 @@
 import { Type } from '@google/genai';
 import { z } from 'zod';
-import { ClarityNode, ContextProcessingLog, ContextProcessingLogStage, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
+import { ClarityNode, ContextProcessingLog, ContextProcessingLogStage, ContextSource, EdgeType, Project, ProjectPatchOperation, UserMemoryProfile } from '@/types/clarity';
 import { nodeTypeSchema, validateStructuredOutput } from '@/lib/agents/schemas';
 import { getVertexGenAIClient } from '@/lib/google/genai';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { StorageError } from '@/lib/storage/types';
 import { assertExternalServicesAllowed, isDemoMode } from '@/lib/runtime/demoMode';
-import { matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
 import {
   hashText,
-  extractDeterministicFallbackNodes,
   ingestContextSource,
   IngestSourceInput,
   PrecomputedRelationship,
@@ -18,11 +16,7 @@ import {
 import { projectForReasoning } from '@/lib/context/sourceState';
 import {
   canonicalOpenQuestions,
-  canonicalQuestionGroups,
-  reconcileQuestionCandidates,
-  semanticallyEquivalentQuestion,
 } from '@/lib/questions/canonical';
-import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 
 const reconciliationClassificationSchema = z.enum([
@@ -38,17 +32,6 @@ const reconciliationClassificationSchema = z.enum([
   'REFINES_EXISTING',
   'BROADER_THAN_EXISTING',
   'DISTINCT',
-]);
-
-const RECONCILIATION_CAN_USE_CANONICAL_TARGET = new Set([
-  'PARAPHRASE',
-  'SUBQUESTION',
-  'ASSUMPTION',
-  'SUPPORTING_EVIDENCE',
-  'NEXT_ACTION',
-  'ALREADY_ANSWERED',
-  'EQUIVALENT',
-  'REFINES_EXISTING',
 ]);
 
 const reconciliationResultSchema = z.object({
@@ -71,6 +54,99 @@ const normalizedNodeTypeSchema = z.preprocess(
 );
 
 const extractionBasisSchema = z.enum(['USER_STATED', 'AI_DERIVED']);
+const nodeGroundingSchema = z.enum(['SOURCE_ASSERTED', 'HYPOTHETICAL', 'AI_DERIVED']);
+
+const canonicalChangeSchema = z.discriminatedUnion('operation', [
+  z.object({
+    operation: z.literal('RESOLVE_DECISION'),
+    targetNodeId: z.string().min(1),
+    outcome: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+  }),
+  z.object({
+    operation: z.literal('OPEN_DECISION'),
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+  }),
+  z.object({
+    operation: z.literal('RESOLVE_UNKNOWN'),
+    targetNodeId: z.string().min(1),
+    answer: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+  }),
+  z.object({
+    operation: z.literal('NO_CHANGE'),
+    confidence: z.number().min(0).max(1).default(1),
+  }),
+]);
+
+const patchContextNodeTypeSchema = z.enum([
+  'KNOWN',
+  'EVIDENCE',
+  'CONSTRAINT',
+  'PREFERENCE',
+  'RISK',
+  'ASSUMPTION',
+]);
+
+const projectPatchOperationSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('ADD_CONTEXT'),
+    nodeType: patchContextNodeTypeSchema,
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+    targetNodeId: z.string().optional(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('OPEN_DECISION'),
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+    targetNodeId: z.string().optional(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('RESOLVE_DECISION'),
+    targetNodeId: z.string().min(1),
+    outcome: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('OPEN_UNKNOWN'),
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+    targetNodeId: z.string().optional(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('RESOLVE_UNKNOWN'),
+    targetNodeId: z.string().min(1),
+    answer: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('ADD_ACTION'),
+    text: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+    impact: z.number().min(0).max(1),
+    operationRef: z.string().optional(),
+    targetNodeId: z.string().optional(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    op: z.literal('NO_CHANGE'),
+    confidence: z.number().min(0).max(1).optional(),
+    operationRef: z.string().optional(),
+  }),
+]);
 
 const relationshipSchema = z.enum([
   'supports',
@@ -108,14 +184,48 @@ const relationshipOutputSchema = z.object({
   confidence: relationship.confidence,
 }));
 
-export const contextAnalysisSchema = z.object({
+function legacyCanonicalChangeToOperation(change: Record<string, unknown>, index: number): Record<string, unknown> {
+  const operationRef = `op:${index}`;
+  switch (change.operation) {
+    case 'RESOLVE_DECISION':
+      return { op: 'RESOLVE_DECISION', targetNodeId: change.targetNodeId, outcome: change.outcome, confidence: change.confidence, operationRef };
+    case 'OPEN_DECISION':
+      return { op: 'OPEN_DECISION', text: change.text, confidence: change.confidence, impact: 0.9, operationRef };
+    case 'RESOLVE_UNKNOWN':
+      return { op: 'RESOLVE_UNKNOWN', targetNodeId: change.targetNodeId, answer: change.answer, confidence: change.confidence, operationRef };
+    default:
+      return { op: 'NO_CHANGE', confidence: change.confidence, operationRef };
+  }
+}
+
+export const contextAnalysisSchema = z.preprocess((value) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.operations === undefined) {
+      const legacyChanges = Array.isArray(record.canonical_changes)
+        ? record.canonical_changes
+        : Array.isArray(record.changes)
+          ? record.changes
+          : undefined;
+      if (legacyChanges) {
+        return {
+          ...record,
+          operations: legacyChanges.map((change, index) => legacyCanonicalChangeToOperation(change as Record<string, unknown>, index)),
+        };
+      }
+    }
+  }
+  return value;
+}, z.object({
   summary: z.string().min(1),
   relevance: z.enum(['relevant', 'possibly_not_relevant']).default('relevant'),
+  operations: z.array(projectPatchOperationSchema).max(24).default([]),
   nodes: z.array(z.object({
     /** Stable internal identity; generated by Gapwise, never by the model. */
     candidate_ref: z.string().optional(),
     type: normalizedNodeTypeSchema,
     text: z.string().min(1),
+    grounding: nodeGroundingSchema.default('SOURCE_ASSERTED'),
     extraction_basis: extractionBasisSchema.optional(),
     confidence: z.number().min(0).max(1),
     impact: z.number().min(0).max(1).default(0.7),
@@ -127,7 +237,8 @@ export const contextAnalysisSchema = z.object({
   })).max(12).default([]),
   relationships: z.array(relationshipOutputSchema).max(24).default([]),
   reconciliation: z.array(reconciliationResultSchema).max(12).default([]),
-});
+  canonical_changes: z.array(canonicalChangeSchema).optional(),
+}));
 
 export type ContextAnalysis = z.infer<typeof contextAnalysisSchema>;
 
@@ -145,6 +256,9 @@ function attachStableCandidateIdentity(analysis: ContextAnalysis): ContextAnalys
     ...analysis,
     nodes: analysis.nodes.map((node, index) => ({
       ...node,
+      grounding: node.extraction_basis === 'AI_DERIVED'
+        ? 'AI_DERIVED'
+        : node.grounding ?? 'SOURCE_ASSERTED',
       candidate_ref: node.candidate_ref ?? candidateRef(index),
     })),
     reconciliation: analysis.reconciliation.map((item) => ({
@@ -257,7 +371,7 @@ function filterAiDerivedAskNodes(
 
   const keptRefs = new Set(
     analysis.nodes
-      .filter((node) => node.extraction_basis === 'USER_STATED')
+      .filter((node) => node.grounding === 'SOURCE_ASSERTED')
       .map((node) => node.candidate_ref)
       .filter((ref): ref is string => Boolean(ref)),
   );
@@ -265,7 +379,7 @@ function filterAiDerivedAskNodes(
 
   return {
     ...analysis,
-    nodes: analysis.nodes.filter((node) => node.extraction_basis === 'USER_STATED'),
+    nodes: analysis.nodes.filter((node) => node.grounding === 'SOURCE_ASSERTED'),
     relationships: analysis.relationships.filter((relationship) =>
       referenceIsKept(relationship.source_ref) && referenceIsKept(relationship.target_ref)
     ),
@@ -273,6 +387,66 @@ function filterAiDerivedAskNodes(
       Boolean(item.candidate_ref && keptRefs.has(item.candidate_ref))
     ),
   };
+}
+
+/**
+ * Compatibility adapter for older deterministic fixtures that still provide
+ * node-shaped model output. The live Gemini schema does not expose `nodes`;
+ * this adapter still funnels legacy input into the same ProjectPatch executor
+ * and never persists nodes directly.
+ */
+function legacyNodesToOperations(analysis: ContextAnalysis): ProjectPatchOperation[] {
+  const reconciliationByRef = new Map(
+    analysis.reconciliation.map((item) => [item.candidate_ref, item]),
+  );
+  return analysis.nodes
+    .filter((node) => node.grounding === 'SOURCE_ASSERTED')
+    .map((node, index): ProjectPatchOperation | undefined => {
+      const operationRef = node.candidate_ref ?? `new:${index}`;
+      const reconciliation = reconciliationByRef.get(node.candidate_ref);
+      const targetNodeId = reconciliation?.canonical_node_id ?? reconciliation?.canonical_question_id;
+      const confidence = node.confidence;
+      const impact = node.impact;
+
+      if (node.type === 'DECISION') {
+        if (node.status === 'RESOLVED' && targetNodeId) {
+          return { op: 'RESOLVE_DECISION', targetNodeId, outcome: node.text, confidence, operationRef };
+        }
+        return { op: 'OPEN_DECISION', text: node.text, confidence, impact, targetNodeId, operationRef };
+      }
+      if (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') {
+        if (node.status === 'RESOLVED' && targetNodeId) {
+          return { op: 'RESOLVE_UNKNOWN', targetNodeId, answer: node.text, confidence, operationRef };
+        }
+        return { op: 'OPEN_UNKNOWN', text: node.text, confidence, impact, targetNodeId, operationRef };
+      }
+      if (node.type === 'NEXT_ACTION') {
+        return { op: 'ADD_ACTION', text: node.text, confidence, impact, targetNodeId, operationRef };
+      }
+      if (['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK'].includes(node.type)) {
+        return {
+          op: 'ADD_CONTEXT',
+          nodeType: node.type,
+          text: node.text,
+          confidence,
+          impact,
+          targetNodeId,
+          operationRef,
+        } as ProjectPatchOperation;
+      }
+      return undefined;
+    })
+    .filter((operation): operation is ProjectPatchOperation => Boolean(operation));
+}
+
+function analysisOperations(analysis: ContextAnalysis): ProjectPatchOperation[] {
+  const operations = analysis.operations.length > 0
+    ? analysis.operations
+    : legacyNodesToOperations(analysis);
+  return operations.map((operation, index) => ({
+    ...operation,
+    operationRef: operation.operationRef ?? `op:${index}`,
+  }));
 }
 
 function compactNode(node: ClarityNode): Record<string, unknown> {
@@ -390,65 +564,36 @@ function projectSnapshot(project: Project, query = ''): string {
 
 function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
   return [
-    'Analyze one newly supplied Gapwise context item against the current project state.',
+    "You are Gapwise's canonical project-state interpreter.",
+    'Analyze one newly supplied source against the current canonical project state and determine what changed in project reality.',
     `Project goal: ${project.goal}`,
     `New source filename: ${input.filename}`,
     `New context text or user-provided description: ${input.content.trim() || '(The source is provided as a file; inspect it.)'}`,
+    'Return only structured JSON with summary, relevance, operations, and relationships.',
+    'operations are the only representation of project mutations. Do not additionally return persistable extracted nodes for the same semantic content.',
+    'Use ADD_CONTEXT for one explicit source-asserted KNOWN, EVIDENCE, CONSTRAINT, PREFERENCE, RISK, or ASSUMPTION proposition.',
+    'Use OPEN_DECISION for one explicit unresolved user-controlled choice that is not already represented.',
+    'Use RESOLVE_DECISION when the source clearly commits to an outcome for an existing OPEN DECISION. Keep the original decision question as the target identity and put only the chosen outcome in outcome.',
+    'Use OPEN_UNKNOWN for one missing factual question that must be learned, observed, measured, or confirmed.',
+    'Use RESOLVE_UNKNOWN when the source directly supplies the missing answer to an existing OPEN UNKNOWN or ASSUMPTION.',
+    'Use ADD_ACTION for one explicitly intended or committed piece of project work.',
+    'Use NO_CHANGE when the source is hypothetical, analytical, conversational, or does not change project reality.',
+    'Every operation must represent one atomic proposition or one state change. Do not return multiple operations that merely restate one RESOLVE_DECISION outcome.',
+    'Do not turn questions into facts, hypothetical consequences into risks, recommendations into actions, preferences into decisions, decisions into preferences, or missing user-controlled choices into UNKNOWNs. A user-controlled unresolved choice is a DECISION; missing external information is an UNKNOWN.',
+    'A NEXT_ACTION requires actual intended project work stated or clearly committed in the source, with explicit commitment, intention, or an unfinished committed task. A request asking Gapwise what to focus on is conversational and is not a persisted action.',
+    'Questions asking Gapwise to explain, justify, compare, summarize, prioritize, or elaborate on its own recommendation do not by themselves create project state. The conversation may remain available as chat context without becoming canonical project truth.',
+    'Use the current source wording and the compact project state to identify existing canonical targets. Do not invent facts, outcomes, deadlines, or commitments.',
+    'Operations reference existing targetNodeId values directly. Deterministic validation will only check that referenced targets exist, are not deprecated, have compatible types, are OPEN when resolving, and that required text is present. It will not re-decide semantic meaning.',
+    'For relationship source_ref and target_ref, use an existing canonical node id or the operationRef of an operation in this response (for example op:0). Never invent an id.',
+    'Create only a small number of relationships directly established by this source. At least one endpoint must be new or materially changed. Do not complete the historical graph or connect nodes solely because they share a topic.',
+    'Use resolves only when the source contains a completed answer, result, or outcome that already resolves the target. Use satisfies only when a NEXT_ACTION is intended to complete an existing DECISION, UNKNOWN, or ASSUMPTION; satisfies does not resolve its target. For A depends_on B, A is the dependent source and B is the prerequisite target. For B blocks A, B is the prerequisite source and A is the blocked dependent target.',
+    'Use informs when one node provides information needed to answer or evaluate another, even when the information is not conclusive. Use affects when it changes direction or priority, blocks when it prevents progress, supports when evidence or a known result supports a target, and derived_from only for explicit source-derived provenance. Keep relationships sparse and decision-relevant.',
+    'Repeated facts, evidence, and constraints should reuse an existing canonical node through reconciliation rather than create duplicates. Exact duplicate protection remains a persistence safeguard, not a semantic classifier.',
     ...(input.semanticRole === 'ask_message' ? [
       'Semantic source role: USER ASK MESSAGE.',
-      'Treat this message as first-class conversational input while preserving clear project facts the user states. Do not promote hypothetical outcomes, possible blockers, inferred risks, inferred assumptions, unresolved questions discovered only by reasoning, or recommendations into canonical project nodes. A question asking Gapwise what might happen, what to prioritize, or what to do next is conversation, not a project UNKNOWN, RISK, DECISION, or NEXT_ACTION. An explicit user statement about missing external information, such as "I do not know whether the supplier can deliver by Friday", may still be an UNKNOWN.',
-      'For every candidate node in an Ask message, include extraction_basis: USER_STATED when the project fact, uncertainty, preference, choice, constraint, or commitment is explicitly present in the user message; include extraction_basis: AI_DERIVED when it is inferred by reasoning rather than stated. Only USER_STATED nodes can become canonical project state from this turn.',
+      'Treat the current user message as first-class context. Operations must represent only clear project facts, uncertainties, preferences, choices, constraints, and commitments stated by the user. Reasoning-only content must use NO_CHANGE and must not become canonical project state.',
     ] : []),
     `Current compact project state, relevance-ranked for this source: ${projectSnapshot(project, input.content)}`,
-    'Return only structured JSON.',
-    'Build a concise project understanding from the supplied source. Extract only materially useful facts, goals, constraints, decisions, preferences, evidence, risks, experiments, unknowns, and next actions.',
-    'Distinguish project content from conversational or meta-level requests directed at Gapwise. Questions asking Gapwise to explain, justify, compare, summarize, prioritize, or elaborate on its own recommendation do not by themselves create project facts, decisions, unknowns, risks, or actions. Only extract a project node when the message introduces, changes, confirms, rejects, or reveals information about the underlying project. The conversation itself may remain available as chat context without becoming canonical project state.',
-    'Treat the source as one semantic document rather than one node per sentence. Consolidate repeated statements about the same underlying concept, but keep distinct project concepts as separate nodes. Every node must be atomic: one node represents one independently resolvable project concept that can change independently. A DECISION must represent one independently resolvable choice, not a compound instruction such as "Decide A and B" when A and B can be resolved separately. Do not combine multiple independent requirements, rules, facts, risks, choices, or actions into one node merely because they appear near each other in the source. Do not split a concept merely because a sentence contains the word "and"; split only when the source expresses independently resolvable concepts. Never return two nodes representing the same underlying project concept.',
-    'Example: "Capacity is 24 people and one supervisor is required per 12 participants" should become two nodes because capacity and supervision are separate constraints.',
-    'Example: "Safety glasses are required for groups over 10, drinks must stay away from workbenches, and cancellations within 72 hours lose 50% of the fee" should become three separate nodes.',
-    'Example: "Delivery requires six to ten implementation days plus two to four days of ongoing operations each month" should become two estimate nodes because implementation effort and operational effort are independent cost/resource propositions. Do not refine an existing implementation-effort node with the operational estimate; preserve the operational estimate separately.',
-    'A requirement and the current readiness/completion state of the required items are separate propositions. Preserve both when the source states both; do not let a requirement node absorb evidence that some required items are already ready.',
-    'A current measured or observed value and the policy limit, acceptance threshold, target, or rule it is compared against are separate propositions because either can change independently. Preserve each as its own atomic node even when the source joins them with contrastive wording.',
-    'Example: "The current certificate is 18 months old, while policy permits certificates up to 12 months old" should become one node for the observed certificate age and one node for the policy threshold. If acceptance is unknown, that is a third node.',
-    'Before returning, check the source once for independently changeable high-impact propositions that were accidentally compressed or omitted. Prefer omitting a low-value repetition over losing a stated readiness fact, measured value, governing threshold, unresolved exception, or time-sensitive risk.',
-    'Use CONSTRAINT for a fixed limit, requirement, resource boundary, or deadline. Use RISK for a possible harmful outcome or delay that occurs if a condition is not met. A conditional statement that work will probably slip, fail, or incur harm is normally a RISK rather than the fixed condition that causes it.',
-    'For DECISION nodes, use status OPEN only for an explicitly pending, unresolved, conditional, or not-yet-chosen choice. Use RESOLVED only when a choice is already recorded. Never infer an open decision from a generic task or plan. If the source states the same decision multiple times, return exactly one DECISION node.',
-    'Explicit unresolved choice language such as needing to decide, choose, determine, select, or settle something represents an OPEN DECISION.',
-    'Do not classify the subject of an explicit unresolved choice as a PREFERENCE merely because the source also contains preferences, constraints, or supporting evidence.',
-    'A PREFERENCE expresses what the user favors; a DECISION represents a choice the user still needs to make.',
-    'Do not infer a DECISION merely because one option becomes attractive, available, cheaper, safer, or preferred. Create a DECISION only when the user explicitly states that a choice was made or the source clearly communicates commitment to one option. A preference or evidence supporting one option leaves an existing decision OPEN. For example, "I have access to a free courtyard and would rather avoid paying" is KNOWN/PREFERENCE, while "We\'ll use the courtyard for the first event" is a DECISION. "I\'m leaning toward the courtyard" is PREFERENCE or supporting evidence, not a committed DECISION.',
-    'Do not infer that an option has been chosen merely because the user describes it positively, prefers it, or provides supporting evidence. A DECISION requires clear language indicating commitment or a completed choice. Preserve uncertainty in the source wording.',
-    'Create UNKNOWN nodes only for missing factual information that must be learned, observed, measured, or confirmed. Do not create an UNKNOWN from a question whose answer is an explanation or judgment from Gapwise rather than missing information about the external project. Do not use UNKNOWN for a user-controlled choice between alternatives. If the user is deciding what to choose, whether to do something, how often to do it, which option to use, or what policy to adopt, create an OPEN DECISION instead. External confirmations, approvals, requirements, statuses, availability, or results may be UNKNOWNs when material.',
-    'A statement that the user has not completed a user-controlled action already tells us the current state. Do not convert it into an UNKNOWN asking whether the action was completed. Preserve the absence or unfinished state as EVIDENCE, KNOWN, or RISK when useful, and add a NEXT_ACTION when completing the work materially advances the project.',
-    'If the source says "I have not created a backup plan", do not ask whether a backup plan exists. Represent the missing contingency as a RISK or EVIDENCE and, when useful, add a NEXT_ACTION to create the backup plan. Create an UNKNOWN only if genuinely missing external information remains, such as which alternative venue is available.',
-    'For external pending statements such as "approval is pending", "the manager has not confirmed the time", or "the supplier has not confirmed availability", create one concise evidence-seeking UNKNOWN when the missing confirmation materially affects the project.',
-    'Every UNKNOWN must contain a complete, explicit subject and object. Avoid vague wording such as "Have they confirmed yet?" when the source names the object.',
-    'A user-controlled unresolved choice is always a DECISION, not an UNKNOWN. A DECISION must represent an unresolved project choice whose outcome changes project state. This includes choices expressed as questions such as "how often should we meet?", "should members pay?", "which venue should we use?", or "should we launch now?". Do not create a DECISION for a priority comparison, a request to choose what to focus on, or a hypothetical use of time. Statements such as "I am not sure whether X is more important than Y", "I could spend today doing X", and "Should I focus on X or Y?" are conversational prioritization signals, not project decisions or actions. Do not create an UNKNOWN merely because the choice is phrased as a question. Do not create an UNKNOWN that merely restates an OPEN DECISION. UNKNOWN is only for missing factual information that can inform a decision. Example: "I am unsure whether to use a café or community room" → DECISION. Example: "I am not sure how often the club should meet" → DECISION: Choose the meeting frequency. Example: "I do not know whether members should pay" → DECISION: Determine whether members should pay. Example: "I do not know whether the workshop is available every other Thursday" → UNKNOWN: Confirm biweekly workshop availability.',
-    'A work statement such as "Refine the pilot price today" is not a DECISION. It may be a NEXT_ACTION only when the source explicitly establishes that the user or team intends or is committed to doing that work.',
-    'A NEXT_ACTION requires actual intended project work stated or clearly committed in the source. The source must contain an explicit commitment, intention, or clearly unfinished committed task such as "I still need to...", "I will...", "we plan to...", or "I have not done X yet". Do not turn a request to Gapwise about what to focus on, what matters most, or whether to do A or B into a persisted NEXT_ACTION. Do not extract an action from a priority comparison, a hypothetical use of time, an option under consideration, or wording such as "I could...", "would it be better to...", or "which is more important?". Those requests belong to conversational reasoning or an OPEN DECISION; only extract a NEXT_ACTION when the underlying project contains concrete work the user or team intends to perform.',
-    'Prefer distinct high-value concepts over repeated or low-value factual details when selecting up to 12 nodes: open decisions, material unknowns/blockers, risks, constraints/preferences, next actions, then supporting facts/evidence.',
-    'Merge semantically repeated questions with existing canonical project questions when appropriate. Do not merge questions merely because they mention the same noun. Compare the answer required and the downstream action that would change.',
-    'For every returned UNKNOWN, ASSUMPTION, DECISION, KNOWN, EVIDENCE, or CONSTRAINT node that relates to the canonical project state, classify its relationship to existing canonical nodes and other compatible candidates returned in this response. Repeated facts, evidence, and constraints should reuse an existing canonical node instead of creating a duplicate. Do not add reconciliation entries for risks, actions, preferences, or goals unless they are being classified as supporting evidence or a next action for an existing question. A later clarification may be an equivalent decision, a refinement, a more specific formulation, or an atomic child of an older compound decision. Preserve a distinct atomic child when it can be resolved independently, but identify its parent with SUBQUESTION when the source supports that relationship.',
-    'Use PARAPHRASE, SUBQUESTION, ASSUMPTION, SUPPORTING_EVIDENCE, NEXT_ACTION, ALREADY_ANSWERED, NEW_UNCERTAINTY, RELATED_BUT_DISTINCT, EQUIVALENT, REFINES_EXISTING, BROADER_THAN_EXISTING, or DISTINCT as appropriate. For DECISION nodes, EQUIVALENT means the same choice, REFINES_EXISTING means a more precise formulation of the same choice, BROADER_THAN_EXISTING means a generalization that must not replace more precise atomic decisions, and DISTINCT means an independently resolvable choice. For KNOWN, EVIDENCE, and CONSTRAINT nodes, EQUIVALENT means the same underlying fact or requirement, while REFINES_EXISTING means a more precise formulation of that fact or requirement. REFINES_EXISTING is valid only when the candidate is the same single semantic proposition made more precise. Set same_atomic_proposition=true only in that case. If the candidate also contains another fact, requirement, estimate, actor, resource, outcome, or other information that could change independently, emit that proposition as a separate node, set same_atomic_proposition=false, and do not merge it into the existing node. Set canonical_node_id only for a compatible existing DECISION, KNOWN, EVIDENCE, or CONSTRAINT when using EQUIVALENT or REFINES_EXISTING. Use canonical_question_id for backwards-compatible references to existing UNKNOWN or ASSUMPTION nodes. Set canonical_candidate_index only when it points backward to a compatible candidate in this response. A PARAPHRASE or EQUIVALENT must represent the same answer, fact, requirement, or downstream choice; a REFINES_EXISTING formulation may be merged into the canonical node; a SUBQUESTION is narrower and may remain independently resolvable. NEW_UNCERTAINTY, RELATED_BUT_DISTINCT, BROADER_THAN_EXISTING, and DISTINCT represent independent concepts and must leave canonical targets unset. Never point forward. Include node type and status when deciding whether a target is compatible; an OPEN decision and a RESOLVED decision with similar wording are not interchangeable.',
-    'Classify whether this source appears relevant to the current project as relevant or possibly_not_relevant. This classification is advisory and must never delete supplied evidence.',
-    'Create relationships only when the CURRENT SOURCE directly establishes them. Do not create a relationship solely because two nodes are generally related. The relationship must be directly supported by this source. At least one endpoint must represent information introduced or materially changed by this source.',
-    'For each relationship, source_ref and target_ref may independently be new:<zero-based returned-node index> or an existing canonical node id from the compact project state. This allows new-to-new, new-to-existing, and existing-to-new direction. Never return an existing-to-existing relationship. Use the supplied node type, status, and text when choosing endpoints; do not treat statuses as irrelevant metadata.',
-    'Pay particular attention to relationships that explain what information, constraints, risks, or evidence materially influence an OPEN DECISION.',
-    'Before returning, perform one source-local relationship coverage check. For each new or materially changed OPEN DECISION, UNKNOWN, ASSUMPTION, or RISK, include the small number of facts, evidence, constraints, or risks that this source directly establishes as material inputs, causes, prerequisites, or blockers. For each new fact, estimate, constraint, or risk, check whether this source directly makes it material to an existing OPEN DECISION, UNKNOWN, RISK, or GOAL in the compact project state. Keep only the useful links; this is not permission to connect every node.',
-    'Preserve independently changeable causes and outcomes as separate atomic nodes when both matter to project reasoning. For example, a known external event and the conditional delay it may cause are separate propositions; link the event to the risk rather than embedding both into one node. Likewise, a current observed value, its governing threshold, and the uncertainty about acceptance are separate propositions when each can change independently.',
-    'When the source explicitly says a new risk threatens a stated project outcome or timing target, link that RISK to the existing GOAL with blocks or affects. When the source separately states the cause of that risk, link the causal fact or constraint to the RISK with informs or affects.',
-    'When a new effort, cost, capacity, timing, or resource estimate directly bears on an existing unresolved choice, it may inform that existing DECISION even if the decision was introduced by an earlier source. This is a valid new-to-existing source-local relationship. Do not repeat or recreate the existing decision.',
-    'Use resolves only when the source contains a completed answer, result, or outcome that already resolves the target.',
-    'Use satisfies when a NEXT_ACTION is specifically intended to complete, settle, or answer an existing DECISION, UNKNOWN, or ASSUMPTION.',
-    'A satisfies relationship describes intended work and must not imply that the target is already resolved.',
-    'Use depends_on only when the source genuinely cannot proceed until the target is satisfied. For A depends_on B, A is the dependent source and B is the prerequisite target.',
-    'For B blocks A, B is the prerequisite source and A is the blocked dependent target.',
-    'Use informs or affects when information changes priority or direction but does not prevent the target from proceeding.',
-    'Useful semantic patterns include EVIDENCE or KNOWN informing an UNKNOWN or DECISION, a CONSTRAINT informing a DECISION or RISK, a RISK blocking a GOAL, a NEXT_ACTION satisfying an UNKNOWN or DECISION, a completed result resolving an UNKNOWN, and a DECISION affecting a GOAL. These are examples, not mandatory edges. Use only relationships directly established by the source.',
-    'Use supports only when the source endpoint is evidence, a known result, an experiment result, or a preference that actually supports the target. For a constraint or timing condition, use informs, affects, blocks, or depends_on when their semantics and direction apply.',
-    'Allowed relationship types are supports, contradicts, supersedes, resolves, satisfies, depends_on, blocks, affects, informs, and derived_from. Prefer a sparse, decision-relevant graph: connect material dependencies and influences, but do not create speculative relationships or relationships based only on shared topic.',
-    'Preserve history. New information may contradict, supersede, resolve, or affect existing understanding, but never delete historical nodes.',
-    'Return at most 12 distinct nodes. Each node must represent exactly one useful project concept. Prefer preserving separate high-impact concepts over compressing unrelated information into fewer nodes. Never include private reasoning.',
   ].join('\n');
 }
 
@@ -480,31 +625,24 @@ export async function analyzeContextItem(
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
-        required: ['summary', 'relevance', 'nodes', 'relationships', 'reconciliation'],
+        required: ['summary', 'relevance', 'operations', 'relationships'],
         properties: {
           summary: { type: Type.STRING },
           relevance: { type: Type.STRING, enum: ['relevant', 'possibly_not_relevant'] },
-          nodes: {
+          operations: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
-              required: [
-                'type',
-                'text',
-                'confidence',
-                'impact',
-                ...(input.semanticRole === 'ask_message' ? ['extraction_basis'] : []),
-              ],
+              required: ['op', 'confidence'],
               properties: {
-                type: { type: Type.STRING, enum: nodeTypeSchema.options },
+                op: { type: Type.STRING, enum: ['ADD_CONTEXT', 'OPEN_DECISION', 'RESOLVE_DECISION', 'OPEN_UNKNOWN', 'RESOLVE_UNKNOWN', 'ADD_ACTION', 'NO_CHANGE'] },
+                nodeType: { type: Type.STRING, enum: ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK', 'ASSUMPTION'] },
+                targetNodeId: { type: Type.STRING },
+                outcome: { type: Type.STRING },
                 text: { type: Type.STRING },
-                confidence: { type: Type.NUMBER },
+                answer: { type: Type.STRING },
                 impact: { type: Type.NUMBER },
-                extraction_basis: { type: Type.STRING, enum: ['USER_STATED', 'AI_DERIVED'] },
-                status: { type: Type.STRING, enum: ['OPEN', 'RESOLVED'] },
-                why_it_matters: { type: Type.ARRAY, items: { type: Type.STRING } },
-                related_node_ids: { type: Type.ARRAY, items: { type: Type.STRING } },
-                relationship: { type: Type.STRING, enum: relationshipSchema.options },
+                confidence: { type: Type.NUMBER },
               },
             },
           },
@@ -518,23 +656,6 @@ export async function analyzeContextItem(
                 target_ref: { type: Type.STRING },
                 type: { type: Type.STRING, enum: relationshipSchema.options },
                 confidence: { type: Type.NUMBER },
-              },
-            },
-          },
-          reconciliation: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              required: ['candidate_index', 'classification', 'same_atomic_proposition', 'confidence', 'reason'],
-              properties: {
-                candidate_index: { type: Type.NUMBER },
-                classification: { type: Type.STRING, enum: reconciliationClassificationSchema.options },
-                canonical_question_id: { type: Type.STRING },
-                canonical_node_id: { type: Type.STRING },
-                canonical_candidate_index: { type: Type.NUMBER },
-                same_atomic_proposition: { type: Type.BOOLEAN },
-                confidence: { type: Type.NUMBER },
-                reason: { type: Type.STRING },
               },
             },
           },
@@ -612,596 +733,18 @@ function isRepeatableCanonicalNodeType(type: ClarityNode['type']): boolean {
   return type === 'KNOWN' || type === 'EVIDENCE' || type === 'CONSTRAINT';
 }
 
-function canonicalNodeTypesCompatible(
-  left: ClarityNode['type'],
-  right: ClarityNode['type'],
-): boolean {
-  if (left === right) return true;
-  return isRepeatableCanonicalNodeType(left)
-    && isRepeatableCanonicalNodeType(right)
-    && (left === 'KNOWN' || left === 'EVIDENCE' || left === 'CONSTRAINT')
-    && (right === 'KNOWN' || right === 'EVIDENCE' || right === 'CONSTRAINT');
-}
-
-function canonicalTargetTypesCompatible(
-  left: ClarityNode['type'],
-  right: ClarityNode['type'],
-  classification?: string,
-): boolean {
-  if (!canonicalNodeTypesCompatible(left, right)) return false;
-  return left === right
-    || classification === 'EQUIVALENT'
-    || classification === 'REFINES_EXISTING';
-}
-
-function analysisNodesToPrecomputedNodes(analysis: ContextAnalysis, project: Project): PrecomputedSourceNode[] {
-  const validQuestionIds = new Set(canonicalQuestionGroups(project).map((group) => group.canonical.id));
-  const validCanonicalNodeIds = new Set([
-    ...validQuestionIds,
-    ...project.nodes
-      .filter((node) => (node.type === 'DECISION' || isRepeatableCanonicalNodeType(node.type)) && node.status !== 'DEPRECATED')
-      .map((node) => node.id),
-  ]);
-  const canonicalizableIndexes = analysis.nodes
-    .map((node, index) => ({ node, index }))
-    .filter(({ node }) => node.type === 'UNKNOWN' || node.type === 'ASSUMPTION' || node.type === 'DECISION' || isRepeatableCanonicalNodeType(node.type));
-  const questionIndexes = canonicalizableIndexes.filter(({ node }) => node.type === 'UNKNOWN' || node.type === 'ASSUMPTION');
-  const deterministicBatch = reconcileQuestionCandidates(
-    questionIndexes.map(({ node }) => ({ type: node.type, text: node.text })),
-    project,
-  );
-  const deterministicByIndex = new Map(questionIndexes.map(({ index }, questionIndex) => [index, deterministicBatch[questionIndex]]));
-  return analysis.nodes.map((node, index) => {
-    const currentCandidateRef = node.candidate_ref ?? candidateRef(index);
-    const isQuestion = node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
-    const isCanonicalizable = isQuestion || node.type === 'DECISION' || isRepeatableCanonicalNodeType(node.type);
-    const modelReconciliationRaw = isCanonicalizable
-      ? analysis.reconciliation.find((candidate) => candidate.candidate_ref === currentCandidateRef)
-      : undefined;
-    const modelReconciliation = modelReconciliationRaw
-      ? {
-        classification: modelReconciliationRaw.classification,
-        canonicalQuestionId: modelReconciliationRaw.canonical_question_id,
-        canonicalNodeId: modelReconciliationRaw.canonical_node_id ?? modelReconciliationRaw.canonical_question_id,
-        canonicalCandidateRef: modelReconciliationRaw.canonical_candidate_ref,
-        confidence: modelReconciliationRaw.confidence,
-        reason: modelReconciliationRaw.reason,
-      }
-      : undefined;
-    const deterministic = deterministicByIndex.get(index);
-    const canUseCanonicalTarget = modelReconciliation
-      ? RECONCILIATION_CAN_USE_CANONICAL_TARGET.has(modelReconciliation.classification)
-      : false;
-    const modelCandidateTarget = modelReconciliation?.canonicalCandidateRef;
-    const modelCandidateTargetIndex = modelCandidateTarget
-      ? analysis.nodes.findIndex((candidate) => candidate.candidate_ref === modelCandidateTarget)
-      : -1;
-    const validModelCandidateTarget = canUseCanonicalTarget
-      && modelCandidateTarget !== undefined
-      && modelCandidateTargetIndex < index
-      && modelCandidateTargetIndex >= 0
-      && analysis.nodes[modelCandidateTargetIndex] !== undefined
-      && canonicalTargetTypesCompatible(
-        node.type,
-        analysis.nodes[modelCandidateTargetIndex].type,
-        modelReconciliation?.classification,
-      )
-      ? modelCandidateTarget
-      : undefined;
-    const validModelExistingTarget = canUseCanonicalTarget
-      && modelReconciliation?.canonicalNodeId
-      && validCanonicalNodeIds.has(modelReconciliation.canonicalNodeId)
-      && project.nodes.some((candidate) =>
-        candidate.id === modelReconciliation.canonicalNodeId
-        && canonicalTargetTypesCompatible(
-          node.type,
-          candidate.type,
-          modelReconciliation.classification,
-        ),
-      )
-      ? modelReconciliation.canonicalNodeId
-      : undefined;
-    const modelNeedsTarget = modelReconciliation?.classification === 'PARAPHRASE'
-      || modelReconciliation?.classification === 'EQUIVALENT'
-      || modelReconciliation?.classification === 'REFINES_EXISTING'
-      || modelReconciliation?.classification === 'SUBQUESTION'
-      || modelReconciliation?.classification === 'ASSUMPTION';
-    const modelHasValidTarget = Boolean(validModelExistingTarget || validModelCandidateTarget !== undefined);
-    const useModelReconciliation = Boolean(modelReconciliation)
-      && (!modelNeedsTarget || modelHasValidTarget)
-      // A valid model classification is authoritative even when deterministic
-      // wording happens to resemble an existing question. In particular,
-      // NEW_UNCERTAINTY and RELATED_BUT_DISTINCT are explicit boundaries.
-    const deterministicCanonicalTarget = !modelReconciliation && isRepeatableCanonicalNodeType(node.type)
-      ? project.nodes.find((candidate) =>
-        candidate.status !== 'DEPRECATED'
-        && canonicalNodeTypesCompatible(node.type, candidate.type)
-        && semanticallyEquivalentNodeText(node.type, node.text, candidate.type, candidate.text),
-      )
-      : undefined;
-    const deterministicCanonical = deterministicCanonicalTarget
-      ? {
-        classification: 'EQUIVALENT' as const,
-        canonicalNodeId: deterministicCanonicalTarget.id,
-        confidence: 0.86,
-        reason: 'The extracted fact or constraint is semantically equivalent to an existing canonical node.',
-      }
-      : undefined;
-    const reconciliation = useModelReconciliation
-      ? modelReconciliation
-      : deterministic ?? deterministicCanonical;
-    const fallbackCanonicalQuestionId = reconciliation && 'canonicalQuestionId' in reconciliation
-      ? reconciliation.canonicalQuestionId
-      : undefined;
-    const fallbackCanonicalNodeId = reconciliation && 'canonicalNodeId' in reconciliation
-      ? reconciliation.canonicalNodeId
-      : undefined;
-    const fallbackCanonicalCandidateRef = reconciliation && 'canonicalCandidateRef' in reconciliation
-      ? reconciliation.canonicalCandidateRef
-      : undefined;
-    const canonicalQuestionId = isQuestion
-      ? reconciliation === modelReconciliation
-        ? validModelExistingTarget
-        : fallbackCanonicalQuestionId
-      : undefined;
-    const canonicalNodeId = reconciliation === modelReconciliation
-      ? validModelExistingTarget
-      : fallbackCanonicalNodeId ?? fallbackCanonicalQuestionId;
-    const canonicalCandidateRef = reconciliation === modelReconciliation
-      ? validModelCandidateTarget
-      : fallbackCanonicalCandidateRef;
-    const effectiveType = reconciliation && ['SUPPORTING_EVIDENCE', 'ALREADY_ANSWERED'].includes(reconciliation.classification)
-      && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-      ? 'EVIDENCE'
-      : reconciliation?.classification === 'NEXT_ACTION'
-        && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-        ? 'NEXT_ACTION'
-      : node.type;
-    return {
-      candidateRef: currentCandidateRef,
-      type: effectiveType,
-      text: node.text,
-      confidence: node.confidence,
-      impact: node.impact,
-      status: node.status,
-      whyItMatters: node.why_it_matters,
-      questionAliases: node.question_aliases,
-      relatedNodeIds: node.related_node_ids,
-      relationship: node.relationship ?? undefined,
-      questionClassification: reconciliation?.classification,
-      canonicalQuestionId,
-      canonicalNodeId,
-      canonicalCandidateRef,
-      reconciliationConfidence: reconciliation?.confidence,
-      reconciliationReason: reconciliation?.reason,
-    };
-  });
-}
-
-function reconciliationSummary(analysis: ContextAnalysis, project: Project): QuestionReconciliationSummary {
-  const questionIndexes = analysis.nodes
-    .map((node, index) => ({ node, index }))
-    .filter(({ node }) => node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-    .map(({ index }) => index);
-  const resolved = analysisNodesToPrecomputedNodes(analysis, project);
-  const results = questionIndexes.map((index) => resolved[index]?.questionClassification);
-  return {
-    candidate_count: results.length,
-    canonical_merge_count: results.filter((item) => item === 'PARAPHRASE').length,
-    subquestion_count: results.filter((item) => item === 'SUBQUESTION').length,
-    assumption_count: results.filter((item) => item === 'ASSUMPTION').length,
-    new_question_count: results.filter((item) => item === 'NEW_UNCERTAINTY' || item === 'RELATED_BUT_DISTINCT' || !item).length,
-    fallback_count: results.filter((item) => !item).length,
-    validation_status: results.every(Boolean) ? 'passed' : 'fallback',
-  };
-}
-
-function sourceUsesFirstPerson(content: string): boolean {
-  return /\b(?:i|me|my|mine|we|us|our|ours)\b/i.test(content);
-}
-
-/** Keep generated personal questions addressed to the person who supplied the source. */
-function normalizePersonalQuestion(
-  text: string,
-  sourceContent: string,
-  resolveReferences = false,
-): string {
-  const groundedText = resolveReferences
-    ? resolveQuestionReferences(text, sourceContent)
-    : text;
-  if (!sourceUsesFirstPerson(sourceContent)) return normalizeQuestionGrammar(groundedText);
-  const normalized = normalizeQuestionGrammar(groundedText
-    .replace(/\bdoes the user\b/gi, 'do I')
-    .replace(/\bhas the user\b/gi, 'have I')
-    .replace(/\bis the user\b/gi, 'am I')
-    .replace(/\b(can|could|should|will|would) the user\b/gi, '$1 I')
-    .replace(/\bthe user(?:'s|’s)\b/gi, 'my')
-    .replace(/\bthe user is\b/gi, 'I am')
-    .replace(/\bthe user has\b/gi, 'I have')
-    .replace(/\bthe user does\b/gi, 'I do')
-    .replace(/\bthe user\b/gi, 'I')
-    .replace(/\bfor I\b/gi, 'for me')
-    .replace(/\bto I\b/gi, 'to me')
-    .replace(/\bwith I\b/gi, 'with me')
-    .replace(/\bof I\b/gi, 'of me')
-    .replace(/\s+/g, ' ')
-    .trim());
-  return normalized.replace(/^([a-z])/, (character) => character.toUpperCase());
-}
-
-function normalizedSemanticText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[’']/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function nodeIsQuestionLike(
-  node: ContextAnalysis['nodes'][number],
-): boolean {
-  return node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
-}
-
-function conceptTokens(value: string): Set<string> {
-  const ignored = new Set([
-    'what', 'where', 'when', 'which', 'who', 'how', 'why', 'does', 'could',
-    'would', 'should', 'have', 'has', 'had', 'need', 'needs', 'decide',
-    'whether', 'about', 'into', 'from', 'with', 'that', 'this', 'there',
-    'their', 'they', 'them', 'your', 'you', 'our', 'ours', 'can', 'will',
-    'the', 'and', 'for', 'are',
-  ]);
-  const normalizeToken = (token: string): string => {
-    if (token.length > 6 && token.endsWith('ing')) return token.slice(0, -3);
-    if (token.length > 5 && token.endsWith('ed')) return token.slice(0, -2);
-    if (token.length > 5 && token.endsWith('s')) return token.slice(0, -1);
-    return token;
-  };
-  return new Set(normalizedSemanticText(value)
-    .split(' ')
-    .map(normalizeToken)
-    .filter((token) => token.length >= 3 && !ignored.has(token)));
-}
-
-function tokenSimilarity(left: string, right: string): number {
-  const leftTokens = conceptTokens(left);
-  const rightTokens = conceptTokens(right);
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  const union = new Set([...leftTokens, ...rightTokens]).size;
-  return union ? shared / union : 0;
-}
-
-function quantitativeTokens(value: string): Set<string> {
-  return new Set(normalizedSemanticText(value).match(/\b\d+(?:\.\d+)?(?:k|m|b)?\b/g) ?? []);
-}
-
-function semanticallyEquivalentNodeText(
-  leftType: ClarityNode['type'],
-  leftText: string,
-  rightType: ClarityNode['type'],
-  rightText: string,
-): boolean {
-  if (!canonicalNodeTypesCompatible(leftType, rightType)) return false;
-  if (normalizedSemanticText(leftText) === normalizedSemanticText(rightText)) return true;
-
-  if ((leftType === 'UNKNOWN' || leftType === 'ASSUMPTION')
-    && (rightType === 'UNKNOWN' || rightType === 'ASSUMPTION')) {
-    return semanticallyEquivalentQuestion(leftText, rightText);
-  }
-
-  const similarity = tokenSimilarity(leftText, rightText);
-  const sharedQuantities = [...quantitativeTokens(leftText)].filter((token) => quantitativeTokens(rightText).has(token));
-  const sharedNonQuantitativeTokens = [...conceptTokens(leftText)]
-    .filter((token) => !quantitativeTokens(leftText).has(token) && conceptTokens(rightText).has(token));
-  const sameMeasuredSubject = sharedQuantities.length > 0 && sharedNonQuantitativeTokens.length > 0;
-
-  switch (leftType) {
-    // A shared noun is not enough to collapse independently resolvable
-    // choices. Exact semantic identity is the safe same-source fallback;
-    // cross-turn decision identity comes from reconciliation metadata.
-    case 'DECISION': return semanticallyEquivalentQuestion(
-      decisionChoiceWording(leftText),
-      decisionChoiceWording(rightText),
-    );
-    case 'NEXT_ACTION': return similarity >= 0.68;
-    case 'RISK':
-    case 'CONSTRAINT':
-    case 'PREFERENCE': return similarity >= 0.72 || sameMeasuredSubject;
-    case 'KNOWN':
-    case 'EVIDENCE': return similarity >= 0.82 || sameMeasuredSubject;
-    default: return similarity >= 0.8;
-  }
-}
-
-function decisionChoiceWording(value: string): string {
-  return value
-    .replace(/^\s*(?:i|we)\s+(?:still\s+)?need\s+to\s+decide\s+/i, '')
-    .replace(/^\s*(?:decide|choose|determine|select)\s+/i, '')
-    .trim();
-}
-
-function semanticallyEquivalentModelNode(
-  left: ContextAnalysis['nodes'][number],
-  right: ContextAnalysis['nodes'][number],
-): boolean {
-  return semanticallyEquivalentNodeText(left.type, left.text, right.type, right.text);
-}
-
-function isCandidateReference(reference: string): boolean {
-  return reference.startsWith('new:');
-}
-
-function remapAnalysisCandidateRefs(
-  analysis: ContextAnalysis,
-  nodes: ContextAnalysis['nodes'],
-  referenceMap: Map<string, string>,
-): ContextAnalysis {
-  const relationships = analysis.relationships.flatMap((relationship) => {
-    const sourceRef = isCandidateReference(relationship.source_ref)
-      ? referenceMap.get(relationship.source_ref)
-      : relationship.source_ref;
-    const targetRef = isCandidateReference(relationship.target_ref)
-      ? referenceMap.get(relationship.target_ref)
-      : relationship.target_ref;
-    if (!sourceRef || !targetRef || sourceRef === targetRef) return [];
-    return [{ ...relationship, source_ref: sourceRef, target_ref: targetRef }];
-  });
-  const reconciliation = analysis.reconciliation.flatMap((candidate) => {
-    const stableCandidateRef = candidate.candidate_ref
-      ? referenceMap.get(candidate.candidate_ref)
-      : undefined;
-    if (!stableCandidateRef) return [];
-    const canonicalCandidateRef = candidate.canonical_candidate_ref
-      ? referenceMap.get(candidate.canonical_candidate_ref)
-      : undefined;
-    const candidateIndex = nodes.findIndex((node) => node.candidate_ref === stableCandidateRef);
-    const canonicalCandidateIndex = canonicalCandidateRef
-      ? nodes.findIndex((node) => node.candidate_ref === canonicalCandidateRef)
-      : -1;
-    if (canonicalCandidateRef === stableCandidateRef) {
-      return [{
-        ...candidate,
-        candidate_index: candidateIndex,
-        candidate_ref: stableCandidateRef,
-        canonical_candidate_index: undefined,
-        canonical_candidate_ref: undefined,
-        classification: candidate.classification === 'PARAPHRASE'
-          ? 'NEW_UNCERTAINTY'
-          : candidate.classification,
-      }];
-    }
-    return [{
-      ...candidate,
-      candidate_index: candidateIndex,
-      candidate_ref: stableCandidateRef,
-      canonical_candidate_index: canonicalCandidateIndex >= 0 ? canonicalCandidateIndex : undefined,
-      canonical_candidate_ref: canonicalCandidateRef,
-    }];
-  });
-  return {
-    ...analysis,
-    nodes,
-    relationships,
-    reconciliation: sanitizeCanonicalReconciliationTargets(reconciliation),
-  };
-}
-
-function semanticallyRepresentsSameChoice(question: string, decision: string): boolean {
-  return semanticallyEquivalentQuestion(question, decision);
-}
-
-function sourceHasDecisionCommitment(content: string): boolean {
-  return /\b(?:i|we)\s+(?:will|shall|am going to|are going to|have chosen|has chosen|chose|decided to|decided on|selected|picked|am using|are using|am going with|are going with)\b/i.test(content)
-    || /\b(?:i|we)['’](?:ll|m|re)\s+(?:use|using|go with|going to)\b/i.test(content)
-    || /\b(?:the team|the group|the organizers?|the project)\s+(?:will|has chosen|chose|decided|selected|picked|is using|are using)\b/i.test(content)
-    || /\b(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:chosen|selected|picked|approved|committed)\b/i.test(content);
-}
-
-function sourceHasUnresolvedChoice(content: string, nodeText: string): boolean {
-  return matchesExplicitDecisionTitle(nodeText, content)
-    || /\b(?:not sure|unsure|uncertain|undecided)\b.{0,80}\b(?:whether|if|between|choice|option)\b/i.test(content)
-    || /\b(?:before|until)\s+(?:(?:i|we)\s+)?(?:decid|choos|select|pick|commit)/i.test(content)
-    || /\b(?:(?:i|we)\s+)?(?:still\s+)?need(?:ing)?\s+to\s+(?:decid|choos|determin|select|settl|pick|commit)/i.test(content)
-    || /\b(?:have not|haven['’]?t|not yet)\s+(?:decid|choos|determin|select|settl|pick|commit)/i.test(content);
-}
-
-function isPriorityComparisonSignal(content: string): boolean {
-  return [
-    /\b(?:what|which)\s+(?:should|do)\s+(?:i|we)\s+(?:focus|prioritize|work on)\b/i,
-    /\b(?:what|which)\s+should\s+(?:i|we)\s+be\s+(?:thinking|working)\s+about\s+first\b/i,
-    /\bshould\s+(?:i|we)\s+(?:focus|prioritize|work on)\b/i,
-    /\b(?:more|less)\s+important\s+than\b/i,
-    /\b(?:higher|lower)\s+priority\b/i,
-    /\b(?:i|we)\s+could\s+(?:spend|use|devote|work|do)\b/i,
-    /\b(?:would|might)\s+it\s+be\s+better\b/i,
-    /\b(?:not sure|unsure|uncertain|wondering)\b.{0,100}\b(?:focus|priority|prioritize|more important|higher priority|first)\b/i,
-    /\b(?:which|what)\b.{0,80}\b(?:more important|higher priority)\b/i,
-  ].some((pattern) => pattern.test(content));
-}
-
-/**
- * A model-proposed action must be grounded in an actual non-meta project
- * statement. This lexical support check is deliberately domain-neutral: it
- * does not classify the project or split prose, it only rejects actions whose
- * substantive terms occur solely in a question asking Gapwise what to do.
- */
-function actionHasSourceSupport(action: string, content: string): boolean {
-  const actionTokens = conceptTokens(action);
-  if (!actionTokens.size) return false;
-  const clauses = content
-    .split(/(?<=[.!?])\s+|\r?\n+/)
-    .map((clause) => clause.trim())
-    .filter(Boolean);
-  return clauses.some((clause) => {
-    if (clause.endsWith('?')) return false;
-    const sourceTokens = conceptTokens(clause);
-    const shared = [...actionTokens].filter((token) => sourceTokens.has(token)).length;
-    if (shared < Math.min(2, actionTokens.size)) return false;
-
-    return /\b(?:i|we)\s+(?:(?:still|also)\s+)?(?:need to|have to|must|will|shall|plan to|intend to|want to|am going to|are going to|am working on|are working on|agreed to|have agreed to)\b/i.test(clause)
-      || /\b(?:i|we)\s+(?:have not|haven['’]t|still have not|still haven['’]t|not yet)\b/i.test(clause)
-      || /\b(?:the team|the group|the project|this project)\s+(?:must|will|needs to|has to|is going to|plans to)\b/i.test(clause)
-      || /\b(?:remains to|still needs to|is still to)\b/i.test(clause);
-  });
-}
-
-/**
- * Finalize a successful Gemini extraction. Gemini is the primary extractor;
- * deterministic extraction is reserved for the model-unavailable path.
- */
-function finalizeQuestionCandidates(
-  analysis: ContextAnalysis,
-  input: AnalyzeContextInput,
-  trace?: Record<string, unknown>,
-): ContextAnalysis {
-  type FinalizedCandidate = {
-    node: ContextAnalysis['nodes'][number];
-    originalRefs: string[];
-  };
-  type NormalizedCandidate = {
-    node: ContextAnalysis['nodes'][number];
-    originalRef: string;
-  };
-
-  const normalizeNode = (node: ContextAnalysis['nodes'][number]) => {
-    if (
-      isPriorityComparisonSignal(input.content) &&
-      (node.type === 'DECISION' || node.type === 'NEXT_ACTION')
-    ) {
-      return null;
-    }
-
-    if (node.type === 'DECISION'
-      && !sourceHasDecisionCommitment(input.content)
-      && !sourceHasUnresolvedChoice(input.content, node.text)) {
-      return {
-        ...node,
-        type: 'PREFERENCE' as const,
-        status: undefined,
-      };
-    }
-    if (!nodeIsQuestionLike(node)) return node;
-    return {
-      ...node,
-      text: normalizePersonalQuestion(node.text, input.content),
-      question_aliases: (node.question_aliases ?? []).map((alias) =>
-        normalizePersonalQuestion(alias, input.content, true)
-      ),
-    };
-  };
-
-  const normalizedCandidates = analysis.nodes
-    .map((node, originalIndex): NormalizedCandidate | null => {
-      const normalizedNode = normalizeNode(node);
-      return normalizedNode ? {
-        node: normalizedNode,
-        originalRef: node.candidate_ref ?? candidateRef(originalIndex),
-      } : null;
-    })
-    .filter((candidate): candidate is NormalizedCandidate => {
-      if (!candidate) return false;
-      const { node } = candidate;
-
-      if (
-        isPriorityComparisonSignal(input.content) &&
-        (node.type === 'DECISION' || node.type === 'NEXT_ACTION')
-      ) {
-        return false;
-      }
-
-      return node.type !== 'NEXT_ACTION' || actionHasSourceSupport(node.text, input.content);
-    });
-  const normalizedNodes = normalizedCandidates.map(({ node }) => node);
-  const finalized: FinalizedCandidate[] = [];
-  const referenceMap = new Map<string, string>();
-  const representativeOriginalRefs = new Set<string>();
-
-  normalizedCandidates.forEach(({ node, originalRef }) => {
-    const existingIndex = finalized.findIndex((candidate) =>
-      semanticallyEquivalentModelNode(candidate.node, node)
-    );
-    if (existingIndex < 0) {
-      const stableRef = node.candidate_ref ?? originalRef;
-      finalized.push({ node: { ...node, candidate_ref: stableRef }, originalRefs: [originalRef] });
-      referenceMap.set(originalRef, stableRef);
-      representativeOriginalRefs.add(originalRef);
-      return;
-    }
-
-    const existing = finalized[existingIndex];
-    const stableRef = existing.node.candidate_ref ?? existing.originalRefs[0];
-    referenceMap.set(originalRef, stableRef);
-    const aliases = nodeIsQuestionLike(existing.node)
-      ? Array.from(new Set([
-          ...(existing.node.question_aliases ?? []),
-          ...(node.question_aliases ?? []),
-          node.text,
-        ])).filter((alias) => alias.trim() && alias !== existing.node.text)
-      : existing.node.question_aliases;
-    finalized[existingIndex] = {
-      node: {
-        ...existing.node,
-        confidence: Math.max(existing.node.confidence, node.confidence),
-        impact: Math.max(existing.node.impact, node.impact),
-        why_it_matters: Array.from(new Set([
-          ...existing.node.why_it_matters,
-          ...node.why_it_matters,
-        ])),
-        question_aliases: aliases,
-        related_node_ids: Array.from(new Set([
-          ...existing.node.related_node_ids,
-          ...node.related_node_ids,
-        ])),
-      },
-      originalRefs: [...existing.originalRefs, originalRef],
-    };
-  });
-
-  const canonicalReconciliation = analysis.reconciliation.filter((item) =>
-    Boolean(item.candidate_ref && representativeOriginalRefs.has(item.candidate_ref))
-  );
-  const deduplicatedNodes = finalized;
-  const finalizedNodes = deduplicatedNodes.filter(({ node }) => {
-    if (node.type !== 'UNKNOWN') return true;
-
-    const duplicatesOpenDecision = deduplicatedNodes.some(({ node: other }) => {
-      if (other.type !== 'DECISION' || other.status !== 'OPEN') return false;
-      return semanticallyRepresentsSameChoice(node.text, other.text);
-    });
-
-    return !duplicatesOpenDecision;
-  });
-  const retainedRefs = new Set(finalizedNodes.map((candidate) => candidate.node.candidate_ref));
-  const filteredReferenceMap = new Map<string, string>();
-  referenceMap.forEach((stableRef, originalRef) => {
-    if (retainedRefs.has(stableRef)) filteredReferenceMap.set(originalRef, stableRef);
-  });
-  const remapped = remapAnalysisCandidateRefs(
-    { ...analysis, reconciliation: canonicalReconciliation },
-    finalizedNodes.map((candidate) => candidate.node),
-    filteredReferenceMap,
-  );
-  const result = sanitizeModelReconciliation(remapped);
-  if (trace) {
-    trace.model_candidates = analysis.nodes;
-    trace.normalized_model_candidates = normalizedNodes;
-    trace.deduplicated_model_candidates = finalized;
-    trace.finalized_analysis = result;
-  }
-  return result;
-}
-
 function analysisRelationshipsToPrecomputedRelationships(analysis: ContextAnalysis): PrecomputedRelationship[] {
-  return analysis.relationships.map((relationship) => ({
+  return analysis.relationships
+    .map((relationship) => ({
     sourceRef: relationship.source_ref,
     targetRef: relationship.target_ref,
     type: relationship.type,
     confidence: relationship.confidence,
-  }));
+    }));
 }
 
+// Used only to keep the model input bounded and relevant. This does not
+// classify, merge, or discard extracted project propositions.
 function meaningfulTokens(value: string): Set<string> {
   const ignored = new Set(['what', 'where', 'when', 'which', 'who', 'how', 'why', 'does', 'could', 'would', 'should', 'are', 'the', 'and', 'for', 'from', 'with', 'this', 'that', 'about', 'into', 'your', 'you', 'can', 'will', 'have', 'need', 'know']);
   return new Set(
@@ -1210,59 +753,6 @@ function meaningfulTokens(value: string): Set<string> {
       .split(' ')
       .filter((token) => token.length >= 4 && !ignored.has(token))
   );
-}
-
-function filterGoalRelevantUnknowns(analysis: ContextAnalysis, input: AnalyzeContextInput, project: Project): ContextAnalysis {
-  const reasoningProject = projectForReasoning(project);
-  const contextTokens = meaningfulTokens([
-    input.filename,
-    input.content,
-    reasoningProject.title,
-    reasoningProject.goal,
-    ...reasoningProject.nodes.slice(0, 12).map((node) => `${node.text} ${node.why_it_matters?.join(' ') ?? ''}`),
-  ].join(' '));
-  const seen = new Set<string>();
-  let unknownCount = 0;
-  // The structured response already caps the total node count at 12. Keep
-  // that full budget for explicit questions; completeness is more important
-  // here than an arbitrary per-source question quota.
-  const maxUnknowns = 12;
-  const keptCandidateRefs = new Set<string>();
-  const nodes: ContextAnalysis['nodes'] = [];
-  analysis.nodes.forEach((node, index) => {
-    if (node.type !== 'UNKNOWN') {
-      nodes.push(node);
-      keptCandidateRefs.add(node.candidate_ref ?? candidateRef(index));
-      return;
-    }
-    if (unknownCount >= maxUnknowns) return;
-    const key = node.text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    if (seen.has(key)) return;
-    seen.add(key);
-    const questionTokens = meaningfulTokens(`${node.text} ${node.why_it_matters.join(' ')}`);
-    const grounded = Array.from(questionTokens).some((token) => contextTokens.has(token));
-    if (!grounded) return;
-    unknownCount += 1;
-    nodes.push(node);
-    keptCandidateRefs.add(node.candidate_ref ?? candidateRef(index));
-  });
-  const relationships = analysis.relationships.flatMap((relationship) => {
-    if (isCandidateReference(relationship.source_ref) && !keptCandidateRefs.has(relationship.source_ref)) return [];
-    if (isCandidateReference(relationship.target_ref) && !keptCandidateRefs.has(relationship.target_ref)) return [];
-    return [relationship];
-  });
-  const reconciliation = analysis.reconciliation.flatMap((candidate) => {
-    if (!candidate.candidate_ref || !keptCandidateRefs.has(candidate.candidate_ref)) return [];
-    if (candidate.canonical_candidate_ref && !keptCandidateRefs.has(candidate.canonical_candidate_ref)) {
-      return [{
-        ...candidate,
-        canonical_candidate_index: undefined,
-        canonical_candidate_ref: undefined,
-      }];
-    }
-    return [candidate];
-  });
-  return { ...analysis, nodes, relationships, reconciliation };
 }
 
 function appendProcessingStage(
@@ -1392,31 +882,24 @@ export async function processContextSource(
       started_at: new Date(modelStageStarted).toISOString(),
       duration_ms: Date.now() - modelStageStarted,
     });
-    const analysisInput = {
-      sourceId: input.sourceId ?? 'new-source',
-      filename: input.filename,
-      content: input.content,
-      type: input.type,
-      storageUrl: input.storageUrl,
-      mimeType: input.mimeType,
-      semanticRole: input.semanticRole,
-      model: options.model,
-      genAI: options.genAI,
-    } satisfies AnalyzeContextInput;
-    const finalizationTrace: Record<string, unknown> = {};
-    const finalizedAnalysis = finalizeQuestionCandidates(rawAnalysis, analysisInput, finalizationTrace);
+    // The model's operations are the semantic authority. From this point on,
+    // deterministic code only assigns stable operation references; it does
+    // not reinterpret the source or rewrite operation meaning.
+    const operations = analysisOperations(rawAnalysis);
     appendProcessingStage(processingLog, {
-      name: 'Model normalization and deduplication',
+      name: 'ProjectPatch operation validation',
       status: 'completed',
-      input: { raw_analysis: rawAnalysis },
-      output: finalizationTrace,
+      input: { model_operations: rawAnalysis.operations },
+      output: { normalized_operations: operations },
     });
-    const analysis = filterGoalRelevantUnknowns(finalizedAnalysis, analysisInput, project);
+    const analysis = rawAnalysis;
     appendProcessingStage(processingLog, {
-      name: 'Goal relevance filtering',
+      name: 'Canonical interpretation validation',
       status: 'completed',
-      input: { finalized_analysis: finalizedAnalysis },
-      output: { filtered_analysis: analysis },
+      input: { validated_analysis: analysis },
+      output: {
+        model_operations: operations,
+      },
     });
     appendProcessingStage(processingLog, {
       name: 'Graph persistence',
@@ -1424,11 +907,11 @@ export async function processContextSource(
       input: {
         extraction_summary: analysis.summary,
         relevance: analysis.relevance,
-        nodes: analysisNodesToPrecomputedNodes(analysis, project),
+        operations,
         relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
       },
       output: {
-        node_count: analysis.nodes.length,
+        operation_count: operations.length,
         relationship_count: analysis.relationships.length,
       },
     });
@@ -1440,9 +923,9 @@ export async function processContextSource(
       processingStatus: 'completed',
       extractionSummary: analysis.summary,
       modelUsed,
-      reconciliationSummary: reconciliationSummary(analysis, project),
+      reconciliationSummary: input.reconciliationSummary,
       relevance: analysis.relevance,
-      derivedNodes: analysisNodesToPrecomputedNodes(analysis, project),
+      operations,
       relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
       processingLog,
     }, profile);
@@ -1509,13 +992,11 @@ export async function processContextSource(
       } : undefined,
       error: message,
     });
-    const fallbackNodes = extractDeterministicFallbackNodes(input.content);
-    const safeFallbackNodes = input.semanticRole === 'ask_message' ? [] : fallbackNodes;
     appendProcessingStage(processingLog, {
-      name: 'Deterministic fallback extraction',
-      status: 'completed',
+      name: 'Canonical interpretation unavailable',
+      status: 'skipped',
       input: { content: input.content },
-      output: { nodes: safeFallbackNodes },
+      output: { operations: [], retryable: true },
     });
     completeProcessingLog(processingLog, 'failed', message);
     const failed = await ingestContextSource(project, {
@@ -1524,7 +1005,8 @@ export async function processContextSource(
       processingStatus: 'failed',
       errorMessage: message,
       extractionHash: undefined,
-      derivedNodes: safeFallbackNodes,
+      derivedNodes: [],
+      operations: [],
       processingLog,
     }, profile);
     return { project: failed, skipped: false, error: message };

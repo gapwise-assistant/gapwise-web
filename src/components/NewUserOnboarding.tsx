@@ -12,6 +12,9 @@ interface NewUserOnboardingProps {
   isLoadingBakeryDemo?: boolean;
   isLoadingBakeryJourneyDemo?: boolean;
   isLoadingNorthstarPilotDemo?: boolean;
+  isLoadingHarborEarly?: boolean;
+  isLoadingHarborMiddle?: boolean;
+  isLoadingHarborLate?: boolean;
   error?: string;
   onCreateProject: () => void;
   onLoadDemo: () => void;
@@ -21,6 +24,9 @@ interface NewUserOnboardingProps {
   onLoadBakeryDemo?: () => void;
   onLoadBakeryJourneyDemo?: () => void;
   onLoadNorthstarPilotDemo?: () => void;
+  onLoadHarborEarly?: () => void;
+  onLoadHarborMiddle?: () => void;
+  onLoadHarborLate?: () => void;
   onSignOut: () => void;
 }
 
@@ -33,6 +39,9 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   isLoadingBakeryDemo = false,
   isLoadingBakeryJourneyDemo = false,
   isLoadingNorthstarPilotDemo = false,
+  isLoadingHarborEarly = false,
+  isLoadingHarborMiddle = false,
+  isLoadingHarborLate = false,
   error,
   onCreateProject,
   onLoadDemo,
@@ -42,6 +51,9 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   onLoadBakeryDemo,
   onLoadBakeryJourneyDemo,
   onLoadNorthstarPilotDemo,
+  onLoadHarborEarly,
+  onLoadHarborMiddle,
+  onLoadHarborLate,
   onSignOut,
 }) => (
   <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-12 text-slate-100">
@@ -65,7 +77,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
         </button>
       </div>
 
-      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo, onLoadBakeryJourneyDemo, onLoadNorthstarPilotDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo, onLoadBakeryJourneyDemo, onLoadNorthstarPilotDemo, onLoadHarborEarly, onLoadHarborMiddle, onLoadHarborLate].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo || onLoadHarborEarly || onLoadHarborMiddle || onLoadHarborLate ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <button
           type="button"
           onClick={onCreateProject}
@@ -169,9 +181,51 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             </span>
           </button>
         )}
+        {onLoadHarborEarly && (
+          <button
+            type="button"
+            onClick={onLoadHarborEarly}
+            disabled={isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate}
+            title="Build the Harbor Hotels early checkpoint with live AI"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-cyan-800/80 bg-cyan-950/20 p-4 text-left transition hover:border-cyan-500 hover:bg-cyan-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-cyan-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingHarborEarly ? 'Building Harbor · Early...' : 'Harbor Hotels · Early'}
+            </span>
+          </button>
+        )}
+        {onLoadHarborMiddle && (
+          <button
+            type="button"
+            onClick={onLoadHarborMiddle}
+            disabled={isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate}
+            title="Build the Harbor Hotels middle checkpoint with live AI"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-amber-800/80 bg-amber-950/20 p-4 text-left transition hover:border-amber-500 hover:bg-amber-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-amber-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingHarborMiddle ? 'Building Harbor · Middle...' : 'Harbor Hotels · Middle'}
+            </span>
+          </button>
+        )}
+        {onLoadHarborLate && (
+          <button
+            type="button"
+            onClick={onLoadHarborLate}
+            disabled={isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate}
+            title="Build the Harbor Hotels late checkpoint with live AI"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-4 text-left transition hover:border-emerald-500 hover:bg-emerald-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-emerald-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingHarborLate ? 'Building Harbor · Late...' : 'Harbor Hotels · Late'}
+            </span>
+          </button>
+        )}
       </div>
 
-      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo) && (
+      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo || isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate) && (
         <div className="mt-5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-4" aria-live="polite" role="status">
           <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
