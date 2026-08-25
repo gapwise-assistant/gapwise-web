@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { LoaderCircle, PlayCircle, RefreshCw, Settings2, Target } from 'lucide-react';
+import NextImage from 'next/image';
+import { LoaderCircle, PlayCircle, RefreshCw, Settings2 } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
@@ -103,16 +104,18 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-40 bg-slate-950/80 backdrop-blur-md border-b border-slate-800 text-slate-100">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-14 sm:min-h-16 py-2 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none sm:gap-3">
-          <div className="h-8 w-8 shrink-0 rounded-xl bg-gradient-to-tr from-cyan-500 via-sky-500 to-fuchsia-500 p-0.5 shadow-lg shadow-cyan-500/20 sm:h-10 sm:w-10">
-            <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-              <Target className="h-4 w-4 text-cyan-400 sm:h-5 sm:w-5" />
-            </div>
+          <div className="flex h-11 w-[92px] shrink-0 items-center rounded-xl bg-white px-2 py-1 shadow-lg shadow-blue-950/30 sm:h-12 sm:w-[108px]">
+            <NextImage
+              src="/logo.png"
+              alt="Gapwise"
+              width={1672}
+              height={941}
+              priority
+              className="h-auto w-full"
+            />
           </div>
           <div className="min-w-0">
             <div className="flex items-center space-x-2">
-              <span className="font-extrabold text-sm tracking-tight text-slate-100 sm:text-lg">
-                GAPWISE
-              </span>
               <span className="hidden lg:inline px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 rounded-full">
                 Persistent v1.0
               </span>

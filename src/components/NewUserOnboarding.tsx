@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import NextImage from 'next/image';
 import { FolderPlus, LoaderCircle, LogOut, PlayCircle } from 'lucide-react';
 
 interface NewUserOnboardingProps {
@@ -60,8 +61,17 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
     <section className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900 p-7 shadow-2xl sm:p-9">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPWISE</p>
-          <h1 className="mt-3 text-2xl font-extrabold">No projects yet</h1>
+          <div className="w-36 rounded-xl bg-white px-3 py-2 shadow-lg shadow-blue-950/20">
+            <NextImage
+              src="/logo.png"
+              alt="Gapwise"
+              width={1672}
+              height={941}
+              priority
+              className="h-auto w-full"
+            />
+          </div>
+          <h1 className="mt-5 text-2xl font-extrabold">No projects yet</h1>
           <p className="mt-2 text-sm leading-6 text-slate-400">
             Start with a clean workspace, or load a reusable Gapwise demo into your account.
           </p>

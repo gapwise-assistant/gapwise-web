@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { LogIn, Target } from 'lucide-react';
+import NextImage from 'next/image';
+import { LogIn } from 'lucide-react';
 import { signInWithGoogle } from '@/lib/auth/client';
 
 interface LoginScreenProps {
@@ -26,11 +27,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError })
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 text-slate-100">
       <section className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center shadow-2xl">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-500/15 text-cyan-300">
-          <Target className="h-6 w-6" />
+        <div className="mx-auto w-44 rounded-2xl bg-white px-4 py-3 shadow-xl shadow-blue-950/20">
+          <NextImage
+            src="/logo.png"
+            alt="Gapwise"
+            width={1672}
+            height={941}
+            priority
+            className="h-auto w-full"
+          />
         </div>
-        <p className="mt-5 text-xs font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPWISE</p>
-        <h1 className="mt-2 text-2xl font-extrabold">Your context, connected.</h1>
+        <h1 className="mt-5 text-2xl font-extrabold">Your context, connected.</h1>
         <p className="mt-3 text-sm leading-6 text-slate-400">
           Sign in to load your projects, memories, documents, and priorities.
         </p>
