@@ -106,8 +106,12 @@ export async function POST(request: Request) {
     const previousEdges = new Set(previousDebug?.rawProjectGraph.edges.map((edge) => `${edge.source.id}:${edge.relationship}:${edge.target.id}`) ?? []);
     const addedEdges = [...currentEdges].filter((edge) => !previousEdges.has(edge)).length;
     const removedEdges = [...previousEdges].filter((edge) => !currentEdges.has(edge)).length;
-    const previousFocusId = previousDebug?.rawProjectGraph.focusAssessment?.actionNodeId ?? null;
-    const currentFocusId = decisionMapDebug.rawProjectGraph.focusAssessment?.actionNodeId ?? null;
+    const previousFocusId = previousDebug?.rawProjectGraph.focusAssessment?.targetNodeId
+      ?? previousDebug?.rawProjectGraph.focusAssessment?.actionNodeId
+      ?? null;
+    const currentFocusId = decisionMapDebug.rawProjectGraph.focusAssessment?.targetNodeId
+      ?? decisionMapDebug.rawProjectGraph.focusAssessment?.actionNodeId
+      ?? null;
     const previousFocus = nodeTextFromDebug(previousDebug, previousFocusId);
     const currentFocus = nodeTextFromDebug(decisionMapDebug, currentFocusId);
     const changes = [

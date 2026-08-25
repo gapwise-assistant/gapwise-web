@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
+import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { getStorageProvider, loadProjectForScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
@@ -50,7 +51,12 @@ export async function GET(request: Request) {
     const projectStateVersion = await focusProjectStateVersion(project);
     const cacheId = focusAssessmentCacheId(project.id, projectStateVersion);
     const cached = await getStorageProvider().getFocusAssessment(userId, cacheId);
-    return NextResponse.json({ focusAssessment: cached?.assessment ?? null, cached: Boolean(cached) });
+    return NextResponse.json({
+      focusAssessment: cached?.assessment
+        ? normalizeFocusAssessment(project, cached.assessment)
+        : null,
+      cached: Boolean(cached),
+    });
   } catch (error) {
     const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED' ? 403 : 400;
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Focus assessment lookup failed.' }, { status });

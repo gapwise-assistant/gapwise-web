@@ -44,7 +44,9 @@ export function buildDecisionMapActivityFingerprint(
     edges: [...project.edges]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((edge) => [edge.source, edge.type, edge.target]),
-    focusActionNodeId: focusAssessment?.actionNodeId ?? null,
+    focusTargetNodeId: focusAssessment?.targetNodeId ?? focusAssessment?.actionNodeId ?? null,
+    focusExecutionNodeId: focusAssessment?.executionNodeId ?? null,
+    representedNodeIds: [...(focusAssessment?.representedNodeIds ?? [])].sort(),
     warningCodes: normalizedWarnings(warnings),
   });
 }
@@ -61,7 +63,11 @@ export function buildDecisionMapActivityFingerprintFromDebug(
     edges: [...debug.rawProjectGraph.edges]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((edge) => [edge.id, edge.source.id, edge.relationship, edge.target.id]),
-    focusActionNodeId: debug.rawProjectGraph.focusAssessment?.actionNodeId ?? null,
+    focusTargetNodeId: debug.rawProjectGraph.focusAssessment?.targetNodeId
+      ?? debug.rawProjectGraph.focusAssessment?.actionNodeId
+      ?? null,
+    focusExecutionNodeId: debug.rawProjectGraph.focusAssessment?.executionNodeId ?? null,
+    representedNodeIds: [...(debug.rawProjectGraph.focusAssessment?.representedNodeIds ?? [])].sort(),
     warningCodes: normalizedWarnings(warnings),
   });
 }

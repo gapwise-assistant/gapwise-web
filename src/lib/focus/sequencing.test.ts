@@ -32,6 +32,7 @@ function assessment(actionNodeId: string, score: number): FocusAssessment {
     title: actionNodeId,
     sourceNodeIds: [actionNodeId],
     sourceIds: [],
+    representedNodeIds: [actionNodeId],
     actionNodeId,
     score,
     confidence: 0.8,

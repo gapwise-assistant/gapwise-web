@@ -63,18 +63,25 @@ export function sequenceFocusAssessments(
   assessments: FocusAssessment[],
 ): FocusAssessment[] {
   const representedActionNodeIds = new Set(
-    assessments.flatMap((assessment) => assessment.actionNodeId ? [assessment.actionNodeId] : []),
+    assessments.flatMap((assessment) => {
+      const targetNodeId = assessment.targetNodeId ?? assessment.actionNodeId;
+      return targetNodeId ? [targetNodeId] : [];
+    }),
   );
   const eligible = assessments.filter((assessment) =>
-    !assessment.actionNodeId || !isNodeBlocked(project, assessment.actionNodeId)
+    !((assessment.targetNodeId ?? assessment.actionNodeId)
+      && isNodeBlocked(project, assessment.targetNodeId ?? assessment.actionNodeId!))
   );
   const promotedByNodeId = new Map<string, FocusAssessment>();
 
   assessments
-    .filter((assessment) => assessment.actionNodeId && isNodeBlocked(project, assessment.actionNodeId))
+    .filter((assessment) => {
+      const targetNodeId = assessment.targetNodeId ?? assessment.actionNodeId;
+      return Boolean(targetNodeId && isNodeBlocked(project, targetNodeId));
+    })
     .forEach((blockedAssessment) => {
-      const actionNodeId = blockedAssessment.actionNodeId!;
-      getUnresolvedPrerequisites(project, actionNodeId)
+      const targetNodeId = blockedAssessment.targetNodeId ?? blockedAssessment.actionNodeId!;
+      getUnresolvedPrerequisites(project, targetNodeId)
         .filter(actionablePrerequisite)
         .filter((node) => !isNodeBlocked(project, node.id))
         .filter((node) => !representedActionNodeIds.has(node.id))
@@ -86,6 +93,8 @@ export function sequenceFocusAssessments(
             whyNow: `This unresolved prerequisite must be addressed before “${blockedAssessment.title}”.`,
             sourceNodeIds: Array.from(new Set([node.id, ...blockedAssessment.sourceNodeIds])),
             sourceIds: Array.from(new Set([...node.source_refs, ...blockedAssessment.sourceIds])),
+            targetNodeId: node.id,
+            representedNodeIds: [node.id],
             actionNodeId: node.id,
             score: blockedAssessment.score,
             confidence: node.confidence,

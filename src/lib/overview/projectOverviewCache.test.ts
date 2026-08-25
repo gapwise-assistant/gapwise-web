@@ -30,6 +30,7 @@ function makeFocus(nodeId: string) {
     title: 'Resolve the most important open question.',
     sourceNodeIds: [nodeId],
     sourceIds: [],
+    representedNodeIds: [nodeId],
     actionNodeId: nodeId,
     score: 0.9,
     confidence: 0.9,

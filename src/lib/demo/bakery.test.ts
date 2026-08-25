@@ -83,6 +83,7 @@ describe('weekend bakery pop-up demo', () => {
 
       expect(focus).toMatchObject({
         kind: 'decision',
+        targetNodeId: 'bakery_location_decision',
         actionNodeId: 'bakery_location_decision',
       });
     } finally {

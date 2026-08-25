@@ -62,6 +62,7 @@ export interface DecisionMapDebugTrace {
       priority: number | null;
       sourceRefs: string[];
       isCurrentFocusAction: boolean;
+      isCurrentFocusTarget?: boolean;
       isResolved: boolean;
       createdAt: string | null;
       updatedAt: string | null;
@@ -550,7 +551,7 @@ function layoutDiagnostics(project: Project, options: DecisionMapDebugOptions, c
 export function buildDecisionMapDebugTrace(project: Project, options: DecisionMapDebugOptions): DecisionMapDebugTrace {
   const nodes = byId(project);
   const focusAssessment = options.focusAssessment ?? null;
-  const focusNodeId = focusAssessment?.actionNodeId ?? null;
+  const focusNodeId = focusAssessment?.targetNodeId ?? focusAssessment?.actionNodeId ?? null;
   const rawComponents = components(project);
   const goalPathByNode = new Map(project.nodes.map((node) => [node.id, goalPaths(project, node.id)]));
   const filterTraces = (['all'] as DecisionMapFilter[]).map((filter) => visibleForFilter(
@@ -646,6 +647,7 @@ export function buildDecisionMapDebugTrace(project: Project, options: DecisionMa
         priority: node.priority ?? null,
         sourceRefs: node.source_refs,
         isCurrentFocusAction: node.id === focusNodeId,
+        isCurrentFocusTarget: node.id === focusNodeId,
         isResolved: node.status === 'RESOLVED',
         createdAt: node.created_at ?? null,
         updatedAt: node.updated_at ?? null,
@@ -680,10 +682,10 @@ export function buildDecisionMapDebugTrace(project: Project, options: DecisionMa
       visibilityReason: !focusAssessment
         ? 'No cached FocusAssessment was available when this map trace was captured.'
         : !focusNode
-          ? 'FocusAssessment.actionNodeId does not resolve to a node in the rendered project graph.'
+          ? 'FocusAssessment.targetNodeId does not resolve to a node in the rendered project graph.'
           : visibleSet.has(focusNode.id)
-            ? 'The focus action node is included in the complete All graph.'
-            : currentVisibility.nodeReasons.find((entry) => entry.nodeId === focusNode.id)?.reason ?? 'The focus action node is not visible in the active map view.',
+            ? 'The focus target node is included in the complete All graph.'
+            : currentVisibility.nodeReasons.find((entry) => entry.nodeId === focusNode.id)?.reason ?? 'The focus target node is not visible in the active map view.',
     },
     whyThisMattersDebug: whyThisMatters,
     filterVisibilityTrace: filterTraces,

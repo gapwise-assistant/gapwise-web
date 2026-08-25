@@ -40,6 +40,16 @@ describe('GET /api/internal/focus-assessment', () => {
     expect(response.status).toBe(200);
     expect(getFocusAssessment).toHaveBeenCalledWith('focus-user', 'focus-cache-id');
     expect(getCachedFocusAssessment).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual({ focusAssessment: assessment, cached: true });
+    const body = await response.json();
+    expect(body).toMatchObject({ cached: true });
+    expect(body.focusAssessment).toMatchObject({
+      targetNodeId: 'bakery_location_decision',
+      executionNodeId: 'bakery_select_location_action',
+      actionNodeId: 'bakery_location_decision',
+    });
+    expect(body.focusAssessment.representedNodeIds).toEqual(expect.arrayContaining([
+      'bakery_location_decision',
+      'bakery_select_location_action',
+    ]));
   });
 });

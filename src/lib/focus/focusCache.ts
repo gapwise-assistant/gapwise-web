@@ -4,9 +4,10 @@ import type { StorageProvider } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
 import { getStorageProvider } from '@/lib/storage';
 import { generateFocusAssessment, type FocusAssessment } from '@/lib/focus/focusAssessment';
+import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 
 const inFlight = new Map<string, Promise<FocusAssessment | null>>();
-const FOCUS_CACHE_SCHEMA_VERSION = 5;
+const FOCUS_CACHE_SCHEMA_VERSION = 6;
 const FOCUS_NODE_TYPES = new Set([
   'GOAL',
   'DECISION',
@@ -37,6 +38,7 @@ export async function focusProjectStateVersion(
         status: node.status,
         confidence: node.confidence,
         impact: node.impact,
+        decision_outcome: node.decision_outcome ?? null,
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     edges: project.edges
@@ -82,12 +84,19 @@ export async function getCachedFocusAssessment(
   const request = (async () => {
     try {
       const cached = await storage.getFocusAssessment(userId, cacheId);
-      if (cached?.projectStateVersion === projectStateVersion) return cached.assessment;
+      if (cached?.projectStateVersion === projectStateVersion) {
+        return cached.assessment
+          ? normalizeFocusAssessment(project, cached.assessment)
+          : null;
+      }
     } catch {
       // A cache outage must not make Today or Ask unavailable.
     }
 
-    const assessment = await generate(project, contextPack, profile);
+    const generated = await generate(project, contextPack, profile);
+    const assessment = generated
+      ? normalizeFocusAssessment(project, generated)
+      : null;
     const now = new Date().toISOString();
     try {
       await storage.saveFocusAssessment(userId, {

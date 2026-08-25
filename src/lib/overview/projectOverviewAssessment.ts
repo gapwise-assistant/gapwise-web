@@ -114,6 +114,9 @@ export interface ProjectOverviewReasoningPackage {
   currentFocus: {
     kind: FocusAssessment['kind'];
     title: string;
+    targetNodeId?: string;
+    executionNodeId?: string;
+    representedNodeIds: string[];
     actionNodeId?: string;
     sourceNodeIds: string[];
   } | null;
@@ -257,7 +260,9 @@ function buildPackage(
   const goalNodeIds = goalConnectedNodeIds(reasoningProject);
   const focusNodeIds = new Set([
     ...(focusAssessment?.sourceNodeIds ?? []),
-    ...(focusAssessment?.actionNodeId ? [focusAssessment.actionNodeId] : []),
+    ...(focusAssessment?.targetNodeId ? [focusAssessment.targetNodeId] : []),
+    ...(focusAssessment?.executionNodeId ? [focusAssessment.executionNodeId] : []),
+    ...(focusAssessment?.representedNodeIds ?? []),
   ]);
   const goalTokens = meaningfulTokens(`${reasoningProject.goal} ${reasoningProject.title}`);
   const edgeDegree = new Map<string, number>();
@@ -339,6 +344,9 @@ function buildPackage(
       ? {
         kind: focusAssessment.kind,
         title: focusAssessment.title,
+        targetNodeId: focusAssessment.targetNodeId,
+        executionNodeId: focusAssessment.executionNodeId,
+        representedNodeIds: focusAssessment.representedNodeIds,
         actionNodeId: focusAssessment.actionNodeId,
         sourceNodeIds: focusAssessment.sourceNodeIds,
       }

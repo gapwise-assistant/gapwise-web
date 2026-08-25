@@ -16,6 +16,7 @@ describe('Decision Map debug trace', () => {
         kind: 'decision',
         title: 'Choose the bakery location',
         actionNodeId: 'bakery_location_decision',
+        representedNodeIds: ['bakery_location_decision'],
         sourceNodeIds: ['bakery_location_decision'],
         sourceIds: ['bakery_launch_planning_notes'],
         score: 0.91,

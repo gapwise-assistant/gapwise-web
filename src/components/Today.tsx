@@ -280,20 +280,27 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     .filter((recommendation) => recommendation.status === 'active' && recommendation.kind !== 'risk' && !hiddenRecommendations[recommendation.id])
     .slice(0, 5);
   const openDecisions = useMemo(() => openTodayDecisions(project), [project]);
-  const focusActionNode = focusAssessment?.actionNodeId
-    ? project.nodes.find((node) => node.id === focusAssessment.actionNodeId) ?? null
+  const focusTargetNodeId = focusAssessment?.targetNodeId ?? focusAssessment?.actionNodeId;
+  const focusTargetNode = focusTargetNodeId
+    ? project.nodes.find((node) => node.id === focusTargetNodeId) ?? null
     : null;
-  const canDecideFocus = focusActionNode?.type === 'DECISION'
-    && focusActionNode.status === 'OPEN';
+  const representedNodeIds = useMemo(() => new Set(
+    focusAssessment?.representedNodeIds ?? (focusTargetNode ? [focusTargetNode.id] : []),
+  ), [focusAssessment?.representedNodeIds, focusTargetNode]);
+  const canDecideFocus = focusTargetNode?.type === 'DECISION'
+    && focusTargetNode.status === 'OPEN';
   const canResolveFocus = (
-    focusActionNode?.type === 'UNKNOWN'
-    || focusActionNode?.type === 'ASSUMPTION'
-  ) && focusActionNode.status === 'OPEN';
+    focusTargetNode?.type === 'UNKNOWN'
+    || focusTargetNode?.type === 'ASSUMPTION'
+  ) && focusTargetNode.status === 'OPEN';
   const focusGuidance = focusAssessment ? focusAssessmentToGuidance(focusAssessment) : undefined;
   const questions = buildTodayQuestions({
     project,
     brief,
-    excludedQuestionNodeIds: canResolveFocus ? [focusActionNode.id] : [],
+    excludedQuestionNodeIds: [...representedNodeIds].filter((nodeId) => {
+      const node = project.nodes.find((candidate) => candidate.id === nodeId);
+      return node?.type === 'UNKNOWN' || node?.type === 'ASSUMPTION';
+    }),
   });
   const feedItems = useMemo(() => buildTodayFeed(recommendations, questions, project), [recommendations, questions, project]);
   const hiddenCandidates = [
@@ -346,10 +353,9 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   });
   const answeredItems = useMemo(() => answeredQuestionItems(project), [project]);
   const questionItems: OpenQuestionRowItem[] = openQuestionItems;
-  const recommendedFocusId = focusActionNode?.id;
-  const visibleDecisions = openDecisions.filter((node) => node.id !== recommendedFocusId);
+  const visibleDecisions = openDecisions.filter((node) => !representedNodeIds.has(node.id));
   const visibleQuestions = questionItems.filter((item) =>
-    !recommendedFocusId || !item.question.sourceNodeIds.includes(recommendedFocusId),
+    !item.question.sourceNodeIds.some((nodeId) => representedNodeIds.has(nodeId)),
   );
   const hiddenQuestionItems = hiddenFeedItems.filter((item) => item.itemType === 'QUESTION');
   const feedQuestions = questionItems.map(({ question, context }) => ({
@@ -357,16 +363,16 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     reason: question.reason || context,
   }));
   const focusQuestionItem = canResolveFocus
-    ? questionItems.find((item) => item.question.sourceNodeIds.includes(focusActionNode.id))
+    ? questionItems.find((item) => focusTargetNode && item.question.sourceNodeIds.includes(focusTargetNode.id))
     : undefined;
   const focusQuestion = focusQuestionItem?.question
-    ?? (focusActionNode ? todayQuestionFromNode(project, focusActionNode) : undefined);
-  const focusHidden = focusActionNode
-    ? hiddenQuestionItems.some((item) => item.question?.sourceNodeIds.includes(focusActionNode.id))
-      || Boolean(hiddenRecommendations[`rec_gap_${focusActionNode.id}`])
+    ?? (focusTargetNode ? todayQuestionFromNode(project, focusTargetNode) : undefined);
+  const focusHidden = focusTargetNode
+    ? hiddenQuestionItems.some((item) => item.question?.sourceNodeIds.includes(focusTargetNode.id))
+      || Boolean(hiddenRecommendations[`rec_gap_${focusTargetNode.id}`])
     : false;
   const showRecommendedFocus = Boolean(
-    focusGuidance && (!focusActionNode || focusActionNode.status === 'OPEN') && !focusHidden,
+    focusGuidance && (!focusTargetNode || focusTargetNode.status === 'OPEN') && !focusHidden,
   );
   const comingUp = buildComingUp(brief, new Date(), 4);
   const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })));
@@ -552,8 +558,8 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         <RecommendedFocus
           guidance={focusGuidance}
           onResolve={canResolveFocus && focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
-          onDecide={canDecideFocus && onReviewDecision ? () => onReviewDecision(focusActionNode.id) : undefined}
-          onViewDecisionMap={focusActionNode && onViewReasoningPath ? () => onViewReasoningPath(focusActionNode.id) : undefined}
+          onDecide={canDecideFocus && focusTargetNode && onReviewDecision ? () => onReviewDecision(focusTargetNode.id) : undefined}
+          onViewDecisionMap={focusTargetNode && onViewReasoningPath ? () => onViewReasoningPath(focusTargetNode.id) : undefined}
         />
       )}
 

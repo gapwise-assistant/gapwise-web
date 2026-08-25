@@ -16,8 +16,9 @@ export function focusActionNodeForAssessment(
   project: Project,
   assessment: FocusAssessment | null,
 ): ClarityNode | null {
-  if (!assessment?.actionNodeId) return null;
-  const node = project.nodes.find((candidate) => candidate.id === assessment.actionNodeId);
+  const targetNodeId = assessment?.targetNodeId ?? assessment?.actionNodeId;
+  if (!targetNodeId) return null;
+  const node = project.nodes.find((candidate) => candidate.id === targetNodeId);
   if (!node || node.status !== 'OPEN') return null;
   return ['DECISION', 'UNKNOWN', 'ASSUMPTION', 'NEXT_ACTION'].includes(node.type) ? node : null;
 }

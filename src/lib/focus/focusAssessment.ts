@@ -10,17 +10,23 @@ import { getVertexGenAIClient } from '@/lib/google/genai';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { sequenceFocusAssessments } from '@/lib/focus/sequencing';
 import { isNextActionSatisfied } from '@/lib/actions/completion';
+import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 
 export type FocusAssessment = {
   kind: 'question' | 'decision' | 'action' | 'discovery';
   title: string;
   nextAction?: string;
   whyNow?: string;
+  /** The unresolved project state that controls the primary workflow. */
+  targetNodeId?: string;
+  /** An existing NEXT_ACTION that advances the target, when one exists. */
+  executionNodeId?: string;
+  /** Nodes already represented by this focus recommendation in Today. */
+  representedNodeIds: string[];
   sourceNodeIds: string[];
   sourceIds: string[];
   /**
-   * The existing project node the user should act on to advance this
-   * recommendation. Source nodes remain provenance and are not action targets.
+   * Backwards-compatible alias for the normalized target node.
    */
   actionNodeId?: string;
   score: number;
@@ -46,6 +52,9 @@ const derivedSchema = z.object({
     whyNow: z.string().min(1).max(280),
     sourceNodeIds: z.array(z.string()).max(8),
     sourceIds: z.array(z.string()).max(8),
+    targetNodeId: z.string().optional(),
+    executionNodeId: z.string().optional(),
+    representedNodeIds: z.array(z.string()).max(8).optional(),
     actionNodeId: z.string().optional(),
     confidence: z.number().min(0).max(1),
     factors: factorsSchema,
@@ -84,6 +93,8 @@ function fromAttentionCandidate(candidate: AttentionCandidate, project: Project)
     whyNow: candidate.reason,
     sourceNodeIds: candidate.source_node_ids,
     sourceIds: candidate.source_ids,
+    targetNodeId: validActionNode?.id,
+    representedNodeIds: [],
     actionNodeId: validActionNode?.id,
     score: candidate.score,
     confidence: candidate.factors.evidence_confidence,
@@ -131,11 +142,14 @@ async function deriveCandidates(
       'Do not merely restate the user question, project goal, or a vague instruction to decide what to do first.',
       'Every recommendation must be grounded in the supplied project state. Cite only IDs that appear there.',
       'Every focus recommendation should identify an existing actionable project node when one directly represents the decision, uncertainty, or action the user should address.',
-      'actionNodeId must reference that existing node.',
-      'Do not use a generic planning or prioritization action as actionNodeId when its only purpose is deciding what to focus on.',
-      'A recommendation may be derived, but if acting on it means resolving an existing OPEN DECISION, UNKNOWN, or ASSUMPTION, actionNodeId should point to that node.',
-      'sourceNodeIds are supporting provenance and must not be treated as the action target.',
-      'Leave actionNodeId unset only when no existing actionable node directly represents the recommendation.',
+      'targetNodeId identifies the unresolved project state the user is trying to change and controls the workflow CTA.',
+      'executionNodeId identifies an existing NEXT_ACTION that describes how to advance the target.',
+      'When an action investigates or resolves an existing open question, targetNodeId must reference the question and executionNodeId must reference the action.',
+      'representedNodeIds contains the target and execution nodes already covered by the recommendation.',
+      'sourceNodeIds are supporting provenance and must not be treated as action targets.',
+      'Do not use a generic planning or prioritization action as targetNodeId when its only purpose is deciding what to focus on.',
+      'A recommendation may be derived, but if acting on it means resolving an existing OPEN DECISION, UNKNOWN, or ASSUMPTION, targetNodeId should point to that node.',
+      'Leave targetNodeId unset only when no existing actionable node directly represents the recommendation.',
       'Do not recommend an action node as the current focus when it has an unresolved prerequisite.',
       'For depends_on, the source depends on the target. For blocks, the source blocks the target.',
       'When a candidate is blocked, prefer the unresolved actionable prerequisite that must be addressed first.',
@@ -164,6 +178,9 @@ async function deriveCandidates(
                 whyNow: { type: Type.STRING },
                 sourceNodeIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                 sourceIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                targetNodeId: { type: Type.STRING },
+                executionNodeId: { type: Type.STRING },
+                representedNodeIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                 actionNodeId: { type: Type.STRING },
                 confidence: { type: Type.NUMBER },
                 factors: {
@@ -208,13 +225,14 @@ export async function generateFocusAssessment(
     const sourceIds = new Set(project.sources.map((source) => source.id));
     const derived = await deriveCandidates(project, contextPack, profile);
     derived.forEach((candidate) => {
-      const actionNodeId = candidate.actionNodeId && actionableNodeIds.has(candidate.actionNodeId)
-        ? candidate.actionNodeId
+      const candidateTargetId = candidate.targetNodeId ?? candidate.actionNodeId;
+      const targetNodeId = candidateTargetId && actionableNodeIds.has(candidateTargetId)
+        ? candidateTargetId
         : undefined;
       // An explicitly targeted recommendation is invalid when that target is
       // already satisfied (or otherwise no longer actionable). Do not retain
       // it as an untargeted high-scoring recommendation.
-      if (candidate.actionNodeId && !actionNodeId) return;
+      if (candidateTargetId && !targetNodeId) return;
       const factors = candidate.factors as AttentionScoreFactors;
       assessments.push({
         kind: candidate.kind,
@@ -223,7 +241,10 @@ export async function generateFocusAssessment(
         whyNow: candidate.whyNow,
         sourceNodeIds: candidate.sourceNodeIds.filter((id) => nodeIds.has(id)),
         sourceIds: candidate.sourceIds.filter((id) => sourceIds.has(id)),
-        actionNodeId,
+        targetNodeId,
+        executionNodeId: candidate.executionNodeId,
+        representedNodeIds: candidate.representedNodeIds?.filter((id) => nodeIds.has(id)) ?? [],
+        actionNodeId: targetNodeId,
         score: calculateAttentionScore(factors),
         confidence: candidate.confidence,
       });
@@ -231,7 +252,9 @@ export async function generateFocusAssessment(
   } catch (error) {
     console.warn('[Focus Assessment] Derived recommendation unavailable; using stored candidates.', error);
   }
-  return sequenceFocusAssessments(project, assessments)
+  const normalized = assessments.map((assessment) => normalizeFocusAssessment(project, assessment));
+  return sequenceFocusAssessments(project, normalized)
+    .map((assessment) => normalizeFocusAssessment(project, assessment))
     .sort((a, b) => b.score - a.score || b.confidence - a.confidence)[0] ?? null;
 }
 
@@ -245,15 +268,19 @@ function focusAssessmentPromptLines(
     `Title: ${assessment.title}`,
     assessment.whyNow ? `Why now: ${assessment.whyNow}` : '',
     assessment.nextAction ? `Next action: ${assessment.nextAction}` : '',
+    assessment.targetNodeId ? `Target node ID: ${assessment.targetNodeId}` : '',
+    assessment.executionNodeId ? `Execution node ID: ${assessment.executionNodeId}` : '',
+    `Represented node IDs: ${(assessment.representedNodeIds ?? []).join(', ') || 'none'}`,
     `Source node IDs: ${assessment.sourceNodeIds.join(', ') || 'none (derived assessment)'}`,
     `Source IDs: ${assessment.sourceIds.join(', ') || 'none'}`,
-    assessment.actionNodeId ? `Action node ID: ${assessment.actionNodeId}` : '',
   ];
 
   if (focusIntent) {
     lines.push(
       'The user is asking for project prioritization.',
       'Treat this Focus Assessment as the selected current project priority.',
+      'Use targetNodeId as the primary project state and workflow target.',
+      'Use executionNodeId and Next action only to explain how to advance that target; do not describe the execution as already complete.',
       'Do not replace it with a different primary recommendation.',
       'Explain it, justify it, or make it actionable conversationally.',
     );

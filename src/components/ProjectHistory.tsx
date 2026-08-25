@@ -199,7 +199,7 @@ function HistoryEventCard({
 function focusFromAssessment(assessment: FocusAssessment): ProjectHistoryFocus {
   return {
     title: assessment.title,
-    actionNodeId: assessment.actionNodeId,
+    actionNodeId: assessment.targetNodeId ?? assessment.actionNodeId,
     sourceNodeIds: assessment.sourceNodeIds,
     sourceIds: assessment.sourceIds,
   };

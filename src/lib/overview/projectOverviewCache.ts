@@ -110,6 +110,9 @@ export async function overviewProjectStateVersion(
       ? {
         kind: focusAssessment.kind,
         title: focusAssessment.title,
+        targetNodeId: focusAssessment.targetNodeId ?? null,
+        executionNodeId: focusAssessment.executionNodeId ?? null,
+        representedNodeIds: sortedStrings(focusAssessment.representedNodeIds),
         actionNodeId: focusAssessment.actionNodeId ?? null,
         sourceNodeIds: sortedStrings(focusAssessment.sourceNodeIds),
       }

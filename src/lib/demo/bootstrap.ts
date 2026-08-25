@@ -160,7 +160,7 @@ async function sharedHistoryFocus(userId: string, project: Project): Promise<Pro
   if (!assessment) return undefined;
   return {
     title: assessment.title,
-    actionNodeId: assessment.actionNodeId,
+    actionNodeId: assessment.targetNodeId ?? assessment.actionNodeId,
     sourceNodeIds: assessment.sourceNodeIds,
     sourceIds: assessment.sourceIds,
   };

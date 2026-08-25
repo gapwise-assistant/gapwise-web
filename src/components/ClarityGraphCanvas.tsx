@@ -223,7 +223,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       selectedNodeId,
       focusMode,
       pathMode,
-      focusActionNodeId: focusAssessment?.actionNodeId ?? null,
+      focusTargetNodeId: focusAssessment?.targetNodeId ?? focusAssessment?.actionNodeId ?? null,
       visibleNodeIds: rendererDiagnostics.visibleNodeIds,
       positions,
       zoom: Number(rendererDiagnostics.zoom.toFixed(3)),
@@ -294,7 +294,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [isLocalhost, project, userId, focusAssessment?.actionNodeId]);
+  }, [isLocalhost, project, userId, focusAssessment?.targetNodeId, focusAssessment?.actionNodeId]);
 
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
@@ -499,7 +499,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
                 selectedNodeId={selectedNodeId}
                 focusMode={focusMode}
                 pathMode={pathMode}
-                focusNodeId={focusAssessment?.actionNodeId ?? null}
+                focusNodeId={focusAssessment?.targetNodeId ?? focusAssessment?.actionNodeId ?? null}
                 dimension="2d"
                 expanded={isFullscreen}
                 viewport={viewport}

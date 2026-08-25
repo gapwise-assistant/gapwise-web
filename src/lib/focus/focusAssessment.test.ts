@@ -10,6 +10,7 @@ import { focusAssessmentPromptSection, generateFocusAssessment } from '@/lib/foc
 import { focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
 import { RecommendedFocus } from '@/components/RecommendedFocus';
 import type { FocusAssessmentCacheRecord, StorageProvider } from '@/lib/storage/types';
+import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 
 const generateContent = vi.fn();
 vi.mock('@/lib/google/genai', () => ({
@@ -82,7 +83,8 @@ describe('shared Focus Assessment', () => {
 
     const assessment = await generateFocusAssessment(project, contextPack, DEFAULT_USER_PROFILE);
 
-    expect(assessment?.kind).toBe('action');
+    expect(assessment?.kind).toBe('decision');
+    expect(assessment?.targetNodeId).toBe('decision_schedule');
     expect(assessment?.actionNodeId).toBe('decision_schedule');
     expect(assessment?.score).toBe(calculateAttentionScore(factors));
     const actionNode = focusActionNodeForAssessment(project, assessment);
@@ -93,11 +95,11 @@ describe('shared Focus Assessment', () => {
     expect(todayMarkup).toContain(assessment!.title);
     expect(todayMarkup).toContain('Decide');
     expect(focusAssessmentPromptSection(assessment, true)).toContain(`Title: ${assessment!.title}`);
-    expect(focusAssessmentPromptSection(assessment, true)).toContain('Action node ID: decision_schedule');
+    expect(focusAssessmentPromptSection(assessment, true)).toContain('Target node ID: decision_schedule');
     expect(focusAssessmentPromptSection(assessment, true)).toContain('selected current project priority');
     const derivedPrompt = JSON.stringify(generateContent.mock.calls[0]);
-    expect(derivedPrompt).toContain('sourceNodeIds are supporting provenance and must not be treated as the action target');
-    expect(derivedPrompt).toContain('Do not use a generic planning or prioritization action as actionNodeId');
+    expect(derivedPrompt).toContain('sourceNodeIds are supporting provenance and must not be treated as action targets');
+    expect(derivedPrompt).toContain('Do not use a generic planning or prioritization action as targetNodeId');
     expect(JSON.stringify(project)).toBe(before);
   });
 
@@ -121,6 +123,7 @@ describe('shared Focus Assessment', () => {
       title: 'Evaluate the initial price.',
       sourceNodeIds: ['pricing_decision'],
       sourceIds: [],
+      representedNodeIds: [],
       score: 0.8,
       confidence: 0.9,
     })).toBeNull();
@@ -224,6 +227,7 @@ describe('shared Focus Assessment', () => {
       title: 'Check whether the intended audience will attend one trial screening.',
       sourceNodeIds: [],
       sourceIds: [],
+      representedNodeIds: [],
       score: 0.82,
       confidence: 0.9,
     };
@@ -258,6 +262,52 @@ describe('shared Focus Assessment', () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  it('normalizes a legacy cached action target into an outcome and execution pair', async () => {
+    const project = createProjectFromInput({ name: 'Legacy focus', goal: 'Confirm the next project step.' });
+    project.nodes.push({
+      id: 'legacy_question', type: 'UNKNOWN', text: 'What should be confirmed?', status: 'OPEN',
+      confidence: 0.8, impact: 0.8, source_refs: [], created_by: 'user',
+      created_at: project.created_at, updated_at: project.updated_at,
+    }, {
+      id: 'legacy_action', type: 'NEXT_ACTION', text: 'Ask the owner to confirm it.', status: 'OPEN',
+      confidence: 0.8, impact: 0.8, source_refs: [], created_by: 'agent',
+      created_at: project.created_at, updated_at: project.updated_at,
+    });
+    project.edges.push({ id: 'legacy-link', source: 'legacy_action', target: 'legacy_question', type: 'informs' });
+    const contextPack = buildContextPack({
+      userId: 'focus-user', query: 'What needs my attention today?', project, profile: DEFAULT_USER_PROFILE,
+    });
+    const projectStateVersion = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
+    const legacyAssessment = {
+      kind: 'action' as const,
+      title: 'Ask the owner to confirm it.',
+      sourceNodeIds: [],
+      sourceIds: [],
+      actionNodeId: 'legacy_action',
+      score: 0.8,
+      confidence: 0.8,
+    } as unknown as FocusAssessment;
+    const storage = {
+      getFocusAssessment: vi.fn(async () => ({
+        id: 'legacy-focus', userId: 'focus-user', projectId: project.id, projectStateVersion,
+        assessment: legacyAssessment, createdAt: project.created_at, updatedAt: project.updated_at,
+      })),
+      saveFocusAssessment: vi.fn(async () => undefined),
+    } as unknown as StorageProvider;
+    const generate = vi.fn(async () => null);
+
+    const normalized = await getCachedFocusAssessment(
+      'focus-user', project, contextPack, DEFAULT_USER_PROFILE, { storage, generate },
+    );
+
+    expect(normalized).toMatchObject({
+      targetNodeId: 'legacy_question',
+      executionNodeId: 'legacy_action',
+      actionNodeId: 'legacy_question',
+    });
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('invalidates the cached assessment when a new evidence node changes semantic project state', async () => {
     const project = createProjectFromInput({ name: 'Tool library', goal: 'Validate a useful neighborhood tool library.' });
     const initialPack = buildContextPack({ userId: 'focus-user', query: 'What needs my attention today?', project, profile: DEFAULT_USER_PROFILE });
@@ -271,6 +321,7 @@ describe('shared Focus Assessment', () => {
       title: `Generated focus ${generate.mock.calls.length}`,
       sourceNodeIds: [],
       sourceIds: [],
+      representedNodeIds: [],
       score: 0.8,
       confidence: 0.9,
     }));
