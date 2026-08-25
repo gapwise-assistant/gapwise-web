@@ -860,25 +860,6 @@ function removeRepeatedTrailingLine(text: string): string {
   return text;
 }
 
-/**
- * The confirmation controls are the only place where a user can promote an
- * AI-derived update. Keep an agent's conversational answer from rendering a
- * second, unstructured Add/Dismiss request when it also returned a proposal.
- * This is presentation cleanup only; it does not classify or persist state.
- */
-export function suppressStructuredProposalInvitation(
-  text: string,
-  proposals: AskContextProposal[],
-): string {
-  if (!proposals.length) return text;
-  const cleaned = text
-    .replace(/(?:^|\n|(?<=[.!?])\s+)(?:would you like|do you want|should we|would you like me to)\b[^.!?\n]{0,240}\b(?:track|add|save|record|formalize)\b[^.!?\n]*[.!?]?/gi, ' ')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return cleaned || 'I identified a possible project update below.';
-}
-
 function compactContextText(value: string, maxLength = 500): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
@@ -923,7 +904,8 @@ function structuredAskResponseInstructions(openQuestions: AskOpenQuestion[]): st
     'A contextProposal may represent an inferred risk, assumption, unresolved external question, decision implication, or other AI-derived project state. Do not turn a hypothetical outcome, possibility, or your own recommendation into canonical truth automatically.',
     'Do not create contextProposals for ordinary explanation, brainstorming, or a follow-up question unless the derived project state itself is materially useful to track. Keep the list empty when there is nothing that needs user confirmation.',
     'Each contextProposal must be one atomic project concept. Include type, concise text, and status OPEN, RESOLVED, or DEFERRED. The application may also use reasoning internally. Proposed state is not persisted unless the user later selects Add.',
-    'When contextProposals is non-empty, do not include a sentence asking whether the user wants to track, add, save, record, or formalize the proposal. The UI provides Add and Dismiss controls.',
+    'When contextProposals is non-empty, answer the user normally and explain the reasoning, but do not ask for confirmation in the prose. Never end with or include a question such as "Would you like to track this?", "Should I add this?", or "Do you want to log this?" because the UI provides Add and Dismiss controls.',
+    'Keep inferred claims conditional: use if, when, could, or may for outcomes not established by project context. Do not introduce unsupported business facts or state an inferred causal claim as certain.',
     'Return contextProposals as an array in the same JSON object. Use [] when no AI-derived project update is worth proposing.',
     '{"answer":"...","outcome":"exploration|recommendation|conclusion","contextProposals":[]}',
   ].join('\n');
@@ -1395,10 +1377,7 @@ export async function askGapswise(params: {
     edgeCount: 0,
   };
   const result = {
-    answer: suppressStructuredProposalInvitation(
-      directAnswer ?? adkTurn.answer,
-      metadata.contextProposals ?? [],
-    ),
+    answer: directAnswer ?? adkTurn.answer,
     ...metadata,
     sessionId,
     sources: internalSources,

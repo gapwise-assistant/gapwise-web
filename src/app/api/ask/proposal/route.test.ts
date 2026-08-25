@@ -71,9 +71,10 @@ describe('POST /api/ask/proposal', () => {
 
     expect(response.status).toBe(200);
     expect(persistAskProposal).not.toHaveBeenCalled();
-    expect(storage.saveAskMessage).toHaveBeenCalledWith('demo-user', expect.objectContaining({
-      contextProposals: [expect.objectContaining({ id: 'proposal_1', confirmationStatus: 'dismissed' })],
-    }));
+    expect(storage.saveAskMessage).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      proposal: expect.objectContaining({ id: 'proposal_1', confirmationStatus: 'proposed' }),
+    });
   });
 
   it('persists the exact typed proposal only after Add is selected', async () => {

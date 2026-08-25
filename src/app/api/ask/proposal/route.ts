@@ -69,13 +69,20 @@ export async function POST(request: Request) {
   const proposal = storedProposals.find((candidate) => candidate.id === parsed.data.proposalId);
   if (!proposal) return errorResponse(new Error('The proposed context update was not found.'), 404);
 
-  if (proposal.confirmationStatus === 'added' || proposal.confirmationStatus === 'dismissed') {
+  if (proposal.confirmationStatus === 'added') {
+    return NextResponse.json({ proposal });
+  }
+
+  // Dismissal is intentionally local UI state. Keep the endpoint tolerant of
+  // older clients, but never record a permanent rejection in chat or project
+  // storage.
+  if (parsed.data.action === 'dismiss') {
     return NextResponse.json({ proposal });
   }
 
   let updatedProposal: AskContextProposal = {
     ...proposal,
-    confirmationStatus: parsed.data.action === 'add' ? 'added' : 'dismissed',
+    confirmationStatus: 'added',
     sourceMessageId: proposal.sourceMessageId ?? message.id,
   };
 

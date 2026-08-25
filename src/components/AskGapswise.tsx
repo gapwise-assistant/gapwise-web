@@ -59,6 +59,10 @@ interface ChatMessage {
   };
 }
 
+function proposalUiKey(messageId: string, proposal: AskContextProposal): string {
+  return `${messageId}:${proposal.id ?? proposal.text}`;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -328,6 +332,7 @@ export function AskGapswise({
   const [confirmedAnswerMessageIds, setConfirmedAnswerMessageIds] = useState<Set<string>>(new Set());
   const [confirmedDecisionMessageIds, setConfirmedDecisionMessageIds] = useState<Set<string>>(new Set());
   const [proposalBusyIds, setProposalBusyIds] = useState<Set<string>>(new Set());
+  const [hiddenProposalKeys, setHiddenProposalKeys] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sourcesPanelRef = useRef<HTMLElement>(null);
@@ -565,9 +570,7 @@ export function AskGapswise({
         ? message
         : (() => {
           const existing = normalizeAskContextProposals(message.contextProposals ?? message.proposals);
-          const next = proposal.confirmationStatus === 'dismissed'
-            ? existing.filter((candidate) => candidate.id !== proposal.id)
-            : existing.map((candidate) => candidate.id === proposal.id ? proposal : candidate);
+          const next = existing.map((candidate) => candidate.id === proposal.id ? proposal : candidate);
           return { ...message, contextProposals: next, proposals: next };
         })()),
     })));
@@ -578,6 +581,11 @@ export function AskGapswise({
     proposal: AskContextProposal,
     action: 'add' | 'dismiss',
   ) => {
+    const uiKey = proposalUiKey(message.id, proposal);
+    if (action === 'dismiss') {
+      setHiddenProposalKeys((current) => new Set(current).add(uiKey));
+      return;
+    }
     if (!proposal.id || proposalBusyIds.has(proposal.id)) return;
     setProposalBusyIds((current) => new Set(current).add(proposal.id as string));
     setError('');
@@ -597,7 +605,7 @@ export function AskGapswise({
       const body = await response.json() as { proposal?: AskContextProposal; error?: string };
       if (!response.ok || !body.proposal) throw new Error(body.error ?? 'The proposal action failed.');
       updateProposalStatus(message.id, body.proposal);
-      if (action === 'add') await onProjectContextChanged?.();
+      await onProjectContextChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The proposal action failed.');
     } finally {
@@ -848,46 +856,67 @@ export function AskGapswise({
                     )}
 
                     {(() => {
-                      const contextProposals = normalizeAskContextProposals(message.contextProposals ?? message.proposals)
-                        .filter((proposal) => proposal.confirmationStatus !== 'dismissed');
+                      const contextProposals = normalizeAskContextProposals(message.contextProposals ?? message.proposals);
+                      const visibleProposals = contextProposals.filter((proposal) => !hiddenProposalKeys.has(proposalUiKey(message.id, proposal)));
+                      const hiddenProposals = contextProposals.filter((proposal) => hiddenProposalKeys.has(proposalUiKey(message.id, proposal)));
                       if (contextProposals.length === 0) return null;
                       return (
-                      <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
-                        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">Potential project update</p>
-                        {contextProposals.map((proposal) => {
-                          const proposalBusy = proposal.id ? proposalBusyIds.has(proposal.id) : false;
-                          return (
-                            <div key={proposal.id ?? `${message.id}-${proposal.text}`} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{proposal.type}</span>
-                                {proposal.confirmationStatus === 'added' && <span className="text-xs font-semibold text-emerald-300">Added to project</span>}
-                              </div>
-                              <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{proposal.text}</p>
-                              {proposal.reasoning && <p className="mt-1 text-xs leading-relaxed text-slate-400">{proposal.reasoning}</p>}
-                              {(!proposal.confirmationStatus || proposal.confirmationStatus === 'proposed') && (
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleProposalAction(message, proposal, 'add')}
-                                    disabled={proposalBusy}
-                                    className="min-h-9 rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-extrabold text-slate-950 disabled:opacity-50"
-                                  >
-                                    {proposalBusy ? 'Saving…' : 'Add'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleProposalAction(message, proposal, 'dismiss')}
-                                    disabled={proposalBusy}
-                                    className="min-h-9 rounded-md border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:border-slate-500 disabled:opacity-50"
-                                  >
-                                    Dismiss
-                                  </button>
-                                </div>
-                              )}
+                        <>
+                          {visibleProposals.length > 0 && (
+                            <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
+                              <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">Potential project update</p>
+                              {visibleProposals.map((proposal) => {
+                                const proposalBusy = proposal.id ? proposalBusyIds.has(proposal.id) : false;
+                                return (
+                                  <div key={proposalUiKey(message.id, proposal)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{proposal.type}</span>
+                                      {proposal.confirmationStatus === 'added' && <span className="text-xs font-semibold text-emerald-300">Added to project</span>}
+                                    </div>
+                                    <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{proposal.text}</p>
+                                    {proposal.reasoning && <p className="mt-1 text-xs leading-relaxed text-slate-400">{proposal.reasoning}</p>}
+                                    {(!proposal.confirmationStatus || proposal.confirmationStatus === 'proposed') && (
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleProposalAction(message, proposal, 'add')}
+                                          disabled={proposalBusy}
+                                          className="min-h-9 rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-extrabold text-slate-950 disabled:opacity-50"
+                                        >
+                                          {proposalBusy ? 'Saving…' : 'Add'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleProposalAction(message, proposal, 'dismiss')}
+                                          disabled={proposalBusy}
+                                          className="min-h-9 rounded-md border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:border-slate-500 disabled:opacity-50"
+                                        >
+                                          Dismiss
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
-                          );
-                        })}
-                      </div>
+                          )}
+                          {hiddenProposals.length > 0 && (
+                            <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-800 pt-3">
+                              <span className="text-xs font-semibold text-slate-500">Potential project update dismissed</span>
+                              <button
+                                type="button"
+                                onClick={() => setHiddenProposalKeys((current) => {
+                                  const next = new Set(current);
+                                  hiddenProposals.forEach((proposal) => next.delete(proposalUiKey(message.id, proposal)));
+                                  return next;
+                                })}
+                                className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
+                              >
+                                Show
+                              </button>
+                            </div>
+                          )}
+                        </>
                       );
                     })()}
 

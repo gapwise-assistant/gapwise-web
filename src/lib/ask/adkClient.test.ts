@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { askGapswise, determineAskRoute, isFocusQuestion, suppressStructuredProposalInvitation, test3 } from './adkClient';
+import { askGapswise, determineAskRoute, isFocusQuestion } from './adkClient';
 
 describe('isFocusQuestion', () => {
   it('recognizes narrow prioritization intent without classifying unrelated questions', () => {
@@ -408,45 +408,6 @@ describe('askGapswise', () => {
     });
     expect(result.resolvesQuestionId).toBeUndefined();
     expect(result.conclusion).toBeUndefined();
-  });
-
-  it('keeps an AI-derived project update structured and removes the duplicate tracking invitation', async () => {
-    const fetchMock = vi.fn(async (url: string | URL | Request) => {
-      const target = String(url);
-      if (target.endsWith('/apps/app/users/demo-user/sessions')) return jsonResponse({ id: 'session_proposal' });
-      if (target.endsWith('/internal/ask-route')) return jsonResponse({ route: 'internal_context', reason: 'Project conversation.' });
-      if (target.endsWith('/run_sse')) {
-        const response = {
-          answer: 'A delayed security approval could threaten the launch. Would you like to track this as a formal launch risk?',
-          outcome: 'exploration',
-          contextProposals: [{
-            type: 'RISK',
-            text: 'A two-week security delay could threaten the six-week pilot launch.',
-            status: 'OPEN',
-          }],
-        };
-        return textResponse(`data: ${JSON.stringify({ content: { parts: [{ text: JSON.stringify(response) }] } })}\n`);
-      }
-      if (target.endsWith('/api/internal/context-pack')) return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
-      throw new Error(`Unexpected fetch ${target}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const result = await askGapswise({
-      userId: 'demo-user',
-      message: 'If security approval slips by two weeks, does that create a new risk?',
-    });
-
-    expect(result.contextProposals).toEqual([expect.objectContaining({
-      type: 'RISK',
-      status: 'OPEN',
-      confirmationStatus: 'proposed',
-    })]);
-    expect(result.answer).not.toContain('Would you like to track this');
-    expect(suppressStructuredProposalInvitation(
-      'Would you like to track this as a formal launch risk?',
-      result.contextProposals ?? [],
-    )).toBe('I identified a possible project update below.');
   });
 
   it('returns a structured conclusion only for a supplied open question target', async () => {

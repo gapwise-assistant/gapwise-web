@@ -77,11 +77,14 @@ export function normalizeAskContextProposal(value: unknown): AskContextProposal 
   const legacyGraphStatus = typeof record.suggestedStatus === 'string' && askContextProposalStatuses.has(record.suggestedStatus as AskContextProposalStatus)
     ? record.suggestedStatus as AskContextProposalStatus
     : undefined;
-  const confirmationStatus = typeof record.confirmationStatus === 'string' && askProposalConfirmationStatuses.has(record.confirmationStatus as AskProposalConfirmationStatus)
+  const rawConfirmationStatus = typeof record.confirmationStatus === 'string' && askProposalConfirmationStatuses.has(record.confirmationStatus as AskProposalConfirmationStatus)
     ? record.confirmationStatus as AskProposalConfirmationStatus
-    : rawStatus && askProposalConfirmationStatuses.has(rawStatus as AskProposalConfirmationStatus)
-      ? rawStatus as AskProposalConfirmationStatus
-      : 'proposed';
+    : undefined;
+  // Dismissal is local UI state now. Older persisted dismissed records are
+  // treated as pending again so they remain recoverable and addable.
+  const confirmationStatus: AskProposalConfirmationStatus = rawConfirmationStatus === 'added' || rawStatus === 'added'
+    ? 'added'
+    : 'proposed';
   const graphStatus = legacyGraphStatus
     ?? (rawStatus && askContextProposalStatuses.has(rawStatus as AskContextProposalStatus)
       ? rawStatus as AskContextProposalStatus
