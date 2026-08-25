@@ -70,6 +70,8 @@ const normalizedNodeTypeSchema = z.preprocess(
   nodeTypeSchema
 );
 
+const extractionBasisSchema = z.enum(['USER_STATED', 'AI_DERIVED']);
+
 const relationshipSchema = z.enum([
   'supports',
   'contradicts',
@@ -114,6 +116,7 @@ export const contextAnalysisSchema = z.object({
     candidate_ref: z.string().optional(),
     type: normalizedNodeTypeSchema,
     text: z.string().min(1),
+    extraction_basis: extractionBasisSchema.optional(),
     confidence: z.number().min(0).max(1),
     impact: z.number().min(0).max(1).default(0.7),
     status: z.enum(['OPEN', 'RESOLVED']).optional(),
@@ -162,6 +165,7 @@ export interface AnalyzeContextInput {
   type: ContextSource['type'];
   storageUrl?: string;
   mimeType?: string;
+  semanticRole?: IngestSourceInput['semanticRole'];
   model?: string;
   genAI?: ReturnType<typeof getVertexGenAIClient>;
 }
@@ -242,6 +246,32 @@ function sanitizeModelReconciliation(analysis: ContextAnalysis): ContextAnalysis
         || isRepeatableCanonicalNodeType(node.type)
       ));
     }),
+  };
+}
+
+function filterAiDerivedAskNodes(
+  analysis: ContextAnalysis,
+  input: AnalyzeContextInput,
+): ContextAnalysis {
+  if (input.semanticRole !== 'ask_message') return analysis;
+
+  const keptRefs = new Set(
+    analysis.nodes
+      .filter((node) => node.extraction_basis === 'USER_STATED')
+      .map((node) => node.candidate_ref)
+      .filter((ref): ref is string => Boolean(ref)),
+  );
+  const referenceIsKept = (ref: string): boolean => !ref.startsWith('new:') || keptRefs.has(ref);
+
+  return {
+    ...analysis,
+    nodes: analysis.nodes.filter((node) => node.extraction_basis === 'USER_STATED'),
+    relationships: analysis.relationships.filter((relationship) =>
+      referenceIsKept(relationship.source_ref) && referenceIsKept(relationship.target_ref)
+    ),
+    reconciliation: analysis.reconciliation.filter((item) =>
+      Boolean(item.candidate_ref && keptRefs.has(item.candidate_ref))
+    ),
   };
 }
 
@@ -364,6 +394,11 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     `Project goal: ${project.goal}`,
     `New source filename: ${input.filename}`,
     `New context text or user-provided description: ${input.content.trim() || '(The source is provided as a file; inspect it.)'}`,
+    ...(input.semanticRole === 'ask_message' ? [
+      'Semantic source role: USER ASK MESSAGE.',
+      'Treat this message as first-class conversational input while preserving clear project facts the user states. Do not promote hypothetical outcomes, possible blockers, inferred risks, inferred assumptions, unresolved questions discovered only by reasoning, or recommendations into canonical project nodes. A question asking Gapwise what might happen, what to prioritize, or what to do next is conversation, not a project UNKNOWN, RISK, DECISION, or NEXT_ACTION. An explicit user statement about missing external information, such as "I do not know whether the supplier can deliver by Friday", may still be an UNKNOWN.',
+      'For every candidate node in an Ask message, include extraction_basis: USER_STATED when the project fact, uncertainty, preference, choice, constraint, or commitment is explicitly present in the user message; include extraction_basis: AI_DERIVED when it is inferred by reasoning rather than stated. Only USER_STATED nodes can become canonical project state from this turn.',
+    ] : []),
     `Current compact project state, relevance-ranked for this source: ${projectSnapshot(project, input.content)}`,
     'Return only structured JSON.',
     'Build a concise project understanding from the supplied source. Extract only materially useful facts, goals, constraints, decisions, preferences, evidence, risks, experiments, unknowns, and next actions.',
@@ -453,12 +488,19 @@ export async function analyzeContextItem(
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
-              required: ['type', 'text', 'confidence', 'impact'],
+              required: [
+                'type',
+                'text',
+                'confidence',
+                'impact',
+                ...(input.semanticRole === 'ask_message' ? ['extraction_basis'] : []),
+              ],
               properties: {
                 type: { type: Type.STRING, enum: nodeTypeSchema.options },
                 text: { type: Type.STRING },
                 confidence: { type: Type.NUMBER },
                 impact: { type: Type.NUMBER },
+                extraction_basis: { type: Type.STRING, enum: ['USER_STATED', 'AI_DERIVED'] },
                 status: { type: Type.STRING, enum: ['OPEN', 'RESOLVED'] },
                 why_it_matters: { type: Type.ARRAY, items: { type: Type.STRING } },
                 related_node_ids: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -523,9 +565,12 @@ export async function analyzeContextItem(
   }
   let analysis: ContextAnalysis;
   try {
-    analysis = sanitizeModelReconciliation(attachStableCandidateIdentity(
-      validateStructuredOutput(contextAnalysisSchema, parsedResponse),
-    ));
+    analysis = filterAiDerivedAskNodes(
+      sanitizeModelReconciliation(attachStableCandidateIdentity(
+        validateStructuredOutput(contextAnalysisSchema, parsedResponse),
+      )),
+      input,
+    );
   } catch (error) {
     if (error instanceof Error) {
       (error as Error & { contextTrace?: ContextModelTrace }).contextTrace = {
@@ -1289,6 +1334,8 @@ export async function processContextSource(
   }
 
   if (isDemoMode()) {
+    const demoDerivedNodes = input.derivedNodes
+      ?? (input.semanticRole === 'ask_message' ? [] : undefined);
     appendProcessingStage(processingLog, {
       name: 'Deterministic demo extraction',
       status: 'completed',
@@ -1298,7 +1345,7 @@ export async function processContextSource(
       },
       output: {
         model_used: input.modelUsed ?? 'deterministic-demo',
-        supplied_nodes: input.derivedNodes ?? 'fallbackNodesForSource(content)',
+        supplied_nodes: demoDerivedNodes ?? 'fallbackNodesForSource(content)',
       },
       duration_ms: Date.now() - processStarted,
     });
@@ -1309,6 +1356,7 @@ export async function processContextSource(
       extractionHash: hash,
       processingStatus: input.processingStatus ?? 'completed',
       relevance: input.relevance ?? 'relevant',
+      ...(demoDerivedNodes !== undefined ? { derivedNodes: demoDerivedNodes } : {}),
       processingLog,
     }, profile);
     return { project: updated, skipped: false, modelUsed: input.modelUsed };
@@ -1323,6 +1371,7 @@ export async function processContextSource(
       type: input.type,
       storageUrl: input.storageUrl,
       mimeType: input.mimeType,
+      semanticRole: input.semanticRole,
       model: options.model,
       genAI: options.genAI,
     }, project);
@@ -1350,6 +1399,7 @@ export async function processContextSource(
       type: input.type,
       storageUrl: input.storageUrl,
       mimeType: input.mimeType,
+      semanticRole: input.semanticRole,
       model: options.model,
       genAI: options.genAI,
     } satisfies AnalyzeContextInput;
@@ -1433,6 +1483,7 @@ export async function processContextSource(
       type: input.type,
       storageUrl: input.storageUrl,
       mimeType: input.mimeType,
+      semanticRole: input.semanticRole,
       model: options.model,
       genAI: options.genAI,
     } satisfies AnalyzeContextInput;
@@ -1459,11 +1510,12 @@ export async function processContextSource(
       error: message,
     });
     const fallbackNodes = extractDeterministicFallbackNodes(input.content);
+    const safeFallbackNodes = input.semanticRole === 'ask_message' ? [] : fallbackNodes;
     appendProcessingStage(processingLog, {
       name: 'Deterministic fallback extraction',
       status: 'completed',
       input: { content: input.content },
-      output: { nodes: fallbackNodes },
+      output: { nodes: safeFallbackNodes },
     });
     completeProcessingLog(processingLog, 'failed', message);
     const failed = await ingestContextSource(project, {
@@ -1472,7 +1524,7 @@ export async function processContextSource(
       processingStatus: 'failed',
       errorMessage: message,
       extractionHash: undefined,
-      derivedNodes: fallbackNodes,
+      derivedNodes: safeFallbackNodes,
       processingLog,
     }, profile);
     return { project: failed, skipped: false, error: message };

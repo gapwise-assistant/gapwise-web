@@ -5,6 +5,7 @@ import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 import { logAskDebug } from '@/lib/ask/debug';
 import type {
   AskExecution,
+  AskContextProposal,
   AskGraphReasoningTrace,
   AskOpenQuestion,
   AskResponse,
@@ -13,6 +14,7 @@ import type {
   AskSearchSuggestions,
   AskSource,
 } from '@/types/ask';
+import { normalizeAskContextProposals } from '@/types/ask';
 import { focusAssessmentPromptSection, type FocusAssessment } from '@/lib/focus/focusAssessment';
 
 export type { AskSource } from '@/types/ask';
@@ -22,6 +24,9 @@ export interface AskResult {
   outcome?: AskResponseOutcome;
   resolvesQuestionId?: string;
   conclusion?: string;
+  contextProposals?: AskContextProposal[];
+  /** Compatibility alias for callers and records from the first proposal implementation. */
+  proposals?: AskContextProposal[];
   sessionId?: string;
   sources: AskSource[];
   execution?: AskExecution;
@@ -156,11 +161,35 @@ const askRouteResponseSchema = z.object({
   reason: z.string().default(''),
 });
 
+const askProposalTypeSchema = z.enum([
+  'GOAL', 'KNOWN', 'CONSTRAINT', 'ASSUMPTION', 'DECISION', 'UNKNOWN',
+  'EVIDENCE', 'EXPERIMENT', 'RISK', 'NEXT_ACTION', 'PREFERENCE',
+]);
+const askProposalStatusSchema = z.enum(['OPEN', 'RESOLVED', 'DEFERRED']);
+const askContextProposalSchema = z.object({
+  type: askProposalTypeSchema,
+  text: z.string().trim().min(1).max(1200),
+  reasoning: z.string().trim().min(1).max(1200).optional(),
+  status: askProposalStatusSchema,
+  sourceMessageId: z.string().trim().min(1).optional(),
+});
+const legacyAskProposalSchema = z.object({
+  type: askProposalTypeSchema,
+  text: z.string().trim().min(1).max(1200),
+  reasoning: z.string().trim().min(1).max(1200).optional(),
+  suggestedStatus: askProposalStatusSchema.optional(),
+  sourceMessageId: z.string().trim().min(1).optional(),
+  status: z.enum(['proposed', 'added', 'dismissed']).optional(),
+});
+
 const askResponseSchema = z.object({
   answer: z.string().trim().min(1),
   outcome: z.enum(['exploration', 'recommendation', 'conclusion']),
   resolvesQuestionId: z.string().trim().min(1).optional(),
   conclusion: z.string().trim().min(1).max(5000).optional(),
+  contextProposals: z.array(askContextProposalSchema).max(3).default([]),
+  /** Accept responses from an agent instance running the original contract. */
+  proposals: z.array(legacyAskProposalSchema).max(3).default([]),
 }).superRefine((value, context) => {
   if (value.outcome === 'conclusion' && (!value.resolvesQuestionId || !value.conclusion)) {
     context.addIssue({
@@ -320,7 +349,20 @@ function structuredAskResponseFromText(text: string): AskResponse | undefined {
   for (const candidate of candidates) {
     try {
       const parsed = askResponseSchema.safeParse(JSON.parse(candidate));
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        const contextProposals = normalizeAskContextProposals(
+          parsed.data.contextProposals.length > 0
+            ? parsed.data.contextProposals
+            : parsed.data.proposals,
+        ).slice(0, 3);
+        return {
+          answer: parsed.data.answer,
+          outcome: parsed.data.outcome,
+          ...(parsed.data.resolvesQuestionId ? { resolvesQuestionId: parsed.data.resolvesQuestionId } : {}),
+          ...(parsed.data.conclusion ? { conclusion: parsed.data.conclusion } : {}),
+          contextProposals,
+        };
+      }
     } catch {
       // Older or non-conversational responses may still be plain text.
     }
@@ -818,6 +860,25 @@ function removeRepeatedTrailingLine(text: string): string {
   return text;
 }
 
+/**
+ * The confirmation controls are the only place where a user can promote an
+ * AI-derived update. Keep an agent's conversational answer from rendering a
+ * second, unstructured Add/Dismiss request when it also returned a proposal.
+ * This is presentation cleanup only; it does not classify or persist state.
+ */
+export function suppressStructuredProposalInvitation(
+  text: string,
+  proposals: AskContextProposal[],
+): string {
+  if (!proposals.length) return text;
+  const cleaned = text
+    .replace(/(?:^|\n|(?<=[.!?])\s+)(?:would you like|do you want|should we|would you like me to)\b[^.!?\n]{0,240}\b(?:track|add|save|record|formalize)\b[^.!?\n]*[.!?]?/gi, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned || 'I identified a possible project update below.';
+}
+
 function compactContextText(value: string, maxLength = 500): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
@@ -848,7 +909,7 @@ function structuredAskResponseInstructions(openQuestions: AskOpenQuestion[]): st
   return [
     'NORMAL ASK RESPONSE CONTRACT',
     'Return only valid JSON with this shape:',
-    '{"answer":"...","outcome":"exploration|recommendation|conclusion"}',
+    '{"answer":"...","outcome":"exploration|recommendation|conclusion","contextProposals":[]}',
     'Classify your own response. Use exploration when continuing discovery, asking a follow-up, discussing possibilities, or when there is not enough basis for a durable conclusion.',
     'Use recommendation when giving directional advice that should not yet resolve a project question.',
     'Use conclusion only when the conversation supports a clear, durable conclusion that directly answers one existing open project question.',
@@ -856,6 +917,15 @@ function structuredAskResponseInstructions(openQuestions: AskOpenQuestion[]): st
     'For exploration and recommendation, omit resolvesQuestionId and conclusion.',
     'Only use one of these open question IDs as resolvesQuestionId:',
     questionTargets,
+    'AI-DERIVED CONTEXT PROPOSALS',
+    'The user message is first-class conversational context, and clear facts the user states are already handled by Context ingestion. Do not propose those facts again.',
+    'Use contextProposals only for valuable project state that you derived through reasoning and that should not become canonical project truth without the user explicitly choosing Add.',
+    'A contextProposal may represent an inferred risk, assumption, unresolved external question, decision implication, or other AI-derived project state. Do not turn a hypothetical outcome, possibility, or your own recommendation into canonical truth automatically.',
+    'Do not create contextProposals for ordinary explanation, brainstorming, or a follow-up question unless the derived project state itself is materially useful to track. Keep the list empty when there is nothing that needs user confirmation.',
+    'Each contextProposal must be one atomic project concept. Include type, concise text, and status OPEN, RESOLVED, or DEFERRED. The application may also use reasoning internally. Proposed state is not persisted unless the user later selects Add.',
+    'When contextProposals is non-empty, do not include a sentence asking whether the user wants to track, add, save, record, or formalize the proposal. The UI provides Add and Dismiss controls.',
+    'Return contextProposals as an array in the same JSON object. Use [] when no AI-derived project update is worth proposing.',
+    '{"answer":"...","outcome":"exploration|recommendation|conclusion","contextProposals":[]}',
   ].join('\n');
 }
 
@@ -1148,10 +1218,13 @@ function validatedResponseMetadata(
   response: AskResponse | undefined,
   contextPack: AskContextPack | null,
   openQuestions: AskOpenQuestion[],
-): Pick<AskResult, 'outcome' | 'resolvesQuestionId' | 'conclusion'> {
-  if (!response) return { outcome: 'exploration' };
+): Pick<AskResult, 'outcome' | 'resolvesQuestionId' | 'conclusion' | 'contextProposals' | 'proposals'> {
+  const contextProposals = response?.contextProposals?.length
+    ? response.contextProposals
+    : normalizeAskContextProposals(response?.proposals ?? []);
+  if (!response) return { outcome: 'exploration', contextProposals: [], proposals: [] };
   if (response.outcome !== 'conclusion' || !response.resolvesQuestionId || !response.conclusion) {
-    return { outcome: response.outcome };
+    return { outcome: response.outcome, contextProposals, proposals: contextProposals };
   }
 
   const availableQuestionIds = new Set([
@@ -1159,12 +1232,14 @@ function validatedResponseMetadata(
     ...(contextPack?.unresolvedGaps ?? []).map((question) => question.id),
   ]);
   if (!availableQuestionIds.has(response.resolvesQuestionId)) {
-    return { outcome: 'recommendation' };
+    return { outcome: 'recommendation', contextProposals, proposals: contextProposals };
   }
   return {
     outcome: 'conclusion',
     resolvesQuestionId: response.resolvesQuestionId,
     conclusion: response.conclusion,
+    contextProposals,
+    proposals: contextProposals,
   };
 }
 
@@ -1240,6 +1315,8 @@ export async function askGapswise(params: {
         openQuestionIds: availableQuestions.map((question) => question.id),
         openQuestions: availableQuestions,
         outcome: 'exploration',
+        contextProposals: [],
+        proposals: [],
         execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: [] },
       };
     }
@@ -1254,6 +1331,8 @@ export async function askGapswise(params: {
         openQuestionIds: availableQuestions.map((question) => question.id),
         openQuestions: availableQuestions,
         outcome: 'exploration',
+        contextProposals: [],
+        proposals: [],
         execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
       };
     }
@@ -1266,6 +1345,8 @@ export async function askGapswise(params: {
       openQuestionIds: availableQuestions.map((question) => question.id),
       openQuestions: availableQuestions,
       outcome: 'exploration',
+      contextProposals: [],
+      proposals: [],
       execution: { route: routing.route, agent: 'Web Research Agent', toolCalls: ['google_search'] },
     };
   }
@@ -1292,7 +1373,7 @@ export async function askGapswise(params: {
   const internalSources = sources.filter((s) => s.kind !== 'web');
   const directAnswer = directEvidenceAnswer(params.message, adkTurn.answer, internalSources);
   const metadata = directAnswer
-    ? { outcome: 'exploration' as const }
+    ? { outcome: 'exploration' as const, contextProposals: [], proposals: [] }
     : validatedResponseMetadata(adkTurn.response, contextPack, availableQuestions);
   const graph = contextPack?.graphContext;
   const graphTrace = graph ? {
@@ -1314,7 +1395,10 @@ export async function askGapswise(params: {
     edgeCount: 0,
   };
   const result = {
-    answer: directAnswer ?? adkTurn.answer,
+    answer: suppressStructuredProposalInvitation(
+      directAnswer ?? adkTurn.answer,
+      metadata.contextProposals ?? [],
+    ),
     ...metadata,
     sessionId,
     sources: internalSources,

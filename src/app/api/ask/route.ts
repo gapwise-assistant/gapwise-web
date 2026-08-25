@@ -10,7 +10,7 @@ import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { persistAskConversationContext } from '@/lib/ask/conversationContext';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
-import { AskChatMessage, AskChatSession, AskOpenQuestion, AskSearchSuggestions, AskTarget } from '@/types/ask';
+import { AskChatMessage, AskChatSession, AskContextProposal, AskOpenQuestion, AskSearchSuggestions, AskTarget, normalizeAskContextProposals } from '@/types/ask';
 import { logAskDebug } from '@/lib/ask/debug';
 
 export const runtime = 'nodejs';
@@ -162,6 +162,7 @@ async function persistAssistantAskMessage(params: {
   outcome?: AskChatMessage['outcome'];
   resolvesQuestionId?: AskChatMessage['resolvesQuestionId'];
   conclusion?: AskChatMessage['conclusion'];
+  contextProposals?: AskContextProposal[];
   searchSuggestions?: AskSearchSuggestions;
   execution?: AskChatMessage['execution'];
   sessionId?: string;
@@ -183,6 +184,19 @@ async function persistAssistantAskMessage(params: {
     ...(params.outcome ? { outcome: params.outcome } : {}),
     ...(params.resolvesQuestionId ? { resolvesQuestionId: params.resolvesQuestionId } : {}),
     ...(params.conclusion ? { conclusion: params.conclusion } : {}),
+    ...(params.contextProposals?.length ? {
+      contextProposals: params.contextProposals.map((proposal, index) => ({
+        ...proposal,
+        id: proposal.id ?? `proposal_${id}_${index}`,
+        sourceMessageId: proposal.sourceMessageId ?? id,
+      })),
+      // Keep the old field readable for chats saved before this contract.
+      proposals: params.contextProposals.map((proposal, index) => ({
+        ...proposal,
+        id: proposal.id ?? `proposal_${id}_${index}`,
+        sourceMessageId: proposal.sourceMessageId ?? id,
+      })),
+    } : {}),
     ...(params.searchSuggestions ? { searchSuggestions: params.searchSuggestions } : {}),
     ...(params.execution ? { execution: params.execution } : {}),
   });
@@ -293,7 +307,15 @@ export async function POST(request: Request) {
       ? result.openQuestionIds
       : openQuestions.map((question) => question.id);
     const boundSessionId = persistedTurn.chat.adkSessionId ?? result.sessionId;
-    const assistantId = await persistAssistantAskMessage({
+    const assistantId = assistantMessageId(parsed.data.userMessageId);
+    const contextProposals = normalizeAskContextProposals(
+      result.contextProposals?.length ? result.contextProposals : result.proposals,
+    ).map((proposal, index) => ({
+      ...proposal,
+      id: proposal.id ?? `proposal_${assistantId}_${index}`,
+      sourceMessageId: proposal.sourceMessageId ?? assistantId,
+    }));
+    await persistAssistantAskMessage({
       userId,
       chat: persistedTurn.chat,
       userMessageId: parsed.data.userMessageId,
@@ -304,6 +326,7 @@ export async function POST(request: Request) {
       outcome: result.outcome,
       resolvesQuestionId: result.resolvesQuestionId,
       conclusion: result.conclusion,
+      contextProposals,
       searchSuggestions: result.searchSuggestions,
       execution: result.execution,
       sessionId: boundSessionId,
@@ -314,6 +337,8 @@ export async function POST(request: Request) {
       assistantMessageId: assistantId,
       openQuestionIds,
       openQuestions,
+      contextProposals,
+      proposals: contextProposals,
     };
   };
 

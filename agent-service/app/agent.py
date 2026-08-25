@@ -65,6 +65,27 @@ class AskRouteDecision(BaseModel):
     )
 
 
+class AskContextProposal(BaseModel):
+    """AI-derived project state held for explicit user confirmation."""
+
+    type: Literal[
+        "GOAL",
+        "KNOWN",
+        "CONSTRAINT",
+        "ASSUMPTION",
+        "DECISION",
+        "UNKNOWN",
+        "EVIDENCE",
+        "EXPERIMENT",
+        "RISK",
+        "NEXT_ACTION",
+        "PREFERENCE",
+    ]
+    text: str = Field(min_length=1, max_length=1200)
+    reasoning: str | None = Field(default=None, max_length=1200)
+    status: Literal["OPEN", "RESOLVED", "DEFERRED"]
+
+
 class AskResponse(BaseModel):
     """Structured metadata returned with a normal Partner Agent response."""
 
@@ -79,6 +100,14 @@ class AskResponse(BaseModel):
     conclusion: str | None = Field(
         default=None,
         description="Only for a conclusion: the concise answer itself, without reasoning or follow-up questions.",
+    )
+    contextProposals: list[AskContextProposal] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "AI-derived project updates that are useful to track but must remain pending "
+            "until the user explicitly chooses Add."
+        ),
     )
 
 
@@ -278,13 +307,19 @@ root_agent = Agent(
         "If every collection is empty, return cautious questions about the most important missing information for the current scope. "
         "Never refuse, say that the Context Pack is empty, claim lack of access, or return an explanation instead of the requested JSON. "
         "For the internal Ask suggestions request, follow its explicit top_questions and other_questions JSON contract instead of this normal response contract. "
-        "For every other conversational Ask response, return only valid JSON with answer and outcome fields. "
+        "For every other conversational Ask response, return only valid JSON with answer, outcome, and contextProposals fields. "
         "The outcome must be exploration, recommendation, or conclusion. Use exploration when continuing discovery, asking a follow-up, discussing possibilities, "
         "or when there is not enough basis for a durable conclusion. Use recommendation for directional advice that should not yet resolve a project question. "
         "Use conclusion only when the conversation supports a clear, durable conclusion that directly answers one existing open project question. "
         "Only a conclusion may include resolvesQuestionId and conclusion; omit both fields for exploration and recommendation. "
         "The conclusion field must contain only the concise conclusion itself, without reasoning, citations, follow-up questions, or the full response. "
         "Never mark a response as conclusion merely because it discusses an open question. "
+        "AI reasoning must not silently become project truth. Clear project facts explicitly stated by the user are handled by Context ingestion. "
+        "Use contextProposals only for valuable project state you derived rather than facts the user stated. "
+        "A contextProposal may be an inferred risk, assumption, unresolved external question, or decision implication, but it is only a suggestion until the user chooses Add. "
+        "Do not propose hypothetical outcomes, unsupported blockers, ordinary recommendations, or every follow-up question. Return an empty contextProposals array when there is no derived state worth tracking. "
+        "Each contextProposal must be one atomic concept with type, text, optional reasoning, and status OPEN, RESOLVED, or DEFERRED. The application will show Add and Dismiss; never claim a proposal was saved. "
+        "When contextProposals is non-empty, do not ask in the answer whether the user wants to track, add, save, record, or formalize the proposal; the UI provides those controls. "
         "Treat project decision status as authoritative. An OPEN decision remains unresolved even when preferences, "
         "evidence, survey results, recommendations, or other information strongly favor one option. Do not describe "
         "an OPEN decision as chosen, settled, locked in, finalized, or resolved. Only treat a decision as resolved "

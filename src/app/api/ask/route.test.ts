@@ -179,6 +179,49 @@ describe('POST /api/ask', () => {
     }));
   });
 
+  it('returns AI-derived proposals as pending metadata instead of persisting them as project context', async () => {
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: 'The delayed supplier confirmation may affect the schedule.',
+      outcome: 'exploration',
+      sessionId: 'session_proposal',
+      sources: [],
+      contextProposals: [{
+        type: 'UNKNOWN',
+        text: 'Whether the supplier can deliver by Friday.',
+        reasoning: 'The answer could change the launch sequence.',
+        status: 'OPEN',
+      }],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user',
+      message: 'What happens if the supplier misses Friday?',
+      chatId: 'chat_proposal',
+      userMessageId: 'message_proposal',
+      projectId: 'project_proposal',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(persistAskConversationContext).toHaveBeenCalledOnce();
+    expect(askStorage.saveAskMessage).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
+      role: 'assistant',
+      proposals: [expect.objectContaining({
+        id: 'proposal_ask_assistant_message_proposal_0',
+        status: 'OPEN',
+        confirmationStatus: 'proposed',
+        sourceMessageId: 'ask_assistant_message_proposal',
+      })],
+    }));
+    await expect(response.json()).resolves.toMatchObject({
+      contextProposals: [expect.objectContaining({
+        type: 'UNKNOWN',
+        text: 'Whether the supplier can deliver by Friday.',
+        status: 'OPEN',
+        confirmationStatus: 'proposed',
+      })],
+    });
+  });
+
   it('persists the originating Ask target on a new chat', async () => {
     vi.mocked(askGapswise).mockResolvedValue({
       answer: 'Let us compare the options.',

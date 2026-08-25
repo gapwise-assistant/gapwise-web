@@ -99,6 +99,44 @@ describe('AI context graph analysis', () => {
     ]));
   });
 
+  it('persists only user-stated nodes from an Ask message and drops AI-derived state', async () => {
+    const genAI = mockGenAI({
+      summary: 'The user asks about a possible supplier delay.',
+      nodes: [
+        {
+          type: 'RISK',
+          text: 'The launch may slip if the supplier misses Friday.',
+          extraction_basis: 'AI_DERIVED',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          type: 'KNOWN',
+          text: 'The budget is $45,000.',
+          extraction_basis: 'USER_STATED',
+          confidence: 0.95,
+          impact: 0.7,
+        },
+      ],
+    });
+
+    const result = await processContextSource(projectWithGoal('Deliver the project reliably.'), input({
+      sourceId: 'src_ask_message',
+      semanticRole: 'ask_message',
+      content: 'The budget is $45,000. What happens if the supplier misses Friday?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((candidate) => candidate.id === 'src_ask_message');
+    expect(source?.derived_node_ids).toHaveLength(1);
+    expect(result.project.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'KNOWN', text: 'The budget is $45,000.' }),
+    ]));
+    expect(result.project.nodes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'RISK', text: 'The launch may slip if the supplier misses Friday.' }),
+    ]));
+    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('extraction_basis');
+  });
+
   it('does not persist a model-proposed action when the source is only a focus request', async () => {
     const genAI = mockGenAI({
       summary: 'The user asks Gapwise what to focus on.',

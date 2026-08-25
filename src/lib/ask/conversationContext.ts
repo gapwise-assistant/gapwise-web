@@ -1,8 +1,10 @@
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { processContextSource } from '@/lib/context/contextAnalysis';
+import { ingestContextSource } from '@/lib/context/ingestion';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
+import type { AskContextProposal } from '@/types/ask';
 import { canonicalQuestionGroups, canonicalOpenQuestions } from '@/lib/questions/canonical';
 
 function askSourceId(chatId: string, messageId: string): string {
@@ -25,6 +27,51 @@ async function loadTarget(userId: string, projectId?: string): Promise<{ project
 async function saveTarget(userId: string, project: Project, isGeneral: boolean): Promise<void> {
   if (isGeneral) await saveGeneralContext(userId, project);
   else await saveProject(userId, project);
+}
+
+function proposalSourceId(assistantMessageId: string, proposalId: string): string {
+  return `ask_proposal_${assistantMessageId}_${proposalId}`
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 240);
+}
+
+/**
+ * Persists a proposal only after the user explicitly chooses Add. The node is
+ * passed through the normal graph ingestion writer as a precomputed node so
+ * its model-selected type and wording are preserved without running another
+ * AI extraction pass.
+ */
+export async function persistAskProposal(params: {
+  userId: string;
+  projectId?: string;
+  assistantMessageId: string;
+  proposal: AskContextProposal;
+}): Promise<Project> {
+  const target = await loadTarget(params.userId, params.projectId);
+  const sourceId = proposalSourceId(params.assistantMessageId, params.proposal.id ?? 'proposal');
+  const now = new Date().toISOString();
+  const updated = await ingestContextSource(target.project, {
+    sourceId,
+    filename: `Ask proposal ${params.assistantMessageId}.txt`,
+    content: params.proposal.text,
+    type: 'note',
+    origin: 'user',
+    semanticRole: 'user_confirmed_proposal',
+    processingStatus: 'completed',
+    processedAt: now,
+    modelUsed: 'partner-proposal-confirmed-by-user',
+    derivedNodes: [{
+      candidateRef: 'new:0',
+      type: params.proposal.type,
+      text: params.proposal.text,
+      confidence: 0.9,
+      impact: 0.75,
+      status: params.proposal.status,
+      ...(params.proposal.reasoning ? { whyItMatters: [params.proposal.reasoning] } : {}),
+    }],
+  }, DEFAULT_USER_PROFILE);
+  await saveTarget(params.userId, updated, target.isGeneral);
+  return updated;
 }
 
 /**
@@ -51,6 +98,7 @@ export async function persistAskConversationContext(params: {
     content: params.text,
     type: 'note',
     origin: 'user',
+    semanticRole: 'ask_message',
   }, DEFAULT_USER_PROFILE, {
     captureProcessingLog: params.captureProcessingLog,
   });

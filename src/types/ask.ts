@@ -1,3 +1,5 @@
+import type { NodeType } from '@/types/clarity';
+
 export type AskScopeType = 'general' | 'project';
 export type AskMessageRole = 'user' | 'assistant';
 export type AskTargetType = 'question' | 'decision';
@@ -31,11 +33,87 @@ export interface AskSearchSuggestions {
 export type AskOutcome = 'exploration' | 'recommendation' | 'conclusion';
 export type AskResponseOutcome = AskOutcome;
 
+export type AskContextProposalStatus = 'OPEN' | 'RESOLVED' | 'DEFERRED';
+export type AskProposalConfirmationStatus = 'proposed' | 'added' | 'dismissed';
+/** @deprecated Use AskProposalConfirmationStatus for UI confirmation state. */
+export type AskProposalStatus = AskProposalConfirmationStatus;
+
+export interface AskContextProposal {
+  id?: string;
+  type: NodeType;
+  text: string;
+  reasoning?: string;
+  /** The lifecycle status that will be used if the user selects Add. */
+  status: AskContextProposalStatus;
+  sourceMessageId?: string;
+  /** The proposal remains separate from project state until this is added. */
+  confirmationStatus?: AskProposalConfirmationStatus;
+  /** Compatibility for proposal records written by the first implementation. */
+  suggestedStatus?: AskContextProposalStatus;
+}
+
+const askContextProposalStatuses = new Set<AskContextProposalStatus>([
+  'OPEN',
+  'RESOLVED',
+  'DEFERRED',
+]);
+const askProposalConfirmationStatuses = new Set<AskProposalConfirmationStatus>([
+  'proposed',
+  'added',
+  'dismissed',
+]);
+
+/**
+ * Normalizes proposal records from the current and pre-confirmation formats.
+ * Older records used `suggestedStatus` for graph state and `status` for the
+ * Add/Dismiss lifecycle; new records keep those meanings separate.
+ */
+export function normalizeAskContextProposal(value: unknown): AskContextProposal | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.type !== 'string' || typeof record.text !== 'string' || !record.text.trim()) return null;
+
+  const rawStatus = typeof record.status === 'string' ? record.status : undefined;
+  const legacyGraphStatus = typeof record.suggestedStatus === 'string' && askContextProposalStatuses.has(record.suggestedStatus as AskContextProposalStatus)
+    ? record.suggestedStatus as AskContextProposalStatus
+    : undefined;
+  const confirmationStatus = typeof record.confirmationStatus === 'string' && askProposalConfirmationStatuses.has(record.confirmationStatus as AskProposalConfirmationStatus)
+    ? record.confirmationStatus as AskProposalConfirmationStatus
+    : rawStatus && askProposalConfirmationStatuses.has(rawStatus as AskProposalConfirmationStatus)
+      ? rawStatus as AskProposalConfirmationStatus
+      : 'proposed';
+  const graphStatus = legacyGraphStatus
+    ?? (rawStatus && askContextProposalStatuses.has(rawStatus as AskContextProposalStatus)
+      ? rawStatus as AskContextProposalStatus
+      : 'OPEN');
+
+  return {
+    id: typeof record.id === 'string' ? record.id : undefined,
+    type: record.type as NodeType,
+    text: record.text.trim(),
+    reasoning: typeof record.reasoning === 'string' ? record.reasoning.trim() : undefined,
+    status: graphStatus,
+    sourceMessageId: typeof record.sourceMessageId === 'string' ? record.sourceMessageId : undefined,
+    confirmationStatus,
+    ...(legacyGraphStatus ? { suggestedStatus: legacyGraphStatus } : {}),
+  };
+}
+
+export function normalizeAskContextProposals(value: unknown): AskContextProposal[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(normalizeAskContextProposal)
+    .filter((proposal): proposal is AskContextProposal => Boolean(proposal));
+}
+
 export interface AskResponse {
   answer: string;
   outcome: AskOutcome;
   resolvesQuestionId?: string;
   conclusion?: string;
+  contextProposals?: AskContextProposal[];
+  /** Compatibility alias for older Ask responses and persisted messages. */
+  proposals?: AskContextProposal[];
 }
 
 export type AskRoute = 'web_research' | 'internal_context' | 'graph_reasoning';
@@ -69,6 +147,9 @@ export interface AskResult {
   outcome?: AskResponseOutcome;
   resolvesQuestionId?: string;
   conclusion?: string;
+  contextProposals?: AskContextProposal[];
+  /** Compatibility alias for older Ask responses and persisted messages. */
+  proposals?: AskContextProposal[];
   sessionId?: string;
   sources: AskSource[];
   execution?: AskExecution;
@@ -107,6 +188,9 @@ export interface AskChatMessage {
   outcome?: AskResponseOutcome;
   resolvesQuestionId?: string;
   conclusion?: string;
+  contextProposals?: AskContextProposal[];
+  /** Compatibility alias for older persisted Ask messages. */
+  proposals?: AskContextProposal[];
   sources: AskSource[];
   createdAt: string;
   openQuestionIds?: string[];

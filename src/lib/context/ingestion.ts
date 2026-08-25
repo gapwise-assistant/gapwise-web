@@ -71,6 +71,8 @@ export interface IngestSourceInput {
   storageUrl?: string;
   hash?: string;
   origin?: ContextSource['origin'];
+  /** Describes how the text should be interpreted by semantic extraction. */
+  semanticRole?: 'user_context' | 'ask_message' | 'user_confirmed_proposal';
   processingStatus?: ContextSource['processing_status'];
   errorMessage?: string;
   extractionSummary?: string;
