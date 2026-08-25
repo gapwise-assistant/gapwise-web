@@ -1,16 +1,18 @@
-import type { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
+import type { ClarityEdge, ClarityNode, Project, ReconciliationClassification } from '@/types/clarity';
 
 export const QUESTION_NODE_TYPES = new Set<ClarityNode['type']>(['UNKNOWN', 'ASSUMPTION']);
 
-export type QuestionReconciliationClassification =
-  | 'NEW_UNCERTAINTY'
-  | 'PARAPHRASE'
-  | 'SUBQUESTION'
-  | 'SUPPORTING_EVIDENCE'
-  | 'NEXT_ACTION'
-  | 'ALREADY_ANSWERED'
-  | 'ASSUMPTION'
-  | 'RELATED_BUT_DISTINCT';
+export type QuestionReconciliationClassification = Extract<ReconciliationClassification,
+    | 'NEW_UNCERTAINTY'
+    | 'PARAPHRASE'
+    | 'SUBQUESTION'
+    | 'SUPPORTING_EVIDENCE'
+    | 'NEXT_ACTION'
+    | 'ALREADY_ANSWERED'
+    | 'ASSUMPTION'
+    | 'RELATED_BUT_DISTINCT'>;
+
+export type ContextReconciliationClassification = ReconciliationClassification;
 
 const QUESTION_KEY_STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'be', 'can', 'could', 'does', 'do', 'for', 'from',

@@ -40,12 +40,10 @@ describe('POST /api/dev/traces', () => {
         rawProjectGraph: { totalNodes: 1, totalEdges: 0, nodes: [{ id: 'goal' }], edges: [] },
         semanticGraphInterpretation: {},
         currentFocusAnalysis: {},
-        storyBackboneCandidates: {},
-        collapseExpansionAnalysis: {},
         whyThisMattersDebug: [],
         filterVisibilityTrace: [],
         layoutDiagnostics: {},
-        renderedStoryReadabilitySummary: { visibleNodes: 1, currentFocusActionNodeId: null },
+        renderedMapReadabilitySummary: { visibleNodes: 1, currentFocusActionNodeId: null },
       },
     }));
 

@@ -4,7 +4,7 @@ import { buildDecisionMapDebugTrace } from './decisionMapDebug';
 import { calculateDecisionMapLayout, calculateDecisionMapMetrics } from './constellation';
 
 describe('Decision Map debug trace', () => {
-  it('records persisted graph interpretation, focus, visibility, story, and layout without changing the graph', () => {
+  it('records the complete persisted graph, All visibility, focus, and layout without changing the graph', () => {
     const project = createBakeryDemoProject();
     const before = JSON.stringify(project);
     const trace = buildDecisionMapDebugTrace(project, {
@@ -56,12 +56,14 @@ describe('Decision Map debug trace', () => {
       actionNode: { id: 'bakery_location_decision', type: 'DECISION', status: 'OPEN' },
       visibleInCurrentMap: true,
     });
-    expect(trace.storyBackboneCandidates.suggestedBackbone.length).toBeLessThanOrEqual(8);
-    expect(trace.collapseExpansionAnalysis.possibleSupportingClusters.some((cluster) => cluster.parentNodeId === 'bakery_location_decision')).toBe(true);
     expect(trace.whyThisMattersDebug.find((item) => item.selectedNodeId === 'bakery_location_decision')?.selectedPath?.goalNodeId).toBe('bakery_goal');
-    expect(trace.filterVisibilityTrace.map((item) => item.filter)).toEqual(['story', 'focus', 'all']);
+    expect(trace.filterVisibilityTrace.map((item) => item.filter)).toEqual(['all']);
+    expect(trace.filterVisibilityTrace[0]).toMatchObject({
+      visibleNodeCount: project.nodes.length,
+      visibleEdgeCount: project.edges.length,
+    });
     expect(trace.layoutDiagnostics.nodes).toHaveLength(project.nodes.length);
-    expect(trace.renderedStoryReadabilitySummary).toMatchObject({
+    expect(trace.renderedMapReadabilitySummary).toMatchObject({
       totalNodes: project.nodes.length,
       currentFocusActionNodeId: 'bakery_location_decision',
     });

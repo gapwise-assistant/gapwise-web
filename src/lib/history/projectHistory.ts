@@ -77,9 +77,10 @@ function withFocusChange(
   event: Omit<ProjectHistoryEvent, 'id' | 'projectId'>,
   before: Project,
   after: Project,
+  override?: { before: ProjectHistoryFocus | null | undefined; after: ProjectHistoryFocus | null | undefined },
 ): Omit<ProjectHistoryEvent, 'id' | 'projectId'> {
-  const focusBefore = focusSnapshot(before);
-  const focusAfter = focusSnapshot(after);
+  const focusBefore = override ? override.before ?? undefined : focusSnapshot(before);
+  const focusAfter = override ? override.after ?? undefined : focusSnapshot(after);
   if (sameFocus(focusBefore, focusAfter)) return event;
   return {
     ...event,
@@ -249,8 +250,8 @@ const SUMMARY_LABELS: Partial<Record<ClarityNode['type'], string>> = {
   GOAL: 'goal',
 };
 
-function pluralLabel(label: string): string {
-  if (label === 'evidence') return label;
+function pluralLabel(label: string, count: number): string {
+  if (count === 1 || label === 'evidence') return label;
   if (label.endsWith('s')) return label;
   return `${label}s`;
 }
@@ -260,11 +261,11 @@ function summaryForContext(changes: ProjectHistoryChange[]): string {
   const learnedPart = `${learned.length} thing${learned.length === 1 ? '' : 's'} learned`;
   const typeCounts = new Map<string, number>();
   learned.forEach((change) => {
-    const label = pluralLabel(SUMMARY_LABELS[change.snapshot?.type ?? 'KNOWN'] ?? 'item');
+    const label = SUMMARY_LABELS[change.snapshot?.type ?? 'KNOWN'] ?? 'item';
     typeCounts.set(label, (typeCounts.get(label) ?? 0) + 1);
   });
   const breakdown = [...typeCounts.entries()]
-    .map(([label, count]) => `${count} ${label}`)
+    .map(([label, count]) => `${count} ${pluralLabel(label, count)}`)
     .join(' · ');
   return breakdown ? `${learnedPart}\n${breakdown}` : learnedPart;
 }
@@ -272,6 +273,33 @@ function summaryForContext(changes: ProjectHistoryChange[]): string {
 function affectedIds(affectedNodes: HistoryNodeSnapshot[] | undefined): string[] | undefined {
   const ids = unique((affectedNodes ?? []).map((node) => node.nodeId ?? ''));
   return ids.length ? ids : undefined;
+}
+
+function resolutionRelevantChanges(
+  before: Project,
+  after: Project,
+  changes: ProjectHistoryChange[],
+  primaryNodeId: string,
+): ProjectHistoryChange[] {
+  const related = new Set([primaryNodeId]);
+  const edges = [...before.edges, ...after.edges];
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    edges.forEach((edge) => {
+      if (!IMPACT_EDGE_TYPES.has(edge.type)) return;
+      if (related.has(edge.source) && !related.has(edge.target)) {
+        related.add(edge.target);
+        expanded = true;
+      }
+      if (related.has(edge.target) && !related.has(edge.source)) {
+        related.add(edge.source);
+        expanded = true;
+      }
+    });
+  }
+
+  return changes.filter((change) => related.has(change.nodeId ?? ''));
 }
 
 export function appendContextAddedHistory(
@@ -309,6 +337,8 @@ function appendResolutionHistory(
     type: 'decision_resolved' | 'gap_resolved';
     question: string;
     createdAt?: string;
+    focusBefore?: ProjectHistoryFocus | null;
+    focusAfter?: ProjectHistoryFocus | null;
   },
 ): Project {
   const changes = changesBetween(before, after);
@@ -324,7 +354,11 @@ function appendResolutionHistory(
   const allChanges = [explicitResolution, ...changes].filter((change, index, all) =>
     all.findIndex((candidate) => candidate.nodeId === change.nodeId && candidate.kind === change.kind) === index,
   );
-  const affectedNodes = meaningfulAffectedNodes(before, after, allChanges, [params.nodeId]);
+  const relevantChanges = resolutionRelevantChanges(before, after, allChanges, params.nodeId);
+  const affectedNodes = meaningfulAffectedNodes(before, after, relevantChanges, [params.nodeId]);
+  const focusOverride = 'focusBefore' in params || 'focusAfter' in params
+    ? { before: params.focusBefore, after: params.focusAfter }
+    : undefined;
   return appendProjectHistoryEvent(after, withFocusChange({
     createdAt: params.createdAt ?? new Date().toISOString(),
     type: params.type,
@@ -334,8 +368,8 @@ function appendResolutionHistory(
     primarySnapshot: resolvedNode ? snapshotNode(resolvedNode) : explicitResolution.snapshot,
     affectedNodeIds: affectedIds(affectedNodes),
     affectedNodes: affectedNodes.length ? affectedNodes : undefined,
-    changes: allChanges,
-  }, before, after));
+    changes: relevantChanges,
+  }, before, after, focusOverride));
 }
 
 export function appendGapResolvedHistory(
@@ -349,9 +383,44 @@ export function appendGapResolvedHistory(
 export function appendDecisionResolvedHistory(
   before: Project,
   after: Project,
-  params: { nodeId: string; question: string; answer: string; createdAt?: string },
+  params: {
+    nodeId: string;
+    question: string;
+    answer: string;
+    createdAt?: string;
+    focusBefore?: ProjectHistoryFocus | null;
+    focusAfter?: ProjectHistoryFocus | null;
+  },
 ): Project {
   return appendResolutionHistory(before, after, { ...params, type: 'decision_resolved' });
+}
+
+/**
+ * Adds a shared before/after Focus Assessment to an already-created mutation
+ * event. Focus is derived after the real mutation and refresh path; this
+ * helper only annotates the existing event and never creates timeline noise.
+ */
+export function attachHistoryFocus(
+  project: Project,
+  params: {
+    eventType: ProjectHistoryEventType;
+    before: ProjectHistoryFocus | null | undefined;
+    after: ProjectHistoryFocus | null | undefined;
+  },
+): Project {
+  const events = [...(project.historyEvents ?? [])];
+  const index = [...events].reverse().findIndex((event) => event.type === params.eventType);
+  if (index < 0) return project;
+  const eventIndex = events.length - 1 - index;
+  const event = events[eventIndex];
+  if (sameFocus(params.before ?? undefined, params.after ?? undefined)) {
+    delete event.focusBefore;
+    delete event.focusAfter;
+  } else {
+    event.focusBefore = params.before ?? undefined;
+    event.focusAfter = params.after ?? undefined;
+  }
+  return project;
 }
 
 export function appendGoalChangedHistory(
@@ -389,7 +458,7 @@ export function historyCurrentFocus(
   project: Project,
   currentFocus?: ProjectHistoryFocus | null,
 ): ProjectHistoryFocus | undefined {
-  if (currentFocus) return currentFocus;
+  if (currentFocus !== undefined) return currentFocus ?? undefined;
   return focusSnapshot(project)
     ?? [...(project.historyEvents ?? [])]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))

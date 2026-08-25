@@ -45,12 +45,10 @@ const decisionMapTraceSchema = z.object({
     rawProjectGraph: z.object({ totalNodes: z.number(), totalEdges: z.number(), nodes: z.array(z.object({ id: z.string() }).passthrough()), edges: z.array(z.object({ id: z.string() }).passthrough()) }).passthrough(),
     semanticGraphInterpretation: z.unknown(),
     currentFocusAnalysis: z.unknown(),
-    storyBackboneCandidates: z.unknown(),
-    collapseExpansionAnalysis: z.unknown(),
     whyThisMattersDebug: z.unknown(),
     filterVisibilityTrace: z.unknown(),
     layoutDiagnostics: z.unknown(),
-    renderedStoryReadabilitySummary: z.object({
+    renderedMapReadabilitySummary: z.object({
       visibleNodes: z.number(),
       currentFocusActionNodeId: z.string().nullable(),
     }).passthrough(),

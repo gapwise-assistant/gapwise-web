@@ -40,12 +40,12 @@ describe('Decision Map Activity semantics', () => {
   it('summarizes an activity without exposing raw graph data in the card model', () => {
     const project = createBakeryDemoProject();
     const debug = buildDecisionMapDebugTrace(project, {
-      filter: 'story',
+      filter: 'all',
       selectedNodeId: null,
       focusMode: false,
       pathMode: false,
       focusAssessment: focus,
-      projection: buildDecisionMapProjection(project, focus, 'story', new Set()),
+      projection: buildDecisionMapProjection(project, focus),
     });
     const summary = summarizeDecisionMapActivity({
       id: 'trace_1',
@@ -80,4 +80,3 @@ describe('Decision Map Activity semantics', () => {
     expect(decisionMapWarningCodes(debug)).toEqual(expect.any(Array));
   });
 });
-

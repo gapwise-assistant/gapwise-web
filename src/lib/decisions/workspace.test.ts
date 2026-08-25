@@ -101,4 +101,25 @@ describe('decision workspace', () => {
 
     expect(updated.nodes.find((item) => item.id === 'action_choose_track')?.status).toBe('RESOLVED');
   });
+
+  it('does not leave an equivalent open decision actionable after canonical confirmation', () => {
+    const project = createGoldenDemoProject();
+    const canonical = project.nodes.find((node) => node.id === 'node_decision_track')!;
+    project.nodes.push({
+      ...canonical,
+      id: 'decision_track_alias',
+      text: 'Choose the project direction.',
+      status: 'OPEN',
+      canonical_node_id: canonical.id,
+      reconciliation_classification: 'EQUIVALENT',
+    });
+
+    const updated = confirmDecision(project, {
+      decisionNodeId: 'decision_track_alias',
+      customDecision: 'Build the collaborative partner.',
+    });
+
+    expect(updated.nodes.find((node) => node.id === canonical.id)?.status).toBe('RESOLVED');
+    expect(updated.nodes.find((node) => node.id === 'decision_track_alias')?.status).toBe('DEPRECATED');
+  });
 });

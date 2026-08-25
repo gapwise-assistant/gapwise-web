@@ -100,7 +100,7 @@ function GraphDetails({ trace }: { trace: TraceEvent }) {
   const debug = trace.decisionMapDebug;
   const [showIds, setShowIds] = useState(false);
   if (!debug) return null;
-  const visibleIds = new Set(debug.filterVisibilityTrace.find((item) => item.filter === 'story')?.visibleNodeIds ?? []);
+  const visibleIds = new Set(debug.filterVisibilityTrace.find((item) => item.filter === 'all')?.visibleNodeIds ?? []);
   const visibleNodes = debug.rawProjectGraph.nodes.filter((node) => visibleIds.has(node.id));
   return (
     <details className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
@@ -108,15 +108,14 @@ function GraphDetails({ trace }: { trace: TraceEvent }) {
       <div className="mt-3 space-y-2 text-[11px] text-slate-500">
         <p><span className="text-slate-300">Project graph:</span> {debug.rawProjectGraph.totalNodes} nodes · {debug.rawProjectGraph.totalEdges} relationships</p>
         <div className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
-          <p className="mb-1 font-semibold text-slate-400">Visible story nodes</p>
+          <p className="mb-1 font-semibold text-slate-400">Visible All nodes</p>
           {visibleNodes.length > 0 ? visibleNodes.map((node) => (
             <p key={node.id} className="leading-relaxed"><span className="text-slate-300">{node.type}</span> · {node.text}{showIds ? ` · ${node.id}` : ''}</p>
-          )) : <p>No visible story nodes.</p>}
+          )) : <p>No visible All nodes.</p>}
         </div>
         <button type="button" onClick={() => setShowIds((current) => !current)} className="text-[10px] font-semibold text-cyan-300 hover:text-cyan-200">{showIds ? 'Hide IDs' : 'Show IDs'}</button>
         <JsonDetails title="Focus analysis" value={debug.currentFocusAnalysis} />
-        <JsonDetails title="Story projection" value={debug.storyBackboneCandidates} />
-        <JsonDetails title="Collapse groups" value={debug.collapseExpansionAnalysis} />
+        <JsonDetails title="All graph structure" value={debug.rawProjectGraph.topology} />
         <JsonDetails title="Why this matters" value={debug.whyThisMattersDebug} />
         <JsonDetails title="Visibility and filters" value={debug.filterVisibilityTrace} />
       </div>
@@ -163,7 +162,7 @@ function RendererDetails({ trace }: { trace: TraceEvent }) {
         <p className="text-slate-300">{layout.edgeCrossings.count ?? 0} crossings · {layout.edgesPassingThroughAnotherNode.count ?? 0} edge collisions · {layout.emptyLanesOrSections.length} empty sections</p>
         <p>Viewport {layout.viewport.width} × {layout.viewport.height} · zoom {layout.currentZoom.toFixed(2)} · {layout.overlappingNodes.count} overlapping node pairs</p>
         <JsonDetails title="Layout warnings and geometry" value={layout} />
-        <JsonDetails title="Rendered readability summary" value={debug.renderedStoryReadabilitySummary} />
+        <JsonDetails title="Rendered readability summary" value={debug.renderedMapReadabilitySummary ?? null} />
       </div>
     </details>
   );
@@ -272,7 +271,7 @@ export const DecisionMapActivity: React.FC<DecisionMapActivityProps> = ({ userId
                       {summary.warningCount ? <span className="shrink-0 text-amber-300">{summary.warningCount} warning{summary.warningCount === 1 ? '' : 's'}</span> : null}
                     </div>
                     {summary.focus && <p className="mt-2"><span className="font-semibold text-slate-400">Current focus</span><span className="mt-0.5 block text-slate-200">{summary.focus}</span></p>}
-                    <p className="mt-2 text-slate-500">{summary.visibleNodes ?? 0} visible · {summary.collapsedNodes ?? 0} collapsed · {summary.relationships ?? 0} relationships</p>
+                    <p className="mt-2 text-slate-500">{summary.visibleNodes ?? 0} visible · {summary.relationships ?? 0} relationships</p>
                     <ActivityDetails trace={trace} project={project} relatedTraces={relatedTraces.filter((related) => related.id !== trace.id)} />
                   </article>
                 );

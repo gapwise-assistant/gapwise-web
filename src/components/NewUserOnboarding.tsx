@@ -11,6 +11,7 @@ interface NewUserOnboardingProps {
   isLoadingKintaGenDemo?: boolean;
   isLoadingBakeryDemo?: boolean;
   isLoadingBakeryJourneyDemo?: boolean;
+  isLoadingNorthstarPilotDemo?: boolean;
   error?: string;
   onCreateProject: () => void;
   onLoadDemo: () => void;
@@ -19,6 +20,7 @@ interface NewUserOnboardingProps {
   onLoadKintaGenDemo?: () => void;
   onLoadBakeryDemo?: () => void;
   onLoadBakeryJourneyDemo?: () => void;
+  onLoadNorthstarPilotDemo?: () => void;
   onSignOut: () => void;
 }
 
@@ -30,6 +32,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   isLoadingKintaGenDemo = false,
   isLoadingBakeryDemo = false,
   isLoadingBakeryJourneyDemo = false,
+  isLoadingNorthstarPilotDemo = false,
   error,
   onCreateProject,
   onLoadDemo,
@@ -38,6 +41,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
   onLoadKintaGenDemo,
   onLoadBakeryDemo,
   onLoadBakeryJourneyDemo,
+  onLoadNorthstarPilotDemo,
   onSignOut,
 }) => (
   <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-12 text-slate-100">
@@ -61,7 +65,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
         </button>
       </div>
 
-      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo, onLoadBakeryJourneyDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+      <div className={`mt-8 grid gap-3 ${[onLoadCareerDemo, onLoadHackathonDemo, onLoadKintaGenDemo, onLoadBakeryDemo, onLoadBakeryJourneyDemo, onLoadNorthstarPilotDemo].filter(Boolean).length >= 2 ? 'sm:grid-cols-4' : onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <button
           type="button"
           onClick={onCreateProject}
@@ -151,9 +155,23 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             </span>
           </button>
         )}
+        {onLoadNorthstarPilotDemo && (
+          <button
+            type="button"
+            onClick={onLoadNorthstarPilotDemo}
+            disabled={isLoadingNorthstarPilotDemo}
+            title="Replay the evolving Northstar Logistics pilot project"
+            className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-violet-800/80 bg-violet-950/20 p-4 text-left transition hover:border-violet-500 hover:bg-violet-950/30 disabled:cursor-wait disabled:opacity-60"
+          >
+            <PlayCircle className="h-5 w-5 text-violet-300" />
+            <span className="text-sm font-bold text-slate-100">
+              {isLoadingNorthstarPilotDemo ? 'Loading Northstar pilot...' : 'Northstar pilot'}
+            </span>
+          </button>
+        )}
       </div>
 
-      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo) && (
+      {(isLoadingDemo || isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo) && (
         <div className="mt-5 rounded-xl border border-cyan-900/60 bg-slate-950/70 p-4" aria-live="polite" role="status">
           <div className="flex items-center gap-2 text-sm font-semibold text-cyan-200">
             <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />

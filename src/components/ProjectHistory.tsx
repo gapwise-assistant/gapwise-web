@@ -50,15 +50,23 @@ function snapshotForChange(project: Project, change: ProjectHistoryChange): Hist
     : { nodeId: change.nodeId, text: change.text };
 }
 
+function workflowStatus(snapshot: HistoryNodeSnapshot): string | undefined {
+  if (!snapshot.status || !snapshot.type) return undefined;
+  if (!new Set(['DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK', 'NEXT_ACTION']).has(snapshot.type)) return undefined;
+  if (snapshot.type === 'NEXT_ACTION' && snapshot.status === 'RESOLVED') return 'completed';
+  return snapshot.status.toLowerCase();
+}
+
 function ChangeRow({ project, change }: { project: Project; change: ProjectHistoryChange }) {
   const snapshot = snapshotForChange(project, change);
   const type = snapshot.type ? snapshot.type.replace('_', ' ') : nodeType(project, change.nodeId);
+  const status = workflowStatus(snapshot);
   return (
     <div className="flex items-start gap-2 text-sm leading-relaxed text-slate-300">
       <span className="mt-1 text-emerald-300" aria-hidden="true">✓</span>
       <div className="min-w-0">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-500">
-          {type ?? CHANGE_LABELS[change.kind]}{snapshot.status ? ` · ${snapshot.status.toLowerCase()}` : ''}
+          {type ?? CHANGE_LABELS[change.kind]}{status ? ` · ${status}` : ''}
         </p>
         <p>{snapshot.text}</p>
       </div>

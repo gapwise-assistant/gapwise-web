@@ -31,6 +31,7 @@ import { HACKATHON_DEMO_ID } from '@/lib/demo/hackathon';
 import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 import { BAKERY_DEMO_ID } from '@/lib/demo/bakery';
 import { BAKERY_JOURNEY_DEMO_ID } from '@/lib/demo/bakeryJourney';
+import { NORTHSTAR_PILOT_DEMO_ID } from '@/lib/demo/northstarPilot';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import type { TodayQuestion } from '@/lib/today/sections';
@@ -270,6 +271,31 @@ async function loadBakeryJourneyDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function loadNorthstarPilotDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+}> {
+  const res = await authFetch('/api/projects/northstar-pilot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The Northstar pilot demo could not be loaded.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+    memories: DurableMemory[];
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -368,6 +394,7 @@ export default function Home() {
   const [isLoadingKintaGenDemo, setIsLoadingKintaGenDemo] = useState(false);
   const [isLoadingBakeryDemo, setIsLoadingBakeryDemo] = useState(false);
   const [isLoadingBakeryJourneyDemo, setIsLoadingBakeryJourneyDemo] = useState(false);
+  const [isLoadingNorthstarPilotDemo, setIsLoadingNorthstarPilotDemo] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -390,6 +417,8 @@ export default function Home() {
           ? 'Bakery pop-up demo'
           : isLoadingBakeryJourneyDemo
             ? 'Bakery journey'
+            : isLoadingNorthstarPilotDemo
+              ? 'Northstar pilot'
             : isLoadingDemo
               ? 'demo'
               : null;
@@ -693,6 +722,40 @@ export default function Home() {
       setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery journey demo could not be loaded.');
     } finally {
       setIsLoadingBakeryJourneyDemo(false);
+    }
+  }, [userId]);
+
+  const handleLoadNorthstarPilotDemo = useCallback(async () => {
+    setIsLoadingNorthstarPilotDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await loadNorthstarPilotDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setMemories(result.memories);
+      setProfile(DEFAULT_USER_PROFILE);
+      clearDemoBrowserState(userId, NORTHSTAR_PILOT_DEMO_ID);
+      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
+      saveMemoriesToBrowser(userId, result.memories);
+      setFeedbackEvents([]);
+      saveFeedbackEvents(userId, []);
+      setGeneralContext(emptyGeneralContext());
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setStorageMessage('');
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The Northstar pilot demo could not be loaded.');
+    } finally {
+      setIsLoadingNorthstarPilotDemo(false);
     }
   }, [userId]);
 
@@ -1071,6 +1134,7 @@ export default function Home() {
           isLoadingKintaGenDemo={isLoadingKintaGenDemo}
           isLoadingBakeryDemo={isLoadingBakeryDemo}
           isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
+          isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
           error={demoLoadError}
           onCreateProject={() => {
             setDemoLoadError('');
@@ -1082,6 +1146,7 @@ export default function Home() {
           onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
           onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
           onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
+          onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
           onSignOut={() => { void auth.signOut(); }}
         />
         {isNewProjectOpen && (
@@ -1114,6 +1179,8 @@ export default function Home() {
         isLoadingBakeryDemo={isLoadingBakeryDemo}
         onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
         isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
+        onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
+        isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
@@ -1217,6 +1284,7 @@ export default function Home() {
             projects={projects}
             scope={scope}
             projectFocusKey={projectFocusKey}
+            projectRefreshVersion={projectRefreshVersion}
             profile={profile}
             memories={memories}
             contextEntry={contextEntry ?? undefined}
@@ -1236,6 +1304,7 @@ export default function Home() {
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });
             }}
+            onViewToday={() => setActiveTab('today')}
             gapsNavigationRequest={gapsNavigationRequest}
             onGapsNavigationHandled={() => setGapsNavigationRequest(null)}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}

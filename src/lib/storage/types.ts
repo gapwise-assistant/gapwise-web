@@ -3,6 +3,7 @@ import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 
 export interface BaseEntity {
   id: string;
@@ -112,6 +113,16 @@ export interface FocusAssessmentCacheRecord {
   updatedAt: string;
 }
 
+export interface ProjectOverviewAssessmentCacheRecord {
+  id: string;
+  userId: string;
+  projectId: string;
+  projectStateVersion: string;
+  assessment: ProjectOverviewAssessment;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StorageProvider {
   listProjects(userId: string): Promise<Project[]>;
   getProject(userId: string, projectId?: string): Promise<Project | null>;
@@ -148,6 +159,8 @@ export interface StorageProvider {
   saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void>;
   getFocusAssessment(userId: string, cacheId: string): Promise<FocusAssessmentCacheRecord | null>;
   saveFocusAssessment(userId: string, record: FocusAssessmentCacheRecord): Promise<void>;
+  getProjectOverviewAssessment(userId: string, cacheId: string): Promise<ProjectOverviewAssessmentCacheRecord | null>;
+  saveProjectOverviewAssessment(userId: string, record: ProjectOverviewAssessmentCacheRecord): Promise<void>;
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;

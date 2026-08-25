@@ -4,6 +4,7 @@ import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
 import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { appendDecisionResolvedHistory } from '@/lib/history/projectHistory';
+import { ensureResolutionConsistency } from '@/lib/graph/relationshipSemantics';
 
 export interface DecisionEvidence {
   id: string;
@@ -84,6 +85,23 @@ function unique<T>(items: T[]): T[] {
 
 function connectedEdges(project: Project, nodeId: string): ClarityEdge[] {
   return project.edges.filter((edge) => edge.source === nodeId || edge.target === nodeId);
+}
+
+const canonicalDecisionAliases = new Set([
+  'EQUIVALENT',
+  'REFINES_EXISTING',
+]);
+
+export function canonicalDecisionIdFor(project: Project, nodeId: string): string {
+  const node = project.nodes.find((candidate) => candidate.id === nodeId);
+  if (!node || node.type !== 'DECISION' || !node.canonical_node_id) return nodeId;
+  if (!node.reconciliation_classification || !canonicalDecisionAliases.has(node.reconciliation_classification)) {
+    return nodeId;
+  }
+  const canonical = project.nodes.find((candidate) =>
+    candidate.id === node.canonical_node_id && candidate.type === 'DECISION',
+  );
+  return canonical?.id ?? nodeId;
 }
 
 function relatedNodeIds(project: Project, nodeId: string): Set<string> {
@@ -220,7 +238,10 @@ function buildRecommendation(options: DecisionOption[], hasBlockingInputs: boole
 
 export function buildDecisionWorkspace(project: Project, targetNodeId: string): DecisionWorkspaceModel | null {
   const reasoningProject = projectForReasoning(project);
-  const decision = findDecisionForNode(reasoningProject, targetNodeId);
+  const decision = findDecisionForNode(
+    reasoningProject,
+    canonicalDecisionIdFor(reasoningProject, targetNodeId),
+  );
   if (!decision) return null;
 
   const relatedIds = relatedNodeIds(reasoningProject, decision.id);
@@ -295,9 +316,26 @@ function addEdgeIfMissing(project: Project, edge: Omit<ClarityEdge, 'id'>): void
   }
 }
 
+function deprecateResolvedDecisionAliases(project: Project, canonicalDecisionId: string, now: string): void {
+  project.nodes
+    .filter((node) =>
+      node.type === 'DECISION'
+      && node.id !== canonicalDecisionId
+      && node.status === 'OPEN'
+      && node.canonical_node_id === canonicalDecisionId
+      && node.reconciliation_classification
+      && canonicalDecisionAliases.has(node.reconciliation_classification),
+    )
+    .forEach((node) => {
+      node.status = 'DEPRECATED';
+      node.updated_at = now;
+    });
+}
+
 export function confirmDecision(project: Project, input: ConfirmDecisionInput): Project {
   const updated = cloneProject(project);
-  const workspace = buildDecisionWorkspace(updated, input.decisionNodeId);
+  const canonicalDecisionId = canonicalDecisionIdFor(updated, input.decisionNodeId);
+  const workspace = buildDecisionWorkspace(updated, canonicalDecisionId);
   if (!workspace) throw new Error('This decision is no longer available in the selected project.');
 
   const decision = updated.nodes.find((node) => node.id === workspace.decision.id);
@@ -311,6 +349,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
   decision.status = 'RESOLVED';
   decision.confidence = 1;
   decision.updated_at = now;
+  deprecateResolvedDecisionAliases(updated, decision.id, now);
   decision.source_refs = unique([
     ...decision.source_refs,
     ...workspace.supportingEvidence.flatMap((evidence) => evidence.sourceIds),
@@ -334,6 +373,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
       addEdgeIfMissing(updated, { source: decision.id, target: node.id, type: 'resolves', confidence: 1 });
     });
 
+  ensureResolutionConsistency(updated);
   const reason = input.reason?.trim();
   resolveSatisfiedNextActions(updated, now);
   updated.history.push({

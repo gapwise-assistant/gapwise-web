@@ -1,8 +1,11 @@
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { processContextSource } from '@/lib/context/contextAnalysis';
+import { persistAskConversationContext } from '@/lib/ask/conversationContext';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
+import { buildContextPack } from '@/lib/retrieval/contextPack';
+import { getCachedFocusAssessment } from '@/lib/focus/focusCache';
 import {
   CAREER_CONFLICT_DEMO_ID,
   createCareerConflictDemoMemories,
@@ -29,15 +32,27 @@ import {
   bakeryJourneyProjectInput,
   findBakeryLocationDecision,
 } from '@/lib/demo/bakeryJourney';
+import {
+  NORTHSTAR_PILOT_CHAT_ID,
+  NORTHSTAR_PILOT_CONVERSATIONS,
+  NORTHSTAR_PILOT_CREATED_AT,
+  NORTHSTAR_PILOT_DEMO_NAME,
+  NORTHSTAR_PILOT_DEMO_ID,
+  NORTHSTAR_PILOT_RESOLVED_SCOPE,
+  findNorthstarTechnicalScopeDecision,
+  northstarPilotProjectInput,
+} from '@/lib/demo/northstarPilot';
 import { getStorageProvider } from '@/lib/storage';
+import { attachHistoryFocus } from '@/lib/history/projectHistory';
 import { AppScope } from '@/types/scope';
-import { Project } from '@/types/clarity';
+import { Project, ProjectHistoryFocus } from '@/types/clarity';
 import type { DurableMemory } from '@/types/contextPack';
 import { clearTracesForUser, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelPolicy, getGapEscalationModelConfig } from '@/lib/agents/modelPolicy';
 import { rankGaps } from '@/lib/tools/graphTools';
 import type { TraceAgentRun, TraceGapAnalysis, TraceHandoff, TracePipelineStep } from '@/types/observability';
 import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
+import type { AskChatMessage, AskChatSession } from '@/types/ask';
 
 export interface GoldenDemoBootstrapResult {
   project: Project;
@@ -90,6 +105,34 @@ export interface BakeryJourneyDemoBootstrapResult {
   scope: AppScope;
   memories: DurableMemory[];
   created: boolean;
+}
+
+export interface NorthstarPilotDemoBootstrapResult {
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+  memories: DurableMemory[];
+  created: boolean;
+}
+
+async function sharedHistoryFocus(userId: string, project: Project): Promise<ProjectHistoryFocus | undefined> {
+  const contextPack = buildContextPack({
+    userId,
+    query: 'What needs my attention today?',
+    project,
+    profile: DEFAULT_USER_PROFILE,
+    durableMemories: [],
+    includeBroadContext: true,
+  });
+  const assessment = await getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE);
+  if (!assessment) return undefined;
+  return {
+    title: assessment.title,
+    actionNodeId: assessment.actionNodeId,
+    sourceNodeIds: assessment.sourceNodeIds,
+    sourceIds: assessment.sourceIds,
+  };
 }
 
 function recordDemoDecisionMapActivity(userId: string, project: Project, route: string): void {
@@ -418,6 +461,7 @@ export async function loadBakeryJourneyDemoForUser(userId: string): Promise<Bake
   if (!locationDecision) {
     throw new Error('The bakery journey could not find the launch-location decision after processing its sources.');
   }
+  const focusBeforeDecision = await sharedHistoryFocus(userId, project);
   project = confirmDecision(project, {
     decisionNodeId: locationDecision.id,
     customDecision: BAKERY_JOURNEY_LOCATION_DECISION,
@@ -431,6 +475,12 @@ export async function loadBakeryJourneyDemoForUser(userId: string): Promise<Bake
     label: 'Bakery journey · location decision resolved',
   });
   project = refreshedAfterDecision.project;
+  const focusAfterDecision = await sharedHistoryFocus(userId, project);
+  project = attachHistoryFocus(project, {
+    eventType: 'decision_resolved',
+    before: focusBeforeDecision,
+    after: focusAfterDecision,
+  });
   await storage.saveProject(userId, project);
 
   const scope: AppScope = { type: 'project', projectId: project.id };
@@ -443,5 +493,138 @@ export async function loadBakeryJourneyDemoForUser(userId: string): Promise<Bake
     scope,
     memories: [],
     created: true,
+  };
+}
+
+/**
+ * Replays the Northstar pilot conversation through the production user-message
+ * ingestion path. Assistant replies are persisted as chat history only. The
+ * third user turn is deliberately promoted through the real decision
+ * confirmation flow, and the replay stops with the security acceptance gap
+ * unresolved for manual testing.
+ */
+export async function loadNorthstarPilotDemoForUser(userId: string): Promise<NorthstarPilotDemoBootstrapResult> {
+  const storage = getStorageProvider();
+  const existingProjects = await storage.listProjects(userId);
+  const created = !existingProjects.some((project) => project.id === NORTHSTAR_PILOT_DEMO_ID);
+  await storage.resetUserData(userId);
+  clearTracesForUser(userId);
+
+  let project = createProjectFromInput(northstarPilotProjectInput(), NORTHSTAR_PILOT_CREATED_AT);
+  await storage.saveProject(userId, project);
+
+  const chat: AskChatSession = {
+    id: NORTHSTAR_PILOT_CHAT_ID,
+    userId,
+    scopeType: 'project',
+    projectId: project.id,
+    title: NORTHSTAR_PILOT_DEMO_NAME,
+    createdAt: NORTHSTAR_PILOT_CONVERSATIONS[0]?.createdAt ?? project.created_at,
+    updatedAt: project.created_at,
+  };
+  await storage.saveAskChat(userId, chat);
+
+  for (const [index, conversation] of NORTHSTAR_PILOT_CONVERSATIONS.entries()) {
+    const turn = index + 1;
+    const userMessage: AskChatMessage = {
+      id: `${NORTHSTAR_PILOT_CHAT_ID}_user_${turn}`,
+      chatId: NORTHSTAR_PILOT_CHAT_ID,
+      userId,
+      projectId: project.id,
+      role: 'user',
+      text: conversation.user,
+      sources: [],
+      createdAt: conversation.createdAt,
+    };
+    await storage.saveAskMessage(userId, userMessage);
+
+    const ingested = await persistAskConversationContext({
+      userId,
+      chatId: NORTHSTAR_PILOT_CHAT_ID,
+      messageId: userMessage.id,
+      text: conversation.user,
+      projectId: project.id,
+      captureProcessingLog: process.env.NODE_ENV !== 'production',
+    });
+    const ingestedProject = await storage.getProject(userId, project.id);
+    if (!ingestedProject) throw new Error('The Northstar pilot project disappeared during Ask ingestion.');
+    project = ingestedProject;
+
+    const refreshed = await refreshProjectGapRuntime({
+      userId,
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      memories: [],
+      route: '/api/projects/northstar-pilot',
+      label: `Northstar pilot · Ask turn ${turn}`,
+    });
+    project = refreshed.project;
+    await storage.saveProject(userId, project);
+    await sharedHistoryFocus(userId, project);
+
+    await storage.saveAskMessage(userId, {
+      ...userMessage,
+      openQuestionIds: ingested.openQuestionIds,
+      openQuestions: ingested.openQuestions,
+    });
+
+    if (index === 2) {
+      const technicalScopeDecision = findNorthstarTechnicalScopeDecision(project);
+      if (!technicalScopeDecision) {
+        throw new Error('The Northstar pilot could not find the extracted technical-scope decision.');
+      }
+      const focusBeforeDecision = await sharedHistoryFocus(userId, project);
+      project = confirmDecision(project, {
+        decisionNodeId: technicalScopeDecision.id,
+        customDecision: NORTHSTAR_PILOT_RESOLVED_SCOPE,
+        reason: 'Northstar accepted the reduced pilot scope for phase one.',
+      });
+      const refreshedAfterDecision = await refreshProjectGapRuntime({
+        userId,
+        project,
+        profile: DEFAULT_USER_PROFILE,
+        memories: [],
+        route: '/api/projects/northstar-pilot',
+        label: 'Northstar pilot · technical scope decision resolved',
+      });
+      project = refreshedAfterDecision.project;
+      await storage.saveProject(userId, project);
+      const focusAfterDecision = await sharedHistoryFocus(userId, project);
+      project = attachHistoryFocus(project, {
+        eventType: 'decision_resolved',
+        before: focusBeforeDecision,
+        after: focusAfterDecision,
+      });
+      await storage.saveProject(userId, project);
+    }
+
+    const assistantMessage: AskChatMessage = {
+      id: `${NORTHSTAR_PILOT_CHAT_ID}_assistant_${turn}`,
+      chatId: NORTHSTAR_PILOT_CHAT_ID,
+      userId,
+      projectId: project.id,
+      role: 'assistant',
+      text: conversation.assistant,
+      sources: [],
+      createdAt: conversation.createdAt,
+      outcome: index === 4 ? 'recommendation' : undefined,
+    };
+    await storage.saveAskMessage(userId, assistantMessage);
+    await storage.saveAskChat(userId, {
+      ...chat,
+      updatedAt: conversation.createdAt,
+    });
+  }
+
+  const scope: AppScope = { type: 'project', projectId: project.id };
+  await storage.setAppScope(userId, scope);
+
+  return {
+    project,
+    projects: await storage.listProjects(userId),
+    activeProjectId: project.id,
+    scope,
+    memories: [],
+    created,
   };
 }

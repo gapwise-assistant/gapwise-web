@@ -9,20 +9,15 @@ import { ClarityEdge, ClarityNode, Project } from '@/types/clarity';
 import {
   buildDecisionExplanation,
   calculateConstellationLayout,
-  calculateDecisionStoryLayout,
-  calculateDecisionStoryMetrics,
   calculateDecisionMapMetrics,
   calculateDecisionMapLayout,
   ConstellationPoint,
-  DECISION_MAP_LANES,
-  DECISION_MAP_LANE_LABELS,
-  decisionMapLaneForType,
   decisionMapNodeDimensions,
   getNeighborhood,
 } from '@/lib/graph/constellation';
 import type { DecisionMapRendererDiagnostics } from '@/lib/graph/decisionMapDebug';
 import type { DecisionMapProjection } from '@/lib/graph/decisionMapProjection';
-import ProjectStoryGraph from '@/components/ProjectStoryGraph';
+import { relationshipLabel } from '@/lib/graph/relationshipContext';
 
 type Dimension = '2d' | '3d';
 
@@ -34,8 +29,6 @@ export interface GraphViewport {
 interface ConstellationGraphProps {
   project: Project;
   projection: DecisionMapProjection;
-  expandedClusterIds: Set<string>;
-  onToggleCluster: (nodeId: string) => void;
   selectedNodeId: string | null;
   focusMode: boolean;
   pathMode: boolean;
@@ -220,8 +213,6 @@ function Node3D({
 interface GraphSceneProps {
   project: Project;
   projection: DecisionMapProjection;
-  expandedClusterIds: Set<string>;
-  onToggleCluster: (nodeId: string) => void;
   selectedNodeId: string | null;
   focusMode: boolean;
   pathMode: boolean;
@@ -269,7 +260,6 @@ function GraphScene({ project, projection, selectedNodeId, focusMode, pathMode, 
     }, {}),
     [draggedPositions, graph.nodes, layout],
   );
-
   return (
     <>
       <ambientLight intensity={0.65} />
@@ -356,10 +346,6 @@ const IMPORTANT_EDGE_TYPES = new Set<ClarityEdge['type']>([
   'supersedes',
 ]);
 
-function relationshipLabel(type: ClarityEdge['type']): string {
-  return type.replaceAll('_', ' ');
-}
-
 function edgeBoundaryPoint(
   center: { x: number; y: number },
   toward: { x: number; y: number },
@@ -392,8 +378,6 @@ function edgeGeometry(
 function Constellation2D({
   project,
   projection,
-  expandedClusterIds,
-  onToggleCluster,
   selectedNodeId,
   focusMode,
   pathMode,
@@ -426,15 +410,8 @@ function Constellation2D({
     nodes: project.nodes.filter((node) => visibleNodeIds.has(node.id)),
     edges: project.edges.filter((edge) => visibleEdgeIds.has(edge.id)),
   }), [project.edges, project.nodes, visibleEdgeIds, visibleNodeIds]);
-  const isAllView = projection.view === 'all';
-  const layout = useMemo(
-    () => isAllView ? calculateDecisionMapLayout(graph) : calculateDecisionStoryLayout(project, projection),
-    [graph, isAllView, project, projection],
-  );
-  const mapMetrics = useMemo(
-    () => isAllView ? calculateDecisionMapMetrics(graph) : calculateDecisionStoryMetrics(project, projection),
-    [graph, isAllView, project, projection],
-  );
+  const layout = useMemo(() => calculateDecisionMapLayout(graph), [graph]);
+  const mapMetrics = useMemo(() => calculateDecisionMapMetrics(graph), [graph]);
   const decisionPath = useMemo(
     () => (selectedNodeId && pathMode ? buildDecisionExplanation(project, selectedNodeId) : { nodeIds: [], edgeIds: [] }),
     [pathMode, project, selectedNodeId],
@@ -457,6 +434,17 @@ function Constellation2D({
     }, {}),
     [draggedPositions, graph.nodes, layout],
   );
+  const isolatedNodeIds = useMemo(() => {
+    const connectedIds = new Set(graph.edges.flatMap((edge) => [edge.source, edge.target]));
+    return graph.nodes.filter((node) => !connectedIds.has(node.id)).map((node) => node.id);
+  }, [graph.edges, graph.nodes]);
+  const isolatedStartY = isolatedNodeIds.length > 0
+    ? Math.min(...isolatedNodeIds.map((nodeId) => {
+      const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+      const point = positions[nodeId];
+      return point && node ? point.y - decisionMapNodeDimensions(node).height / 2 : Number.POSITIVE_INFINITY;
+    }))
+    : null;
 
   useEffect(() => {
     const bounds = svgRef.current?.getBoundingClientRect();
@@ -480,12 +468,7 @@ function Constellation2D({
   const edgeSlots = useMemo(() => {
     const groups = new Map<string, string[]>();
     graph.edges.forEach((edge) => {
-      const source = graph.nodes.find((node) => node.id === edge.source);
-      const target = graph.nodes.find((node) => node.id === edge.target);
-      if (!source || !target) return;
-      const sourceLane = decisionMapLaneForType(source.type);
-      const targetLane = decisionMapLaneForType(target.type);
-      const key = `${Math.min(sourceLane ?? -1, targetLane ?? -1)}-${Math.max(sourceLane ?? -1, targetLane ?? -1)}`;
+      const key = [edge.source, edge.target].sort().join('::');
       groups.set(key, [...(groups.get(key) ?? []), edge.id]);
     });
     return new Map(
@@ -597,10 +580,6 @@ function Constellation2D({
     return () => window.cancelAnimationFrame(frame);
   }, [expanded, fitToView, pan.x, pan.y, zoom]);
 
-  const laneMetrics = isAllView
-    ? mapMetrics as ReturnType<typeof calculateDecisionMapMetrics>
-    : null;
-
   return (
     <div className="relative h-full w-full">
       <svg
@@ -695,28 +674,16 @@ function Constellation2D({
         <rect width={mapMetrics.width} height={mapMetrics.height} fill="#040b17" pointerEvents="none" />
         <rect width={mapMetrics.width} height={mapMetrics.height} fill="url(#decision-map-grid)" opacity="0.8" pointerEvents="none" />
         <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`} style={{ transition: isZooming ? 'transform 140ms ease-out' : undefined }}>
-          <g>
-            {isAllView ? DECISION_MAP_LANES.map((lane) => {
-              const y = laneMetrics!.laneY[lane];
-              const previousY = lane === 0 ? 28 : laneMetrics!.laneY[(lane - 1) as 0 | 1 | 2 | 3 | 4];
-              const nextY = lane === 4 ? mapMetrics.height - 28 : laneMetrics!.laneY[(lane + 1) as 0 | 1 | 2 | 3 | 4];
-              const top = lane === 0 ? 28 : (previousY + y) / 2;
-              const bottom = lane === 4 ? mapMetrics.height - 28 : (y + nextY) / 2;
-              return (
-                <g key={lane}>
-                  <rect x="48" y={top + 12} width="1240" height={Math.max(80, bottom - top - 24)} fill={lane === 4 ? '#064e3b' : '#07111f'} opacity={lane === 4 ? 0.18 : 0.2} />
-                  <line x1="48" x2="1288" y1={top} y2={top} stroke={lane === 4 ? '#10b981' : '#16304a'} strokeWidth="1" opacity="0.65" />
-                  <text x="68" y={top + 28} className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
-                    {DECISION_MAP_LANE_LABELS[lane]}
-                  </text>
-                </g>
-              );
-            }) : (
-              <text x="68" y="34" className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
-                {projection.view === 'focus' ? 'CURRENT FOCUS' : 'PROJECT STORY'}
-              </text>
-            )}
-          </g>
+          {graph.nodes.some((node) => !isolatedNodeIds.includes(node.id)) && (
+            <text x="68" y="34" className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
+              CONNECTED STRUCTURE
+            </text>
+          )}
+          {isolatedStartY !== null && Number.isFinite(isolatedStartY) && (
+            <text x="68" y={Math.max(72, isolatedStartY - 28)} className="fill-slate-500 text-[10px] font-extrabold uppercase tracking-[0.16em]">
+              UNCONNECTED CONTEXT
+            </text>
+          )}
           {graph.edges.map((edge, index) => {
             const source = graph.nodes.find((node) => node.id === edge.source);
             const target = graph.nodes.find((node) => node.id === edge.target);
@@ -747,9 +714,9 @@ function Constellation2D({
                 {showLabel && (
                   <g>
                     <rect
-                      x={geometry.labelX - Math.max(24, relationshipLabel(edge.type).length * 3.2 + 8)}
+                      x={geometry.labelX - Math.max(24, relationshipLabel(edge.type, 'outgoing').length * 3.2 + 8)}
                       y={geometry.labelY - 12}
-                      width={Math.max(48, relationshipLabel(edge.type).length * 6.4 + 16)}
+                      width={Math.max(48, relationshipLabel(edge.type, 'outgoing').length * 6.4 + 16)}
                       height="18"
                       rx="5"
                       fill="#040b17"
@@ -761,7 +728,7 @@ function Constellation2D({
                       textAnchor="middle"
                       className="fill-slate-300 text-[9px] font-bold uppercase tracking-wide"
                     >
-                      {relationshipLabel(edge.type)}
+                      {relationshipLabel(edge.type, 'outgoing')}
                     </text>
                   </g>
                 )}
@@ -775,8 +742,6 @@ function Constellation2D({
             const dimensions = decisionMapNodeDimensions(node, false);
             const color = NODE_COLORS[node.type];
             const isGoal = node.type === 'GOAL';
-            const cluster = projection.clusters.find((item) => item.parentNodeId === node.id);
-            const clusterExpanded = expandedClusterIds.has(node.id);
             return (
               <g key={node.id} opacity={muted ? 0.14 : 1} style={{ animationDelay: `${Math.min(index * 28, 420)}ms` }}>
                 <foreignObject
@@ -817,20 +782,6 @@ function Constellation2D({
                     <p className="mt-2 break-words text-[11px] font-semibold leading-snug text-slate-100 line-clamp-6">
                       {node.text}
                     </p>
-                    {cluster && (
-                      <button
-                        type="button"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onToggleCluster(node.id);
-                        }}
-                        className="mt-2 inline-flex items-center gap-1 rounded-md border border-slate-600/80 bg-slate-950/60 px-1.5 py-1 text-[9px] font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
-                        aria-expanded={clusterExpanded}
-                      >
-                        {cluster.childNodeIds.length} inputs {clusterExpanded ? '−' : '+'}
-                      </button>
-                    )}
                   </div>
                 </foreignObject>
               </g>
@@ -913,8 +864,6 @@ function Constellation2D({
 export default function ConstellationGraph({
   project,
   projection,
-  expandedClusterIds,
-  onToggleCluster,
   selectedNodeId,
   focusMode,
   pathMode,
@@ -945,18 +894,7 @@ export default function ConstellationGraph({
           {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
         </button>
       )}
-      {projection.view === 'story' ? (
-        <ProjectStoryGraph
-          project={project}
-          projection={projection}
-          selectedNodeId={selectedNodeId}
-          focusNodeId={focusNodeId}
-          viewport={viewport}
-          onViewportChange={onViewportChange}
-          onLayoutDiagnostics={onLayoutDiagnostics}
-          onSelectNode={onSelectNode}
-        />
-      ) : dimension === '3d' ? (
+      {dimension === '3d' ? (
         <Canvas
           camera={{ position: [0, 0, 12], fov: 45 }}
           dpr={[1, 1.5]}
@@ -967,8 +905,6 @@ export default function ConstellationGraph({
           <GraphScene
             project={project}
             projection={projection}
-            expandedClusterIds={expandedClusterIds}
-            onToggleCluster={onToggleCluster}
             selectedNodeId={selectedNodeId}
             focusMode={focusMode}
             pathMode={pathMode}
@@ -981,8 +917,6 @@ export default function ConstellationGraph({
         <Constellation2D
           project={project}
           projection={projection}
-          expandedClusterIds={expandedClusterIds}
-          onToggleCluster={onToggleCluster}
           selectedNodeId={selectedNodeId}
           focusMode={focusMode}
           pathMode={pathMode}
@@ -1010,14 +944,14 @@ export default function ConstellationGraph({
           </button>
         </div>
       )}
-      {projection.view !== 'story' && <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+      <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
         <span>
           {dimension === '3d'
             ? `Drag to orbit · scroll to zoom${editMode ? ' · arrange mode on' : ''}`
             : `Drag background to pan · Use + / − to zoom${editMode ? ' · arrange mode on' : ''}`}
         </span>
         <span className="text-cyan-400/80">{projection.visibleNodeIds.length} shown · {projection.visibleEdgeIds.length} relationships</span>
-      </div>}
+      </div>
     </div>
   );
 }

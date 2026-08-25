@@ -1,0 +1,39 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
+import { loadNorthstarPilotDemoForUser } from '@/lib/demo/bootstrap';
+import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { StorageError } from '@/lib/storage/types';
+
+export const runtime = 'nodejs';
+
+const requestSchema = z.object({
+  userId: z.string().trim().min(1).optional(),
+});
+
+function jsonError(error: unknown) {
+  if (error instanceof StorageError) {
+    const status = error.code === 'UNAUTHENTICATED'
+      ? 401
+      : error.code === 'PERMISSION_DENIED'
+        ? 403
+        : 503;
+    return NextResponse.json({ error: error.message, code: error.code }, { status });
+  }
+  if (error instanceof z.ZodError) {
+    return NextResponse.json({ error: 'Invalid Northstar pilot demo request.', issues: error.issues }, { status: 400 });
+  }
+  return NextResponse.json(
+    { error: error instanceof Error ? error.message : 'Northstar pilot demo could not be loaded.', code: 'UNAVAILABLE' },
+    { status: 500 },
+  );
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = requestSchema.parse(await request.json().catch(() => ({})));
+    const userId = await requireAuthenticatedUserId(request, body.userId);
+    return NextResponse.json(await loadNorthstarPilotDemoForUser(userId));
+  } catch (error) {
+    return jsonError(error);
+  }
+}

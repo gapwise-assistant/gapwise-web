@@ -15,8 +15,8 @@ import { ProjectSettingsPanel } from '@/components/ProjectSettingsPanel';
 import { ContextInbox } from '@/components/ContextInbox';
 import type { ContextEntry } from '@/components/ContextInbox';
 import { ProjectHistory } from '@/components/ProjectHistory';
+import { ProjectOverview } from '@/components/ProjectOverview';
 import { AppScope } from '@/types/scope';
-import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { canonicalOpenQuestions } from '@/lib/questions/canonical';
 import { decisionQuestionForDisplay } from '@/lib/decisions/workspace';
@@ -29,6 +29,7 @@ interface ScopeDestinationProps {
   projects: Project[];
   scope: AppScope;
   projectFocusKey: number;
+  projectRefreshVersion: number;
   profile: UserMemoryProfile;
   memories: DurableMemory[];
   contextEntry?: ContextEntry;
@@ -41,6 +42,7 @@ interface ScopeDestinationProps {
   onReviewDecision: (nodeId: string) => void;
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToSource: (sourceId: string) => void;
+  onViewToday?: () => void;
   gapsNavigationRequest?: { status: GapStatusFilter; key: number } | null;
   onGapsNavigationHandled?: () => void;
   reasoningPathNodeId?: string | null;
@@ -75,6 +77,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   projects,
   scope,
   projectFocusKey,
+  projectRefreshVersion,
   profile,
   memories,
   contextEntry,
@@ -87,6 +90,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onReviewDecision,
   onEditAnsweredQuestion,
   onNavigateToSource,
+  onViewToday,
   gapsNavigationRequest,
   onGapsNavigationHandled,
   reasoningPathNodeId,
@@ -121,8 +125,6 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     [project, reasoningProject],
   );
   const projectGroups = useMemo(() => groupProjectSummaries(projects), [projects]);
-  const currentPicture = useMemo(() => buildCurrentPicture(project), [project]);
-  const needsAttention = useMemo(() => buildNeedsAttention(project), [project]);
   useEffect(() => {
     if (projectFocusKey > 0) {
       setSection('projects');
@@ -374,43 +376,14 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   );
 
   const renderProjectOverview = () => (
-    <div className="space-y-5">
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Current picture</p>
-        <h2 className="mt-2 text-lg font-extrabold text-slate-100">Where things stand</h2>
-        {currentPicture.length ? (
-          <ul className="mt-4 space-y-3">
-            {currentPicture.map((item) => (
-              <li key={item.id} className="flex gap-3 text-sm leading-relaxed text-slate-300">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" aria-hidden="true" />
-                <span>{item.text}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-4 text-sm text-slate-500">Gapwise has not built a picture of this project yet. Add context to get started.</p>
-        )}
-      </section>
-
-      {needsAttention && (
-        <section className="rounded-xl border border-amber-800/80 bg-amber-950/20 p-5">
-          <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-amber-300">Needs attention</p>
-          <h2 className="mt-2 text-base font-extrabold text-slate-100">{needsAttention.title}</h2>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400">{needsAttention.detail}</p>
-          <button
-            type="button"
-            onClick={() => {
-              const question = project.nodes.find((node) => node.id === needsAttention.nodeId);
-              if (question) onAnswerQuestion(question);
-            }}
-            className="mt-4 min-h-11 rounded-lg border border-amber-700/80 bg-amber-950/40 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-500 hover:text-amber-100 sm:min-h-0"
-          >
-            Resolve question
-          </button>
-        </section>
-      )}
-
-    </div>
+    <ProjectOverview
+      userId={userId}
+      project={project}
+      refreshKey={projectRefreshVersion}
+      onViewGaps={() => setProjectSection('gaps')}
+      onViewHistory={() => setProjectSection('history')}
+      onViewToday={onViewToday}
+    />
   );
 
   const renderProjectQuestions = () => (

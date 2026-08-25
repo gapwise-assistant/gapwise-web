@@ -12,7 +12,6 @@ export interface DecisionMapActivitySummary {
   change?: string;
   focus?: string;
   visibleNodes?: number;
-  collapsedNodes?: number;
   relationships?: number;
   warningCount?: number;
 }
@@ -72,7 +71,7 @@ export function decisionMapWarningCodes(debug: DecisionMapDebugTrace): string[] 
   const warnings: string[] = [];
   if (debug.rawProjectGraph.topology?.connectedComponents.length > 1) warnings.push('DISCONNECTED_COMPONENT');
   if (debug.rawProjectGraph.topology?.nodesWithoutGoalPath.length > 0) warnings.push('NO_GOAL_PATH');
-  if (debug.renderedStoryReadabilitySummary.visibleNodes > debug.rawProjectGraph.totalNodes) warnings.push('PROJECTION_INVALID');
+  if ((debug.renderedMapReadabilitySummary?.visibleNodes ?? 0) > debug.rawProjectGraph.totalNodes) warnings.push('PROJECTION_INVALID');
   return normalizedWarnings(warnings);
 }
 
@@ -87,7 +86,7 @@ export function summarizeDecisionMapActivity(trace: TraceEvent): DecisionMapActi
   const activity = trace.decisionMapActivity;
   const debug = trace.decisionMapDebug;
   if (!activity || !debug) return null;
-  const visibleNodes = debug.renderedStoryReadabilitySummary.visibleNodes;
+  const visibleNodes = debug.renderedMapReadabilitySummary?.visibleNodes ?? 0;
   return {
     type: activity.type,
     title: activityTitle(activity.type),
@@ -95,7 +94,6 @@ export function summarizeDecisionMapActivity(trace: TraceEvent): DecisionMapActi
     change: activity.change,
     focus: activity.focus,
     visibleNodes,
-    collapsedNodes: Math.max(0, debug.rawProjectGraph.totalNodes - visibleNodes),
     relationships: debug.rawProjectGraph.totalEdges,
     warningCount: activity.warningCodes.length,
   };

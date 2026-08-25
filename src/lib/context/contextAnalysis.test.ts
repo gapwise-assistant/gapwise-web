@@ -22,6 +22,18 @@ function mockGenAI(payload: unknown) {
   } as any;
 }
 
+function mockGenAISequence(payloads: unknown[]) {
+  let index = 0;
+  return {
+    models: {
+      generateContent: vi.fn().mockImplementation(async () => ({
+        text: JSON.stringify(payloads[index++] ?? { classifications: [] }),
+        modelVersion: 'gemini-test-version',
+      })),
+    },
+  } as any;
+}
+
 function input(overrides: Partial<Parameters<typeof processContextSource>[1]> = {}) {
   return {
     sourceId: 'src_japan_notes',
@@ -87,6 +99,318 @@ describe('AI context graph analysis', () => {
     ]));
   });
 
+  it('does not persist a model-proposed action when the source is only a focus request', async () => {
+    const genAI = mockGenAI({
+      summary: 'The user asks Gapwise what to focus on.',
+      nodes: [{ type: 'NEXT_ACTION', text: 'Review the most important project gap.', confidence: 0.9, impact: 0.9 }],
+    });
+    const result = await processContextSource(projectWithGoal('Organize the first community event.'), input({
+      sourceId: 'src_focus_request',
+      content: 'What should I focus on first?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((candidate) => candidate.id === 'src_focus_request');
+    expect(source?.derived_node_ids).toEqual([]);
+  });
+
+  it('does not persist actions from priority comparisons or hypothetical time use', async () => {
+    const genAI = mockGenAI({
+      summary: 'The user is comparing which activity deserves attention.',
+      nodes: [
+        { type: 'NEXT_ACTION', text: 'Repair the fence first.', confidence: 0.9, impact: 0.9 },
+        { type: 'NEXT_ACTION', text: 'Prepare the garden first.', confidence: 0.9, impact: 0.8 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Prepare the garden for visitors.'), input({
+      sourceId: 'src_priority_comparison',
+      content: 'I am deciding whether to spend Saturday repairing the fence or preparing the garden. I could do either, but I am not sure which is more important. What should I focus on first?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((candidate) => candidate.id === 'src_priority_comparison');
+    expect(source?.derived_node_ids).toEqual([]);
+    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('explicit commitment, intention');
+  });
+
+  it('does not persist priority comparisons as decisions or actions', async () => {
+    const genAI = mockGenAI({
+      summary: 'The user is comparing priorities.',
+      nodes: [
+        { type: 'DECISION', text: 'Decide whether repairing the fence is more important than labeling tools.', confidence: 0.9, impact: 0.9 },
+        { type: 'NEXT_ACTION', text: 'Repair the fence first.', confidence: 0.9, impact: 0.9 },
+      ],
+    });
+    const result = await processContextSource(projectWithGoal('Prepare the garden for visitors.'), input({
+      sourceId: 'src_priority_decision',
+      content: 'I am not sure whether repairing the fence is more important than labeling the tools. I could spend today doing either. Should I focus on one or the other?',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((candidate) => candidate.id === 'src_priority_decision');
+    expect(source?.derived_node_ids).toEqual([]);
+  });
+
+  it('keeps reconciliation indexes tied to original extracted candidates after filtering', async () => {
+    let project = projectWithGoal('Deliver the Northstar pilot within budget and schedule.');
+    project = await ingestContextSource(project, {
+      sourceId: 'northstar-canonical-state',
+      filename: 'canonical-state.txt',
+      type: 'text',
+      content: 'Existing Northstar canonical state.',
+      derivedNodes: [
+        {
+          id: 'pricing-decision',
+          type: 'DECISION',
+          text: 'Settle the final pricing for the Northstar pilot.',
+          status: 'OPEN',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          id: 'pilot-budget',
+          type: 'CONSTRAINT',
+          text: 'The maximum pilot budget is $45,000.',
+          confidence: 0.9,
+          impact: 0.9,
+        },
+        {
+          id: 'csv-hours',
+          type: 'KNOWN',
+          text: 'A pilot based on a scheduled CSV import would require about 80 to 120 engineering hours.',
+          confidence: 0.9,
+          impact: 0.8,
+        },
+      ],
+    }, DEFAULT_USER_PROFILE);
+
+    const genAI = mockGenAISequence([
+      {
+        summary: 'Northstar pricing and pilot effort were clarified.',
+        nodes: [
+          {
+            type: 'DECISION',
+            text: 'Settle the final pricing for the Northstar pilot.',
+            confidence: 0.9,
+            impact: 0.9,
+            status: 'OPEN',
+          },
+          {
+            type: 'KNOWN',
+            text: "Northstar's budget ceiling is $45,000.",
+            confidence: 0.95,
+            impact: 0.9,
+          },
+          {
+            type: 'KNOWN',
+            text: 'Engineering estimates the CSV pilot will take between 80 and 120 engineering hours, plus 20 to 30 hours of support during the pilot.',
+            confidence: 0.95,
+            impact: 0.85,
+          },
+        ],
+        reconciliation: [
+          {
+            candidate_index: 0,
+            classification: 'EQUIVALENT',
+            canonical_node_id: 'pricing-decision',
+            confidence: 1,
+            reason: 'The same pricing decision.',
+          },
+          {
+            candidate_index: 1,
+            classification: 'EQUIVALENT',
+            canonical_node_id: 'pilot-budget',
+            confidence: 1,
+            reason: 'The same budget ceiling.',
+          },
+          {
+            candidate_index: 2,
+            classification: 'REFINES_EXISTING',
+            canonical_node_id: 'csv-hours',
+            confidence: 0.9,
+            reason: 'Adds support-hour detail to the existing estimate.',
+          },
+        ],
+      },
+      { classifications: [] },
+    ]);
+
+    const result = await processContextSource(project, input({
+      sourceId: 'northstar-pricing-update',
+      filename: 'pricing-update.txt',
+      content: [
+        'Pricing is also still unresolved.',
+        "Northstar's budget ceiling is $45,000.",
+        'Engineering currently estimates the CSV pilot will take somewhere between 80 and 120 engineering hours, plus about 20 to 30 hours of support during the pilot.',
+        'I could spend today refining the price and proposal, but I am unsure whether that is more important than the security issue.',
+      ].join('\n\n'),
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const source = result.project.sources.find((candidate) => candidate.id === 'northstar-pricing-update');
+    expect(source?.derived_node_ids).toEqual(['pilot-budget', 'csv-hours']);
+    expect(result.project.nodes.filter((node) => node.id === 'pilot-budget')).toHaveLength(1);
+    expect(result.project.nodes.filter((node) => node.id === 'csv-hours')).toHaveLength(1);
+    expect(result.project.nodes.find((node) => node.id === 'pilot-budget')?.type).toBe('CONSTRAINT');
+    expect(result.project.nodes.find((node) => node.id === 'pilot-budget')?.source_refs).toContain('northstar-pricing-update');
+    expect(result.project.nodes.find((node) => node.id === 'csv-hours')?.source_refs).toContain('northstar-pricing-update');
+    expect(result.project.nodes.some((node) =>
+      node.source_refs.includes('northstar-pricing-update')
+      && node.id !== 'pilot-budget'
+      && node.id !== 'csv-hours'
+    )).toBe(false);
+  });
+
+  it('reuses a resolved canonical decision when a later turn clarifies its wording', async () => {
+    const initialModel = mockGenAI({
+      summary: 'The venue choice remains open.',
+      nodes: [{ type: 'DECISION', text: 'Decide which venue to use for the workshop.', confidence: 0.9, impact: 0.9, status: 'OPEN' }],
+    });
+    const first = await processContextSource(projectWithGoal('Run a practical workshop.'), input({
+      sourceId: 'src_venue_open',
+      content: 'I still need to decide which venue to use for the workshop.',
+    }), DEFAULT_USER_PROFILE, { genAI: initialModel });
+    const originalDecision = first.project.nodes.find((node) => node.type === 'DECISION');
+    expect(originalDecision).toBeDefined();
+
+    const resolutionModel = mockGenAI({
+      summary: 'The venue choice is now settled.',
+      nodes: [{ type: 'DECISION', text: 'Which workshop venue did we select?', confidence: 0.95, impact: 0.95, status: 'RESOLVED' }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'PARAPHRASE',
+        canonical_node_id: originalDecision!.id,
+        confidence: 0.97,
+        reason: 'The later wording represents the same venue choice and records its outcome.',
+      }],
+    });
+    const second = await processContextSource(first.project, input({
+      sourceId: 'src_venue_resolved',
+      content: 'We selected the community venue for the workshop.',
+    }), DEFAULT_USER_PROFILE, { genAI: resolutionModel });
+
+    const decisions = second.project.nodes.filter((node) => node.type === 'DECISION');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ id: originalDecision!.id, status: 'RESOLVED' });
+  });
+
+  it('retains an independently resolvable decision child under an older compound decision', async () => {
+    const initialModel = mockGenAI({
+      summary: 'Two related choices remain open.',
+      nodes: [{ type: 'DECISION', text: 'Decide the event schedule and venue.', confidence: 0.9, impact: 0.9, status: 'OPEN' }],
+    });
+    const first = await processContextSource(projectWithGoal('Run the event reliably.'), input({
+      sourceId: 'src_compound_decision',
+      content: 'I still need to decide the event schedule and venue.',
+    }), DEFAULT_USER_PROFILE, { genAI: initialModel });
+    const parent = first.project.nodes.find((node) => node.type === 'DECISION')!;
+
+    const childModel = mockGenAI({
+      summary: 'The schedule is a separate choice under the older compound wording.',
+      nodes: [{ type: 'DECISION', text: 'Choose the event schedule.', confidence: 0.9, impact: 0.85, status: 'OPEN' }],
+      reconciliation: [{
+        candidate_index: 0,
+        classification: 'SUBQUESTION',
+        canonical_node_id: parent.id,
+        confidence: 0.9,
+        reason: 'The schedule is one independently resolvable part of the older compound choice.',
+      }],
+    });
+    const second = await processContextSource(first.project, input({
+      sourceId: 'src_schedule_clarification',
+      content: 'I still need to decide the event schedule.',
+    }), DEFAULT_USER_PROFILE, { genAI: childModel });
+
+    const child = second.project.nodes.find((node) => node.text === 'Choose the event schedule.');
+    expect(child).toMatchObject({ type: 'DECISION', status: 'OPEN', canonical_node_id: parent.id });
+    expect(second.project.nodes.filter((node) => node.type === 'DECISION')).toHaveLength(2);
+  });
+
+  it('connects new evidence to a relevant existing decision across turns', async () => {
+    const project = projectWithGoal('Run a reliable workshop.');
+    project.nodes.push({
+      id: 'decision_capacity',
+      type: 'DECISION',
+      text: 'Choose the workshop capacity.',
+      status: 'OPEN',
+      confidence: 0.9,
+      impact: 0.95,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T10:00:00.000Z',
+      updated_at: '2026-08-20T10:00:00.000Z',
+    });
+    const genAI = mockGenAI({
+      summary: 'A participant survey informs the capacity choice.',
+      nodes: [{ type: 'EVIDENCE', text: 'The participant survey shows that twelve attendees is manageable.', confidence: 0.9, impact: 0.8 }],
+      relationships: [{ source_node_index: 0, target_node_id: 'decision_capacity', type: 'informs', confidence: 0.95 }],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_capacity_survey',
+      content: 'The participant survey shows that twelve attendees is manageable.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: expect.any(String), target: 'decision_capacity', type: 'informs' }),
+    ]));
+  });
+
+  it('completes a canonical relationship between existing nodes after reconciliation', async () => {
+    const project = projectWithGoal('Run a reliable workshop.');
+    project.nodes.push(
+      {
+        id: 'decision_capacity',
+        type: 'DECISION',
+        text: 'Choose the workshop capacity.',
+        status: 'OPEN',
+        confidence: 0.9,
+        impact: 0.95,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+      {
+        id: 'known_survey',
+        type: 'KNOWN',
+        text: 'A participant survey recommends twelve attendees.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.8,
+        source_refs: ['src_previous_survey'],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+    );
+    const genAI = mockGenAISequence([
+      {
+        summary: 'The new survey confirms the capacity decision is still being evaluated.',
+        nodes: [{ type: 'EVIDENCE', text: 'The new survey confirms the capacity is still being evaluated.', confidence: 0.9, impact: 0.8 }],
+        relationships: [{ source_node_index: 0, target_node_id: 'decision_capacity', type: 'informs', confidence: 0.95 }],
+      },
+      {
+        classifications: [{
+          pair_id: 'pair:known_survey:decision_capacity',
+          relationship: 'informs',
+          confidence: 0.95,
+        }],
+      },
+    ]);
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_new_survey',
+      content: 'The new survey confirms the capacity is still being evaluated.',
+    }), DEFAULT_USER_PROFILE, { genAI, captureProcessingLog: true });
+
+    expect(result.project.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'known_survey', target: 'decision_capacity', type: 'informs' }),
+    ]));
+    const completionStage = result.project.sources.find((source) => source.id === 'src_new_survey')?.processing_log?.stages.find(
+      (stage) => stage.name === 'Canonical relationship completion',
+    );
+    expect(completionStage?.output).toEqual(expect.objectContaining({
+      acceptedRelationships: [expect.objectContaining({ sourceNodeId: 'known_survey', targetNodeId: 'decision_capacity' })],
+    }));
+  });
+
   it('only allows canonical targets for classifications that can reference them', () => {
     const sanitized = sanitizeCanonicalReconciliationTargets([
       {
@@ -121,6 +445,76 @@ describe('AI context graph analysis', () => {
     expect(sanitized[2].canonical_question_id).toBe('existing-question');
   });
 
+  it('includes relevant facts, evidence, and preferences in the bounded model snapshot', async () => {
+    const project = projectWithGoal('Choose a safe workshop venue.');
+    project.nodes.push(
+      {
+        id: 'venue-decision',
+        type: 'DECISION',
+        text: 'Choose the workshop venue.',
+        status: 'OPEN',
+        confidence: 0.9,
+        impact: 0.95,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+      {
+        id: 'venue-known',
+        type: 'KNOWN',
+        text: 'The community room has step-free access.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+      {
+        id: 'venue-evidence',
+        type: 'EVIDENCE',
+        text: 'The room manager has not confirmed the available Saturday slot.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.85,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+      {
+        id: 'venue-preference',
+        type: 'PREFERENCE',
+        text: 'I prefer an accessible venue near public transport.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+    );
+    project.edges.push(
+      { id: 'edge-known', source: 'venue-known', target: 'venue-decision', type: 'informs' },
+      { id: 'edge-evidence', source: 'venue-evidence', target: 'venue-decision', type: 'informs' },
+      { id: 'edge-preference', source: 'venue-preference', target: 'venue-decision', type: 'affects' },
+    );
+    const genAI = mockGenAI({ summary: 'Venue context.', nodes: [] });
+
+    await processContextSource(project, input({
+      sourceId: 'src_venue_context',
+      content: 'The venue decision is still open.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    const firstPrompt = JSON.stringify(genAI.models.generateContent.mock.calls[0]);
+    expect(firstPrompt).toContain('The community room has step-free access.');
+    expect(firstPrompt).toContain('The room manager has not confirmed the available Saturday slot.');
+    expect(firstPrompt).toContain('I prefer an accessible venue near public transport.');
+  });
+
   it('creates multiple source-backed UNKNOWN nodes from explicit uncertainty', async () => {
     const genAI = mockGenAI({
       summary: 'The note leaves two important Japan trip questions unresolved.',
@@ -136,7 +530,7 @@ describe('AI context graph analysis', () => {
 
     const source = result.project.sources.find((item) => item.id === 'src_japan_notes');
     const nodes = result.project.nodes.filter((node) => source?.derived_node_ids.includes(node.id));
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
     expect(nodes.map((node) => node.text)).toEqual([
       'What are pink things?',
       'Are green things better than pink things?',
@@ -239,6 +633,59 @@ describe('AI context graph analysis', () => {
       canonical_merge_count: 1,
       validation_status: 'passed',
     });
+  });
+
+  it('reuses semantically equivalent canonical facts and constraints across turns', async () => {
+    const project = projectWithGoal('Launch the pilot with healthy economics.');
+    project.nodes.push(
+      {
+        id: 'constraint_pilot_budget',
+        type: 'CONSTRAINT',
+        text: '$45k maximum pilot budget.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.9,
+        source_refs: ['src_budget_original'],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+      {
+        id: 'known_csv_hours',
+        type: 'KNOWN',
+        text: 'CSV requires 80–120 engineering hours.',
+        status: 'RESOLVED',
+        confidence: 0.9,
+        impact: 0.85,
+        source_refs: ['src_hours_original'],
+        created_by: 'agent',
+        created_at: '2026-08-20T10:00:00.000Z',
+        updated_at: '2026-08-20T10:00:00.000Z',
+      },
+    );
+    const genAI = mockGenAI({
+      summary: 'The pilot budget and CSV effort estimates are repeated in revised wording.',
+      nodes: [
+        { type: 'CONSTRAINT', text: '$45k budget ceiling.', confidence: 0.95, impact: 0.95 },
+        { type: 'KNOWN', text: 'Engineering estimates CSV at 80–120 hours.', confidence: 0.95, impact: 0.9 },
+      ],
+    });
+
+    const result = await processContextSource(project, input({
+      sourceId: 'src_budget_and_hours_repeat',
+      content: 'The pilot budget ceiling is $45k. Engineering estimates CSV at 80–120 hours.',
+    }), DEFAULT_USER_PROFILE, { genAI });
+
+    expect(result.project.nodes.filter((node) => node.type === 'CONSTRAINT' && /45k|budget/i.test(node.text))).toHaveLength(1);
+    expect(result.project.nodes.filter((node) =>
+      (node.type === 'KNOWN' || node.type === 'EVIDENCE') && /csv|80|120/i.test(node.text),
+    )).toHaveLength(1);
+    expect(result.project.nodes.find((node) => node.id === 'constraint_pilot_budget')?.source_refs).toContain('src_budget_and_hours_repeat');
+    expect(result.project.nodes.find((node) => node.id === 'known_csv_hours')?.source_refs).toContain('src_budget_and_hours_repeat');
+    expect(result.project.sources.find((source) => source.id === 'src_budget_and_hours_repeat')?.derived_node_ids).toEqual(
+      expect.arrayContaining(['constraint_pilot_budget', 'known_csv_hours']),
+    );
+    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('Repeated facts, evidence, and constraints should reuse an existing canonical node');
   });
 
   it('keeps explicit source wording when Gemini paraphrases a PC question', async () => {
@@ -845,7 +1292,7 @@ describe('AI context graph analysis', () => {
     expect(source?.relevance).toBe('possibly_not_relevant');
     expect(source?.discarded_at).toBeUndefined();
     expect(source?.derived_node_ids).toHaveLength(1);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
   });
 
   it('deduplicates unchanged context without a second Gemini call', async () => {
@@ -859,7 +1306,7 @@ describe('AI context graph analysis', () => {
 
     expect(first.skipped).toBe(false);
     expect(second.skipped).toBe(true);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
     expect(second.project.sources).toHaveLength(1);
   });
 
@@ -887,6 +1334,8 @@ describe('AI context graph analysis', () => {
       'Model normalization and deduplication',
       'Goal relevance filtering',
       'Graph persistence',
+      'Relationship validation',
+      'Canonical relationship completion',
       'Graph persistence result',
     ]);
     expect(JSON.stringify(source?.processing_log)).toContain('Tokyo and Kyoto are in the itinerary.');
@@ -944,7 +1393,7 @@ describe('AI context graph analysis', () => {
     expect(sourceQuestions.map((node) => node.text)).toContain('What should I confirm before the surgery?');
     expect(rankGaps(result.project).some((gap) => /insurance company told me/i.test(gap.question))).toBe(false);
     expect(result.project.active_question?.question).not.toMatch(/insurance company told me/i);
-    expect(genAI.models.generateContent).toHaveBeenCalledTimes(1);
+    expect(genAI.models.generateContent).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a usable status question when the model is unavailable', async () => {

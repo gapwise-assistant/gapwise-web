@@ -1,4 +1,4 @@
-import { ClarityNode, ContextProcessingLog, ContextSource, EdgeType, Project, QuestionReconciliationSummary, UserMemoryProfile } from '@/types/clarity';
+import { ClarityNode, ContextProcessingLog, ContextSource, EdgeType, Project, QuestionReconciliationSummary, ReconciliationClassification, UserMemoryProfile } from '@/types/clarity';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { matchesExplicitDecisionTitle } from '@/lib/decisions/anchoring';
@@ -7,10 +7,15 @@ import {
   questionsShareSubject,
   reconcileQuestionCandidate,
   semanticallyEquivalentQuestion,
-  type QuestionReconciliationClassification,
 } from '@/lib/questions/canonical';
 import { resolveQuestionReferences } from '@/lib/questions/presentation';
 import { appendContextAddedHistory } from '@/lib/history/projectHistory';
+import {
+  ensureResolutionConsistency,
+  relationshipHasSemanticSupport,
+  relationshipAddsDistinctMeaning,
+  relationshipRoleCompatible,
+} from '@/lib/graph/relationshipSemantics';
 
 export { semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 
@@ -24,8 +29,9 @@ export interface PrecomputedSourceNode {
   relatedNodeIds?: string[];
   relationship?: EdgeType;
   status?: ClarityNode['status'];
-  questionClassification?: QuestionReconciliationClassification;
+  questionClassification?: ReconciliationClassification;
   canonicalQuestionId?: string;
+  canonicalNodeId?: string;
   canonicalCandidateIndex?: number;
   reconciliationConfidence?: number;
   reconciliationReason?: string;
@@ -37,6 +43,18 @@ export interface PrecomputedRelationship {
   targetNodeId: string;
   type: EdgeType;
   confidence?: number;
+}
+
+export interface CanonicalRelationshipCandidate {
+  sourceNodeId: string;
+  targetNodeId: string;
+  type: EdgeType;
+  confidence?: number;
+}
+
+export interface RelationshipPersistenceTrace {
+  acceptedRelationships: CanonicalRelationshipCandidate[];
+  rejectedRelationships: Array<CanonicalRelationshipCandidate & { reason: string }>;
 }
 
 export interface IngestSourceInput {
@@ -255,9 +273,15 @@ function actionText(action: string, previousLines: string[] = []): string | unde
  */
 function negativeStatementQuestion(line: string, previousLines: string[] = []): string | undefined {
   const normalized = line.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (!/(?:has|have|had)\s+not\b|\b(?:hasn't|haven't|hadn't|did\s+not|didn't)\b|\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b|\b(?:pending|under review|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
+  if (!/(?:has|have|had)\s+not\b|\b(?:do|does|did)\s+not\b|\b(?:hasn't|haven't|hadn't|don't|doesn't|didn't)\b|\b(?:is|are|was|were)\s+(?:still\s+)?(?:being\s+)?(?:reviewed|considered|pending|uncertain|unresolved|missing|unknown|unconfirmed)\b|\b(?:pending|under review|unapproved|unconfirmed|unresolved|missing)\b/.test(normalized)) {
     return undefined;
   }
+
+  // "I/we do not know whether ..." names a missing external fact, not an
+  // unfinished user action. Keep the grammar generic and preserve the
+  // factual clause so the fallback remains useful when the model is absent.
+  const unknownClause = line.match(/^\s*(?:i|we)\s+(?:do not|don't)\s+know\s+whether\s+(.+?)[.!?]?$/i)?.[1]?.trim();
+  if (unknownClause) return `Can I confirm whether ${unknownClause}?`;
 
   // Keep the grammar generic: the unresolved action may be any verb phrase,
   // not only one of the common approval/status verbs. This is what lets
@@ -478,7 +502,7 @@ export function extractDeterministicDecisionNode(content: string): PrecomputedSo
   const line = sentenceLines(content).find((candidate) =>
     /\b(?:pending|open|unresolved|not yet approved|still open)\b.{0,80}\b(?:decision|go\s*\/\s*no[- ]go|choice)\b/i.test(candidate)
     || /\b(?:decision|go\s*\/\s*no[- ]go)\b.{0,80}\b(?:pending|open|unresolved|still open|not made)\b/i.test(candidate)
-    || /\b(?:i|we)\s+(?:still\s+)?need\s+to\s+decide\b/i.test(candidate)
+    || /\b(?:i|we)\s+(?:still\s+)?need\s+to\s+(?:decide|settle)\b/i.test(candidate)
     || /\b(?:i|we)\s+(?:still\s+)?haven['’]?t\s+decided\b/i.test(candidate)
   );
   if (!line) return undefined;
@@ -519,7 +543,10 @@ function inferFallbackResolutionTargets(project: Project, content: string): Clar
   const lower = content.toLowerCase();
   if (!/\b(?:test|trial|experiment|demonstrated|confirmed|approved|completed|produced|passed|verified|shows?|recorded)\b/i.test(lower)) return [];
 
-  const positiveContent = sentenceLines(content)
+  const lines = sentenceLines(content);
+  const unresolvedLines = lines.filter((line) => /\b(?:do|does|did)\s+(?:not|n't)\s+know\s+whether\b|(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b|\b(?:pending|under review|unconfirmed|unresolved|result unknown)\b|\b(?:would|could|might|should|will)\s+(?:not\s+)?(?:resolve|confirm|verify|test|accept)\b/i.test(line));
+  const positiveContent = lines
+    .filter((line) => /\b(?:returned|created|produced|passed|failed|rejected|approved|confirmed|verified|recorded|completed|received|shows?|demonstrated|succeeded|successfully|matched|resolved)\b/i.test(line))
     .filter((line) => !/(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b/i.test(line))
     .join(' ');
   if (!positiveContent.trim()) return [];
@@ -528,6 +555,12 @@ function inferFallbackResolutionTargets(project: Project, content: string): Clar
   return project.nodes.filter((node) => {
     if (!['UNKNOWN', 'ASSUMPTION'].includes(node.type) || node.status !== 'OPEN') return false;
     const questionTokens = questionIdentityKey(node.text).split(' ').filter((token) => !genericTokens.has(token));
+    const isExplicitlyPending = unresolvedLines.some((line) => {
+      const lineTokens = new Set(questionIdentityKey(line).split(' ').filter((token) => !genericTokens.has(token)));
+      const pendingOverlap = questionTokens.filter((token) => lineTokens.has(token)).length;
+      return pendingOverlap >= 2;
+    });
+    if (isExplicitlyPending) return false;
     const overlap = questionTokens.filter((token) => contentTokens.has(token)).length;
     return overlap >= 3;
   });
@@ -561,6 +594,29 @@ function nodeKey(type: ClarityNode['type'], text: string): string {
     if (key) return `${type}:question:${key}`;
   }
   return `${type}:${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
+}
+
+function canonicalContextNodeTypesCompatible(
+  left: ClarityNode['type'],
+  right: ClarityNode['type'],
+): boolean {
+  if (left === right) return true;
+  return isCanonicalContextNode(left) && isCanonicalContextNode(right);
+}
+
+function canonicalContextTargetTypesCompatible(
+  left: ClarityNode['type'],
+  right: ClarityNode['type'],
+  classification?: string,
+): boolean {
+  if (!canonicalContextNodeTypesCompatible(left, right)) return false;
+  return left === right
+    || classification === 'EQUIVALENT'
+    || classification === 'REFINES_EXISTING';
+}
+
+function isCanonicalContextNode(type: ClarityNode['type']): boolean {
+  return type === 'KNOWN' || type === 'EVIDENCE' || type === 'CONSTRAINT';
 }
 
 function fallbackStatusEquivalent(left: string, right: string): boolean {
@@ -626,100 +682,95 @@ function applyRelationshipState(
     target.status = 'DEFERRED';
   }
   if (relationship === 'supersedes') target.status = 'DEPRECATED';
-  if (relationship === 'resolves' && ['UNKNOWN', 'ASSUMPTION'].includes(target.type)) {
+  if (relationship === 'resolves' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(target.type)) {
     target.status = 'RESOLVED';
   }
 }
 
-/**
- * A stored EVIDENCE node is complete as a record, but that lifecycle state
- * does not mean the evidence answers another node. Resolution requires a
- * result-bearing statement and must reject language that explicitly leaves
- * the result pending or unverified.
- */
-function hasConclusiveResultEvidence(node: ClarityNode): boolean {
-  if (!['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(node.type)) return false;
-  const text = node.text.trim();
-  if (!text || /\b(?:(?:has|have|did|does)\s+not\s+(?:yet\s+)?(?:test(?:ed)?|verif(?:y|ied)|confirm(?:ed)?|record(?:ed)?|receiv(?:e|ed)|complet(?:e|ed)|resolv(?:e|ed))|not tested|still pending|under review|no response|result unknown|unresolved|unconfirmed|not verified|not recorded)\b/i.test(text)) {
-    return false;
-  }
-  return /\b(?:returned|created|produced|passed|failed|rejected|approved|confirmed|verified|recorded|completed|received|shows?|demonstrated|succeeded|successfully|matched|resolved)\b/i.test(text);
+function relationshipRejection(
+  candidate: CanonicalRelationshipCandidate,
+  reason: string,
+): CanonicalRelationshipCandidate & { reason: string } {
+  return { ...candidate, reason };
 }
 
-/**
- * Keep model-supplied graph edges role-compatible. A valid node id and a high
- * confidence score are not enough: for example, a question should not
- * support an unrelated fact, and evidence should not block a decision. This
- * is deliberately type-based so it stays generic across projects.
- */
-function relationshipRoleCompatible(
-  source: ClarityNode,
-  target: ClarityNode,
-  relationship: EdgeType,
-): boolean {
-  const question = (node: ClarityNode) => node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
-  const evidence = (node: ClarityNode) => ['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(node.type);
-  const structuralTarget = (node: ClarityNode) => question(node)
-    || ['GOAL', 'DECISION', 'NEXT_ACTION', 'RISK', 'CONSTRAINT'].includes(node.type);
-
-  switch (relationship) {
-    case 'supports':
-      return evidence(source) || source.type === 'PREFERENCE';
-    case 'contradicts':
-      return evidence(source) && (evidence(target) || question(target) || target.type === 'DECISION');
-    case 'resolves':
-      return hasConclusiveResultEvidence(source)
-        && (question(target) || target.type === 'DECISION');
-    case 'satisfies':
-      return source.type === 'NEXT_ACTION'
-        && (question(target) || target.type === 'DECISION');
-    case 'supersedes':
-      return evidence(source) && (evidence(target) || question(target) || target.type === 'DECISION');
-    case 'blocks':
-      return (question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION'].includes(source.type))
-        && structuralTarget(target);
-    case 'depends_on':
-      return (question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION'].includes(source.type))
-        && structuralTarget(target);
-    case 'informs':
-      return (evidence(source) || question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION', 'PREFERENCE'].includes(source.type))
-        && structuralTarget(target);
-    case 'affects':
-      return (evidence(source) || question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION', 'PREFERENCE'].includes(source.type))
-        && structuralTarget(target);
-    case 'derived_from':
-      return source.id !== target.id;
-    default:
-      return false;
+function persistValidatedRelationship(
+  project: Project,
+  candidate: CanonicalRelationshipCandidate,
+  sourceId: string,
+  sourceFilename: string,
+  now: string,
+  explicitlyLinked = true,
+): { accepted: boolean; reason?: string } {
+  const sourceNode = project.nodes.find((node) => node.id === candidate.sourceNodeId);
+  const targetNode = project.nodes.find((node) => node.id === candidate.targetNodeId);
+  if (!sourceNode) return { accepted: false, reason: 'missing_source' };
+  if (!targetNode) return { accepted: false, reason: 'missing_target' };
+  if (sourceNode.id === targetNode.id) return { accepted: false, reason: 'self_reference' };
+  if (!relationshipRoleCompatible(sourceNode, targetNode, candidate.type)) {
+    return { accepted: false, reason: 'role_incompatible' };
   }
+  if (!relationshipHasSemanticSupport(sourceNode, targetNode, candidate.type, explicitlyLinked)) {
+    return { accepted: false, reason: 'semantic_support_failed' };
+  }
+  const confidence = candidate.confidence ?? sourceNode.confidence;
+  if (confidence < 0.6) return { accepted: false, reason: 'low_confidence' };
+  if (!relationshipAddsDistinctMeaning(project.edges, {
+    source: candidate.sourceNodeId,
+    target: candidate.targetNodeId,
+    type: candidate.type,
+  })) {
+    return {
+      accepted: false,
+      reason: project.edges.some((edge) =>
+        edge.source === candidate.sourceNodeId
+        && edge.target === candidate.targetNodeId
+        && edge.type === candidate.type
+      ) ? 'duplicate' : 'redundant_relationship',
+    };
+  }
+
+  project.edges.push({
+    id: makeId('edge_context'),
+    source: candidate.sourceNodeId,
+    target: candidate.targetNodeId,
+    type: candidate.type,
+    confidence,
+  });
+
+  if (candidate.type !== 'satisfies') {
+    applyRelationshipState(targetNode, candidate.type, sourceId, sourceFilename, now);
+  }
+  return { accepted: true };
 }
 
-function relationshipTokens(text: string): Set<string> {
-  return new Set(questionIdentityKey(text)
-    .split(' ')
-    .filter((token) => token.length >= 4)
-    .filter((token) => !['current', 'result', 'status', 'question', 'decision', 'action', 'information'].includes(token)));
-}
+export function applyCanonicalRelationshipCandidates(
+  project: Project,
+  candidates: CanonicalRelationshipCandidate[],
+  sourceId: string,
+  sourceFilename: string,
+  now = new Date().toISOString(),
+): { project: Project; trace: RelationshipPersistenceTrace } {
+  const updated = JSON.parse(JSON.stringify(project)) as Project;
+  const trace: RelationshipPersistenceTrace = {
+    acceptedRelationships: [],
+    rejectedRelationships: [],
+  };
 
-/**
- * Structural edges are allowed to express dependency without lexical overlap.
- * Evidence-to-decision edges are different: without either an explicit node
- * link or a shared subject, a same-source edge can make unrelated facts look
- * like decision evidence.
- */
-function relationshipHasSemanticSupport(
-  source: ClarityNode,
-  target: ClarityNode,
-  relationship: EdgeType,
-  explicitlyLinked: boolean,
-): boolean {
-  if (explicitlyLinked || !((relationship === 'informs' || relationship === 'affects') && ['KNOWN', 'EVIDENCE', 'EXPERIMENT'].includes(source.type) && target.type === 'DECISION')) {
-    return true;
-  }
-  const sourceTokens = relationshipTokens(source.text);
-  const targetTokens = relationshipTokens(target.text);
-  const shared = [...sourceTokens].filter((token) => targetTokens.has(token)).length;
-  return shared >= 2;
+  candidates.forEach((candidate) => {
+    const result = persistValidatedRelationship(
+      updated,
+      candidate,
+      sourceId,
+      sourceFilename,
+      now,
+    );
+    if (result.accepted) trace.acceptedRelationships.push(candidate);
+    else trace.rejectedRelationships.push(relationshipRejection(candidate, result.reason ?? 'rejected'));
+  });
+
+  ensureResolutionConsistency(updated);
+  return { project: updated, trace };
 }
 
 export async function ingestContextSource(
@@ -807,31 +858,62 @@ export async function ingestContextSource(
       const siblingTarget = siblingTargetId
         ? updated.nodes.find((candidate) => candidate.id === siblingTargetId)
         : undefined;
-      const validSiblingTarget = siblingTarget && (siblingTarget.type === 'UNKNOWN' || siblingTarget.type === 'ASSUMPTION')
+      const validSiblingTarget = siblingTarget && (
+        siblingTarget.type === 'UNKNOWN'
+        || siblingTarget.type === 'ASSUMPTION'
+        || siblingTarget.type === 'DECISION'
+      )
         ? siblingTarget
         : undefined;
-      const canonicalQuestionId = node.canonicalQuestionId
+      const canonicalNodeId = node.canonicalNodeId
+        ?? node.canonicalQuestionId
+        ?? validSiblingTarget?.canonical_node_id
         ?? validSiblingTarget?.canonical_question_id
         ?? validSiblingTarget?.id
         ?? deterministicReconciliation?.canonicalQuestionId;
-      const reconciliationTarget = canonicalQuestionId
-        ? updated.nodes.find((candidate) => candidate.id === canonicalQuestionId)
+      const reconciliationTargetCandidate = canonicalNodeId
+        ? updated.nodes.find((candidate) => candidate.id === canonicalNodeId)
+        : undefined;
+      const reconciliationTarget = reconciliationTargetCandidate && (
+        ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
+          && (reconciliationTargetCandidate.type === 'UNKNOWN' || reconciliationTargetCandidate.type === 'ASSUMPTION'))
+        || (node.type === 'DECISION' && reconciliationTargetCandidate.type === 'DECISION')
+        || (isCanonicalContextNode(node.type)
+          && canonicalContextTargetTypesCompatible(
+            node.type,
+            reconciliationTargetCandidate.type,
+            questionClassification,
+          ))
+      )
+        ? reconciliationTargetCandidate
+        : undefined;
+      const effectiveCanonicalNodeId = reconciliationTarget ? canonicalNodeId : undefined;
+      const canonicalQuestionId = (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
+        ? effectiveCanonicalNodeId
         : undefined;
       const key = nodeKey(node.type, node.text);
       const exactExistingNode = updated.nodes.find((candidate) => nodeKey(candidate.type, candidate.text) === key);
       const deterministicParaphraseTarget = deterministicReconciliation?.classification === 'PARAPHRASE'
         && questionClassification !== 'SUBQUESTION'
         && questionClassification !== 'ASSUMPTION';
-      let existingNode = ((questionClassification === 'PARAPHRASE' || deterministicParaphraseTarget) && reconciliationTarget)
+      const canonicalDecisionMerge = node.type === 'DECISION'
+        && (questionClassification === 'EQUIVALENT' || questionClassification === 'REFINES_EXISTING')
+        && reconciliationTarget;
+      let existingNode = ((
+        questionClassification === 'PARAPHRASE'
+        || questionClassification === 'EQUIVALENT'
+        || questionClassification === 'REFINES_EXISTING'
+        || deterministicParaphraseTarget
+      ) && reconciliationTarget)
         ? reconciliationTarget
         : exactExistingNode;
-      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalQuestionId && !node.questionClassification) {
+      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalNodeId && !node.questionClassification) {
         existingNode = updated.nodes.find((candidate) =>
           (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
           && semanticallyEquivalentQuestion(candidate.text, node.text)
         );
       }
-      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalQuestionId && !node.questionClassification) {
+      if (!existingNode && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && !canonicalNodeId && !node.questionClassification) {
         existingNode = updated.nodes.find((candidate) =>
           (candidate.type === 'UNKNOWN' || candidate.type === 'ASSUMPTION')
           && fallbackStatusEquivalent(node.text, candidate.text)
@@ -839,7 +921,7 @@ export async function ingestContextSource(
       }
       if (existingNode) {
         const previousText = existingNode.text;
-        if (node.questionClassification && !node.canonicalQuestionId && existingNode.reconciliation_status === 'fallback') {
+        if (node.questionClassification && !node.canonicalNodeId && !node.canonicalQuestionId && existingNode.reconciliation_status === 'fallback') {
           existingNode.text = node.text;
         }
         existingNode.source_refs = Array.from(new Set([...existingNode.source_refs, sourceId]));
@@ -861,9 +943,20 @@ export async function ingestContextSource(
         );
         existingNode.reconciliation_reason = node.reconciliationReason ?? deterministicReconciliation?.reason ?? existingNode.reconciliation_reason;
         existingNode.reconciliation_status = node.questionClassification ? 'reconciled' : 'fallback';
+        existingNode.reconciliation_classification = questionClassification ?? existingNode.reconciliation_classification;
+        if (
+          canonicalDecisionMerge
+          && questionClassification === 'REFINES_EXISTING'
+          && existingNode.status === 'OPEN'
+          && node.status === 'OPEN'
+        ) {
+          existingNode.text = node.text;
+        }
         existingNode.updated_at = now;
         if (previousDerivedNodeIds.has(existingNode.id)) {
           existingNode.status = statusForNodeType(existingNode.type, node.status, content, node.text);
+        } else if (node.status === 'RESOLVED' && ['UNKNOWN', 'ASSUMPTION', 'DECISION'].includes(existingNode.type)) {
+          existingNode.status = 'RESOLVED';
         } else if (existingNode.type === 'DECISION' && node.status === 'OPEN') {
           existingNode.status = 'OPEN';
         }
@@ -895,12 +988,14 @@ export async function ingestContextSource(
                 : 'canonical')
           : undefined,
         canonical_question_id: canonicalQuestionId,
+        canonical_node_id: effectiveCanonicalNodeId,
         question_aliases: node.type === 'UNKNOWN' || node.type === 'ASSUMPTION'
           ? Array.from(new Set((node.questionAliases ?? []).filter((text) => text && text !== node.text)))
           : undefined,
         reconciliation_confidence: node.reconciliationConfidence ?? deterministicReconciliation?.confidence,
         reconciliation_reason: node.reconciliationReason ?? deterministicReconciliation?.reason,
         reconciliation_status: node.questionClassification ? 'reconciled' : ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') ? 'fallback' : undefined),
+        reconciliation_classification: node.questionClassification,
       };
       updated.nodes.push(createdNode);
       nodeIds.push(createdNode.id);
@@ -923,40 +1018,55 @@ export async function ingestContextSource(
       ),
     ];
 
+    const relationshipPersistenceTrace: RelationshipPersistenceTrace = {
+      acceptedRelationships: [],
+      rejectedRelationships: [],
+    };
     relationships.forEach((relationship) => {
       const sourceNodeId = nodeIds[relationship.sourceNodeIndex];
       const targetNodeId = relationship.targetNodeId.startsWith('new:')
         ? nodeIds[Number(relationship.targetNodeId.slice(4))]
         : relationship.targetNodeId;
-      if (!sourceNodeId || !targetNodeId) return;
-      const sourceNode = updated.nodes.find((candidate) => candidate.id === sourceNodeId);
-      const targetNode = updated.nodes.find((candidate) => candidate.id === targetNodeId);
-      if (!sourceNode || !targetNode) return;
-      if (sourceNodeId === targetNodeId) {
+      const candidate: CanonicalRelationshipCandidate = {
+        sourceNodeId: sourceNodeId ?? `missing:${relationship.sourceNodeIndex}`,
+        targetNodeId: targetNodeId ?? relationship.targetNodeId,
+        type: relationship.type,
+        confidence: relationship.confidence,
+      };
+      if (!sourceNodeId || !targetNodeId) {
+        relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(
+          candidate,
+          !sourceNodeId ? 'missing_source' : 'missing_target',
+        ));
         return;
       }
-      if (!relationshipRoleCompatible(sourceNode, targetNode, relationship.type)) return;
       const sourceSpec = nodesToProcess[relationship.sourceNodeIndex];
-      const explicitlyLinked = Boolean(sourceSpec?.relatedNodeIds?.some((id) => id === relationship.targetNodeId || id === targetNodeId));
-      if (!relationshipHasSemanticSupport(sourceNode, targetNode, relationship.type, explicitlyLinked)) return;
-      const confidence = relationship.confidence ?? nodesToProcess[relationship.sourceNodeIndex]?.confidence ?? 0;
-      if (confidence < 0.6) return;
-      const exists = updated.edges.some((edge) =>
-        edge.source === sourceNodeId && edge.target === targetNodeId && edge.type === relationship.type
+      // A model target that names an existing canonical node is an explicit
+      // cross-turn link. Same-source generated targets still need either an
+      // explicit related_node_ids link or substantive lexical support so an
+      // unrelated fact cannot become evidence for a sibling decision.
+      const explicitlyLinked = !relationship.targetNodeId.startsWith('new:')
+        || Boolean(sourceSpec?.relatedNodeIds?.some((id) => id === relationship.targetNodeId || id === targetNodeId));
+      const result = persistValidatedRelationship(
+        updated,
+        candidate,
+        sourceId,
+        input.filename,
+        now,
+        explicitlyLinked,
       );
-      if (!exists) {
-        updated.edges.push({
-          id: makeId('edge_context'),
-          source: sourceNodeId,
-          target: targetNodeId,
-          type: relationship.type,
-          confidence,
-        });
-      }
-      if (targetNode && relationship.type !== 'satisfies') {
-        applyRelationshipState(targetNode, relationship.type, sourceId, input.filename, now);
-      }
+      if (result.accepted) relationshipPersistenceTrace.acceptedRelationships.push(candidate);
+      else relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(candidate, result.reason ?? 'rejected'));
     });
+    if (input.processingLog) {
+      input.processingLog.stages.push({
+        name: 'Relationship validation',
+        status: 'completed',
+        started_at: now,
+        duration_ms: 0,
+        output: relationshipPersistenceTrace,
+      });
+    }
 
     // In the zero-cost/local path, a conclusive test or approval statement can
     // answer an existing UNKNOWN even when no structured relationship was
@@ -987,6 +1097,9 @@ export async function ingestContextSource(
       });
     }
 
+    // Keep accepted completed-outcome edges and target lifecycle state
+    // consistent, including edges that point to an existing DECISION.
+    ensureResolutionConsistency(updated);
   }
 
   const reasoningProject = projectForReasoning(updated);

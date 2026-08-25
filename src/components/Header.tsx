@@ -25,6 +25,8 @@ interface HeaderProps {
   isLoadingBakeryDemo?: boolean;
   onLoadBakeryJourneyDemo?: () => void;
   isLoadingBakeryJourneyDemo?: boolean;
+  onLoadNorthstarPilotDemo?: () => void;
+  isLoadingNorthstarPilotDemo?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -51,6 +53,8 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingBakeryDemo = false,
   onLoadBakeryJourneyDemo,
   isLoadingBakeryJourneyDemo = false,
+  onLoadNorthstarPilotDemo,
+  isLoadingNorthstarPilotDemo = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -62,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo;
+  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo;
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
@@ -152,7 +156,7 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo) && (
+          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo) && (
             <div ref={demoMenuRef} className="relative">
               <button
                 type="button"
@@ -222,6 +226,17 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       {isLoadingBakeryJourneyDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-emerald-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-emerald-300" />}
                       {isLoadingBakeryJourneyDemo ? 'Loading bakery journey…' : 'Bakery journey'}
+                    </button>
+                  )}
+                  {onLoadNorthstarPilotDemo && (
+                    <button
+                      type="button"
+                      onClick={() => { setDemoMenuOpen(false); onLoadNorthstarPilotDemo(); }}
+                      disabled={isAnyDemoLoading}
+                      className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-violet-200 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {isLoadingNorthstarPilotDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-violet-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-violet-300" />}
+                      {isLoadingNorthstarPilotDemo ? 'Loading Northstar pilot…' : 'Northstar pilot'}
                     </button>
                   )}
                 </div>

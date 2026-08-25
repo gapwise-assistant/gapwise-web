@@ -5,8 +5,10 @@ import { createProjectFromInput } from '@/lib/projects/createProject';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { projectToCollections, collectionsToProject } from '@/lib/storage/projectMapper';
 import {
+  appendDecisionResolvedHistory,
   appendContextAddedHistory,
   appendGoalChangedHistory,
+  attachHistoryFocus,
   historyCurrentFocus,
 } from '@/lib/history/projectHistory';
 
@@ -301,5 +303,138 @@ describe('project history', () => {
       title: 'What date is available?',
       actionNodeId: 'gap_schedule',
     })?.actionNodeId).toBe('gap_schedule');
+  });
+
+  it('uses singular and plural node-type labels in context summaries', async () => {
+    const project = createProjectFromInput({ name: 'Workshop', goal: 'Run a useful workshop.' });
+    const updated = await ingestContextSource(project, {
+      sourceId: 'source_summary',
+      filename: 'summary note',
+      type: 'note',
+      content: 'Several project facts were recorded.',
+      derivedNodes: [
+        { id: 'fact_one', type: 'KNOWN', text: 'The room has tables.', confidence: 0.9 },
+        { id: 'evidence_one', type: 'EVIDENCE', text: 'The room is available.', confidence: 0.9 },
+        { id: 'preference_one', type: 'PREFERENCE', text: 'Prefer a quiet room.', confidence: 0.9 },
+        { id: 'constraint_one', type: 'CONSTRAINT', text: 'The room must be accessible.', confidence: 0.9 },
+      ],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.historyEvents?.[0].summary).toBe('4 things learned\n1 fact · 1 evidence · 1 preference · 1 constraint');
+  });
+
+  it('records real decision consequences and excludes unrelated nodes', () => {
+    const project = createProjectFromInput({ name: 'Workshop', goal: 'Run a useful workshop.' });
+    const now = project.updated_at;
+    project.nodes.push(
+      {
+        id: 'decision_venue',
+        type: 'DECISION',
+        text: 'Choose the venue.',
+        status: 'OPEN',
+        confidence: 0.8,
+        impact: 0.9,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'action_satisfied',
+        type: 'NEXT_ACTION',
+        text: 'Select the workshop venue.',
+        status: 'OPEN',
+        confidence: 0.8,
+        impact: 0.8,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'action_unblocked',
+        type: 'NEXT_ACTION',
+        text: 'Submit the venue paperwork.',
+        status: 'OPEN',
+        confidence: 0.8,
+        impact: 0.7,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'unrelated_risk',
+        type: 'RISK',
+        text: 'The weather may change.',
+        status: 'OPEN',
+        confidence: 0.7,
+        impact: 0.4,
+        source_refs: [],
+        created_by: 'agent',
+        created_at: now,
+        updated_at: now,
+      },
+    );
+    project.edges.push(
+      { id: 'edge_satisfies', source: 'action_satisfied', target: 'decision_venue', type: 'satisfies' },
+      { id: 'edge_depends', source: 'action_unblocked', target: 'decision_venue', type: 'depends_on' },
+    );
+
+    const updated = confirmDecision(project, {
+      decisionNodeId: 'decision_venue',
+      customDecision: 'Use the community hall.',
+    });
+    const event = updated.historyEvents?.[0];
+
+    expect(event?.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'resolved', nodeId: 'decision_venue' }),
+      expect.objectContaining({ kind: 'resolved', nodeId: 'action_satisfied' }),
+      expect.objectContaining({ kind: 'unblocked', nodeId: 'action_unblocked' }),
+    ]));
+    expect(event?.changes?.some((change) => change.nodeId === 'unrelated_risk')).toBe(false);
+    expect(event?.affectedNodes?.some((node) => node.nodeId === 'unrelated_risk') ?? false).toBe(false);
+
+    const unrelatedMutation = JSON.parse(JSON.stringify(project)) as typeof project;
+    const unrelatedDecision = unrelatedMutation.nodes.find((node) => node.id === 'decision_venue')!;
+    unrelatedDecision.text = 'Use the community hall.';
+    unrelatedDecision.status = 'RESOLVED';
+    const unrelatedRisk = unrelatedMutation.nodes.find((node) => node.id === 'unrelated_risk')!;
+    unrelatedRisk.status = 'RESOLVED';
+    const isolatedEvent = appendDecisionResolvedHistory(project, unrelatedMutation, {
+      nodeId: 'decision_venue',
+      question: 'Choose the venue.',
+      answer: 'Use the community hall.',
+    }).historyEvents?.[0];
+    expect(isolatedEvent?.changes?.some((change) => change.nodeId === 'unrelated_risk')).toBe(false);
+  });
+
+  it('attaches a shared focus transition without creating another event', () => {
+    const project = createProjectFromInput({ name: 'Workshop', goal: 'Run a useful workshop.' });
+    project.historyEvents = [{
+      id: 'decision_event',
+      projectId: project.id,
+      createdAt: '2026-08-24T12:00:00.000Z',
+      type: 'decision_resolved',
+      title: 'Decision made',
+      summary: 'Use the community hall.',
+    }];
+    attachHistoryFocus(project, {
+      eventType: 'decision_resolved',
+      before: { title: 'Choose the venue.', actionNodeId: 'decision_venue' },
+      after: { title: 'Submit the venue paperwork.', actionNodeId: 'action_paperwork' },
+    });
+
+    expect(project.historyEvents).toHaveLength(1);
+    expect(project.historyEvents?.[0].focusBefore?.actionNodeId).toBe('decision_venue');
+    expect(project.historyEvents?.[0].focusAfter?.actionNodeId).toBe('action_paperwork');
+
+    attachHistoryFocus(project, {
+      eventType: 'decision_resolved',
+      before: { title: 'Choose the venue.', actionNodeId: 'decision_venue' },
+      after: { title: 'Choose the venue, now.', actionNodeId: 'decision_venue' },
+    });
+    expect(project.historyEvents?.[0].focusBefore).toBeUndefined();
+    expect(project.historyEvents?.[0].focusAfter).toBeUndefined();
   });
 });

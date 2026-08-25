@@ -129,6 +129,48 @@ describe('context ingestion', () => {
     expect(distinct.nodes.filter((node) => node.type === 'UNKNOWN')).toHaveLength(2);
   });
 
+  it('merges equivalent and refining decisions into one canonical decision', async () => {
+    const project = createProjectFromInput({ name: 'Workshop', goal: 'Run the workshop.' }, '2026-08-20T09:00:00Z');
+    const first = await ingestContextSource(project, {
+      sourceId: 'decision-source-a',
+      filename: 'decision-a.txt',
+      type: 'text',
+      content: 'The venue choice is open.',
+      derivedNodes: [{
+        id: 'decision-venue',
+        type: 'DECISION',
+        text: 'Choose the workshop venue.',
+        status: 'OPEN',
+        confidence: 0.8,
+        impact: 0.9,
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    const updated = await ingestContextSource(first, {
+      sourceId: 'decision-source-b',
+      filename: 'decision-b.txt',
+      type: 'text',
+      content: 'The venue choice is now more specific.',
+      derivedNodes: [{
+        type: 'DECISION',
+        text: 'Choose the accessible community venue for the workshop.',
+        status: 'OPEN',
+        confidence: 0.95,
+        impact: 0.95,
+        questionClassification: 'REFINES_EXISTING',
+        canonicalNodeId: 'decision-venue',
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    const decisions = updated.nodes.filter((node) => node.type === 'DECISION');
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({
+      id: 'decision-venue',
+      text: 'Choose the accessible community venue for the workshop.',
+      reconciliation_classification: 'REFINES_EXISTING',
+    });
+  });
+
   it('keeps one canonical question per PC-build uncertainty across repeated source wording', async () => {
     let project = createProjectFromInput({ name: 'Quiet 1440p Workstation Build', goal: 'Build a quiet PC within budget.' }, '2026-08-20T09:00:00Z');
     project = await ingestContextSource(project, {
@@ -407,6 +449,42 @@ describe('context ingestion', () => {
     expect(updated.nodes.find((node) => node.id === 'release_question')?.status).toBe('RESOLVED');
     expect(updated.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ source: expect.any(String), target: 'release_question', type: 'resolves' }),
+    ]));
+  });
+
+  it('closes an open decision when a valid completed outcome resolves it', async () => {
+    const project = createProjectFromInput({ name: 'Workshop plan', goal: 'Choose a safe workshop format.' }, '2026-08-20T09:00:00Z');
+    project.nodes.push({
+      id: 'format_decision',
+      type: 'DECISION',
+      text: 'Choose the workshop format.',
+      status: 'OPEN',
+      confidence: 0.8,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent',
+      created_at: '2026-08-20T09:00:00Z',
+      updated_at: '2026-08-20T09:00:00Z',
+    });
+
+    const updated = await ingestContextSource(project, {
+      sourceId: 'format-result',
+      filename: 'format-result.txt',
+      type: 'text',
+      content: 'The completed pilot confirmed that the small-group format worked.',
+      derivedNodes: [{
+        type: 'EVIDENCE',
+        text: 'The completed pilot confirmed that the small-group format worked.',
+        confidence: 0.95,
+        impact: 0.9,
+        relationship: 'resolves',
+        relatedNodeIds: ['format_decision'],
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    expect(updated.nodes.find((node) => node.id === 'format_decision')?.status).toBe('RESOLVED');
+    expect(updated.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target: 'format_decision', type: 'resolves' }),
     ]));
   });
 

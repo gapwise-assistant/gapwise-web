@@ -23,6 +23,20 @@ export type EdgeType =
   | 'supersedes'
   | 'affects';
 
+export type ReconciliationClassification =
+  | 'NEW_UNCERTAINTY'
+  | 'PARAPHRASE'
+  | 'SUBQUESTION'
+  | 'SUPPORTING_EVIDENCE'
+  | 'NEXT_ACTION'
+  | 'ALREADY_ANSWERED'
+  | 'ASSUMPTION'
+  | 'RELATED_BUT_DISTINCT'
+  | 'EQUIVALENT'
+  | 'REFINES_EXISTING'
+  | 'BROADER_THAN_EXISTING'
+  | 'DISTINCT';
+
 export interface SourceRef {
   id: string;
   filename: string;
@@ -52,10 +66,13 @@ export interface ClarityNode {
    */
   question_role?: 'canonical' | 'alias' | 'subquestion' | 'assumption' | 'related';
   canonical_question_id?: string;
+  /** Canonical identity for non-question nodes such as DECISION refinements. */
+  canonical_node_id?: string;
   question_aliases?: string[];
   reconciliation_confidence?: number;
   reconciliation_reason?: string;
   reconciliation_status?: 'reconciled' | 'fallback' | 'pending';
+  reconciliation_classification?: ReconciliationClassification;
 }
 
 export interface ClarityEdge {

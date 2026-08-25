@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic';
 import {
   Focus,
+  Download,
   PanelRightClose,
   PanelRightOpen,
   Route,
@@ -16,12 +17,12 @@ import type { GraphViewport } from '@/components/ConstellationGraph';
 import { authFetch } from '@/lib/auth/client';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import { buildDecisionMapDebugTrace, type DecisionMapRendererDiagnostics } from '@/lib/graph/decisionMapDebug';
-import { buildDecisionMapProjection, type DecisionMapView } from '@/lib/graph/decisionMapProjection';
+import { buildDecisionMapProjection } from '@/lib/graph/decisionMapProjection';
+import { decisionMapComponents } from '@/lib/graph/constellation';
 import { buildDecisionMapActivityFingerprint, decisionMapWarningCodes } from '@/lib/graph/decisionMapActivity';
+import { relationshipGroupsForNode } from '@/lib/graph/relationshipContext';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { DecisionMapActivity } from '@/components/DecisionMapActivity';
-import { DecisionNodeFocus } from '@/components/DecisionNodeFocus';
-import { buildDecisionNodeFocus } from '@/lib/graph/decisionFocus';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
   ssr: false,
@@ -41,10 +42,6 @@ interface ClarityGraphCanvasProps {
   onSelectSource?: (sourceId: string) => void;
   focusNodeId?: string | null;
 }
-
-type StoryMode =
-  | { type: 'overview' }
-  | { type: 'node_focus'; nodeId: string };
 
 const nodeTypeColors: Record<NodeType, { bg: string; border: string; text: string }> = {
   GOAL: { bg: 'bg-emerald-950/80', border: 'border-emerald-500/80', text: 'text-emerald-300' },
@@ -90,10 +87,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   onSelectSource,
   focusNodeId,
 }) => {
-  const [view, setView] = useState<DecisionMapView>('story');
-  const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [storyMode, setStoryMode] = useState<StoryMode>({ type: 'overview' });
   const [focusMode, setFocusMode] = useState(false);
   const [pathMode, setPathMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -132,31 +126,73 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
     return () => controller.abort();
   }, [project.id, project.updated_at, userId]);
 
-  const projection = useMemo(() => buildDecisionMapProjection(
-    project,
-    focusAssessment,
-    view,
-    expandedClusterIds,
-  ), [expandedClusterIds, focusAssessment, project, view]);
+  const view = 'all' as const;
+  const projection = useMemo(() => buildDecisionMapProjection(project, focusAssessment), [focusAssessment, project]);
   const selectedNode = project.nodes.find((node) => node.id === selectedNodeId);
-  const nodeFocus = useMemo(
-    () => storyMode.type === 'node_focus' ? buildDecisionNodeFocus(project, storyMode.nodeId, focusAssessment) : null,
-    [focusAssessment, project, storyMode],
-  );
   const decisionPath = selectedNodeId ? buildDecisionExplanation(project, selectedNodeId) : { nodeIds: [], edgeIds: [] };
-
-  const toggleCluster = useCallback((nodeId: string) => {
-    setExpandedClusterIds((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
-  }, []);
 
   const handleLayoutDiagnostics = useCallback((diagnostics: DecisionMapRendererDiagnostics) => {
     setRendererDiagnostics(diagnostics);
   }, []);
+
+  // Development-only snapshot of the graph actually presented by the
+  // renderer. This deliberately uses renderer visibility and positions so it
+  // can distinguish projection issues from layout/rendering issues.
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+
+    // Use only the renderer snapshot for the canonical All view.
+    const rendererSnapshot = rendererDiagnostics?.view === view ? rendererDiagnostics : undefined;
+    const visibleNodeIds = new Set(rendererSnapshot?.visibleNodeIds ?? projection.visibleNodeIds);
+    const visibleEdgeIds = new Set(rendererSnapshot?.visibleEdgeIds ?? projection.visibleEdgeIds);
+    const positions = rendererSnapshot?.positions ?? {};
+    const visibleNodes = project.nodes.filter((node) => visibleNodeIds.has(node.id));
+    const visibleEdges = project.edges.filter((edge) => visibleEdgeIds.has(edge.id));
+    const points = visibleNodes
+      .map((node) => positions[node.id])
+      .filter((point): point is NonNullable<typeof point> => Boolean(point));
+    const components = decisionMapComponents({ nodes: visibleNodes, edges: visibleEdges });
+    const bounds = points.length > 0
+      ? points.reduce((current, point) => ({
+        minX: Math.min(current.minX, point.x),
+        maxX: Math.max(current.maxX, point.x),
+        minY: Math.min(current.minY, point.y),
+        maxY: Math.max(current.maxY, point.y),
+      }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity })
+      : null;
+
+    console.log('[DecisionMap diagnostic]', {
+      mode: view,
+      nodes: visibleNodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        status: node.status,
+        text: node.text,
+        x: positions[node.id]?.x,
+        y: positions[node.id]?.y,
+      })),
+      edges: visibleEdges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: edge.type,
+      })),
+      layout: {
+        width: rendererSnapshot?.mapWidth ?? 0,
+        height: rendererSnapshot?.mapHeight ?? 0,
+        zoom: rendererSnapshot?.zoom ?? viewport.zoom,
+        bounds,
+      },
+      counts: {
+        allProjectNodes: project.nodes.length,
+        allProjectEdges: project.edges.length,
+        visibleNodes: visibleNodes.length,
+        visibleEdges: visibleEdges.length,
+      },
+      components,
+      isolatedNodeIds: components.filter((component) => component.edgeCount === 0).flatMap((component) => component.nodeIds),
+    });
+  }, [project, projection, rendererDiagnostics, view, viewport.zoom]);
 
   // Renderer state is useful developer detail, but it is not a semantic map
   // event. Update the latest event in place rather than appending a record.
@@ -166,19 +202,18 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, point]) => [id, point.x, point.y]);
     const activityWarnings = decisionMapWarningCodes(buildDecisionMapDebugTrace(project, {
-      filter: 'story',
+      filter: 'all',
       selectedNodeId: null,
       focusMode: false,
       pathMode: false,
       focusAssessment,
-      projection: buildDecisionMapProjection(project, focusAssessment, 'story', new Set()),
+      projection: buildDecisionMapProjection(project, focusAssessment),
     }));
     const activityFingerprint = buildDecisionMapActivityFingerprint(project, focusAssessment, activityWarnings);
     const traceKey = JSON.stringify({
       activityFingerprint,
       projectId: project.id,
       view,
-      expandedClusterIds: [...expandedClusterIds].sort(),
       selectedNodeId,
       focusMode,
       pathMode,
@@ -217,16 +252,16 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [expandedClusterIds, focusAssessment, focusMode, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
+  }, [focusAssessment, focusMode, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
 
   // Persist one event for a meaningful project/focus change. This effect does
   // not depend on selection, view, layout, viewport, or renderer diagnostics.
   useEffect(() => {
     if (!userId) return;
     const timer = window.setTimeout(() => {
-      const semanticProjection = buildDecisionMapProjection(project, focusAssessment, 'story', new Set());
+      const semanticProjection = buildDecisionMapProjection(project, focusAssessment);
       const semanticDebug = buildDecisionMapDebugTrace(project, {
-        filter: 'story',
+        filter: 'all',
         selectedNodeId: null,
         focusMode: false,
         pathMode: false,
@@ -258,44 +293,35 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   useEffect(() => {
     if (!focusNodeId || !project.nodes.some((node) => node.id === focusNodeId)) return;
     setSelectedNodeId(focusNodeId);
-    if (view === 'story') {
-      setStoryMode({ type: 'node_focus', nodeId: focusNodeId });
-    } else {
-      setFocusMode(true);
-      setPathMode(true);
-    }
+    setFocusMode(true);
+    setPathMode(true);
   }, [focusNodeId, project, view]);
 
   const selectNode = (node: ClarityNode) => {
     setSelectedNodeId(node.id);
-    if (view === 'story') {
-      setStoryMode({ type: 'node_focus', nodeId: node.id });
-    } else {
-      setFocusMode(true);
-      setPathMode(true);
-    }
+    setFocusMode(true);
+    setPathMode(true);
     onSelectNode(node);
   };
 
-  const inspectNode = (node: ClarityNode) => {
-    setSelectedNodeId(node.id);
-    if (view === 'story') setStoryMode({ type: 'node_focus', nodeId: node.id });
-    onSelectNode(node);
-  };
-
-  const changeView = (nextView: DecisionMapView) => {
-    setView(nextView);
-    setStoryMode({ type: 'overview' });
-    if (nextView === 'story') setSelectedNodeId(null);
-  };
+  const exportProjectGraph = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const payload = JSON.stringify({
+      projectId: project.id,
+      goal: project.goal,
+      nodes: project.nodes,
+      edges: project.edges,
+    }, null, 2);
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${project.title.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'project'}-graph.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [project]);
 
   const renderInspector = () => {
-    const informingEdges = selectedNode
-      ? project.edges
-        .filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)
-        .map((edge) => ({ edge, other: project.nodes.find((node) => node.id === (edge.source === selectedNode.id ? edge.target : edge.source)) }))
-        .filter(({ other }) => other && ['KNOWN', 'EVIDENCE', 'CONSTRAINT', 'PREFERENCE', 'RISK'].includes(other.type))
-      : [];
+    const relationshipGroups = selectedNode ? relationshipGroupsForNode(project, selectedNode.id) : [];
     return (
     <aside className="min-w-0 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-xl sm:p-5" aria-label="Decision Map node details">
       {selectedNode ? (
@@ -316,21 +342,33 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-3"><span className="block text-[10px] uppercase text-slate-500">Status</span><span className="mt-1 block font-semibold text-slate-200">{readableStatus(selectedNode.status)}</span></div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-3"><span className="block text-[10px] uppercase text-slate-500">Confidence</span><span className="mt-1 block font-semibold text-cyan-300">{Math.round(selectedNode.confidence * 100)}%</span></div>
           </div>
-          {selectedNode.why_it_matters && selectedNode.why_it_matters.length > 0 && (
-            <div className="space-y-2 border-t border-slate-800 pt-3">
-              <span className="text-xs font-semibold text-slate-400">Why it matters</span>
-              {selectedNode.why_it_matters.map((reason) => <p key={reason} className="text-xs leading-relaxed text-slate-300">{reason}</p>)}
-            </div>
-          )}
           <div className="space-y-2 border-t border-slate-800 pt-3">
-            <span className="text-xs font-semibold text-slate-400">What informs this</span>
-            {informingEdges.length > 0
-              ? informingEdges.map(({ edge, other }) => <p key={edge.id} className="text-xs leading-relaxed text-slate-300"><span className="text-slate-500">{edge.type.replace('_', ' ')} · </span>{other?.text}</p>)
-              : <p className="text-xs text-slate-500">No supporting context is connected yet.</p>}
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Relationships</span>
+            {relationshipGroups.length > 0
+              ? <div className="mt-2 space-y-3">
+                {relationshipGroups.map((group) => (
+                  <div key={`${group.label}-${group.outgoing ? 'outgoing' : 'incoming'}`}>
+                    <p className="text-xs font-semibold text-slate-400">{group.label}</p>
+                    <div className="mt-1 space-y-1">
+                      {group.items.map(({ edge, other, outgoing }) => (
+                        <p key={edge.id} className="text-xs leading-relaxed text-slate-300">
+                          <span className="mr-1 text-slate-500">{outgoing ? '→' : '←'}</span>{other?.text}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              : <p className="mt-2 text-xs text-slate-500">No recorded relationships yet.</p>}
           </div>
           {selectedNode.type === 'DECISION' && onReviewDecision && (
             <button type="button" onClick={() => onReviewDecision(selectedNode)} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500">
               Open decision workspace
+            </button>
+          )}
+          {selectedNode.type === 'UNKNOWN' && onResolveQuestion && (
+            <button type="button" onClick={() => onResolveQuestion(selectedNode)} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-rose-700/80 bg-rose-950/40 px-3 py-2 text-xs font-bold text-rose-200 hover:border-rose-500">
+              Resolve question
             </button>
           )}
           <div className="space-y-2 border-t border-slate-800 pt-3">
@@ -360,14 +398,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   };
 
   const renderPath = () => (
-    pathMode && selectedNode ? (
+    selectedNode && decisionPath.nodeIds.length > 1 ? (
       <div className="overflow-hidden rounded-xl border border-rose-900/70 bg-rose-950/20 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-rose-300">Why this matters</p>
-            <p className="mt-1 text-xs text-slate-400">How this affects the decisions and outcomes that matter next.</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-rose-300">Path to goal</p>
           </div>
-          <button type="button" onClick={() => setPathMode(false)} className="rounded-md p-2 text-slate-500 hover:text-slate-200" aria-label="Close decision path"><X className="h-4 w-4" /></button>
         </div>
         {decisionPath.nodeIds.length > 1 ? (
           <div className="touch-scroll mt-3 flex items-center gap-2 overflow-x-auto pb-1">
@@ -386,7 +422,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
               );
             })}
           </div>
-        ) : <p className="mt-3 text-xs text-slate-400">No connected goal path is available for this node yet.</p>}
+        ) : null}
       </div>
     ) : null
   );
@@ -411,12 +447,12 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             <p className="mt-1 max-w-2xl text-xs text-slate-400">See what is known, uncertain, blocked, and how it connects to your goal.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {selectedNode && view !== 'story' && (
+            {selectedNode && (
               <button type="button" onClick={() => setFocusMode((current) => !current)} className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${focusMode ? 'border-cyan-700 bg-cyan-950 text-cyan-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`} aria-pressed={focusMode}>
                 <Focus className="h-3.5 w-3.5" />{focusMode ? 'Show all' : 'Focus neighborhood'}
               </button>
             )}
-            {selectedNode && view !== 'story' && (
+            {selectedNode && decisionPath.nodeIds.length > 1 && (
               <button type="button" onClick={() => setPathMode((current) => !current)} className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-bold sm:min-h-0 ${pathMode ? 'border-rose-700 bg-rose-950 text-rose-200' : 'border-slate-700 bg-slate-950 text-slate-300'}`} aria-pressed={pathMode}>
                 <Route className="h-3.5 w-3.5" />{pathMode ? 'Exit focus path' : 'Focus path'}
               </button>
@@ -432,54 +468,41 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
 
         <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
 
-        <div className="touch-scroll flex max-w-full shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
-          {([
-            ['story', 'Project story'],
-            ['all', `All (${project.nodes.length})`],
-          ] as const).map(([id, label]) => (
-            <button key={id} type="button" onClick={() => changeView(id)} className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg px-3 py-1 text-xs font-medium sm:min-h-0 ${view === id ? 'border border-cyan-800 bg-cyan-950 text-cyan-300' : 'text-slate-400 hover:text-slate-100'}`}>
-              {label}
-            </button>
-          ))}
+        <div className="flex max-w-full shrink-0 items-center justify-between gap-3 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
+          <span className="rounded-lg border border-cyan-800 bg-cyan-950 px-3 py-2 text-xs font-medium text-cyan-300">
+            All ({project.nodes.length})
+          </span>
+          <button
+            type="button"
+            onClick={exportProjectGraph}
+            className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-cyan-700 hover:text-cyan-200 sm:min-h-0"
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            Export JSON
+          </button>
         </div>
 
         <div className={isFullscreen ? 'grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_340px] lg:overflow-hidden' : 'grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]'}>
           <div className={isFullscreen ? 'flex min-h-[55dvh] min-w-0 flex-col gap-3 p-2 sm:p-4 lg:min-h-0' : 'min-w-0 space-y-3'}>
             <div className={isFullscreen ? 'relative min-h-0 flex-1' : 'relative'}>
-              {view === 'story' && nodeFocus ? (
-                <DecisionNodeFocus
-                  focus={nodeFocus}
-                  focusAssessment={focusAssessment}
-                  onBack={() => {
-                    setStoryMode({ type: 'overview' });
-                    setSelectedNodeId(null);
-                  }}
-                  onInspectNode={inspectNode}
-                  onReviewDecision={onReviewDecision}
-                  onResolveQuestion={onResolveQuestion}
-                />
-              ) : (
-                <LazyConstellationGraph
-                  project={project}
-                  projection={projection}
-                  expandedClusterIds={expandedClusterIds}
-                  onToggleCluster={toggleCluster}
-                  selectedNodeId={selectedNodeId}
-                  focusMode={focusMode}
-                  pathMode={pathMode}
-                  focusNodeId={focusAssessment?.actionNodeId ?? null}
-                  dimension="2d"
-                  expanded={isFullscreen}
-                  viewport={viewport}
-                  onViewportChange={setViewport}
-                  isFullscreen={isFullscreen}
-                  onToggleFullscreen={() => setIsFullscreen((current) => !current)}
-                  onLayoutDiagnostics={handleLayoutDiagnostics}
-                  onSelectNode={selectNode}
-                />
-              )}
+              <LazyConstellationGraph
+                project={project}
+                projection={projection}
+                selectedNodeId={selectedNodeId}
+                focusMode={focusMode}
+                pathMode={pathMode}
+                focusNodeId={focusAssessment?.actionNodeId ?? null}
+                dimension="2d"
+                expanded={isFullscreen}
+                viewport={viewport}
+                onViewportChange={setViewport}
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={() => setIsFullscreen((current) => !current)}
+                onLayoutDiagnostics={handleLayoutDiagnostics}
+                onSelectNode={selectNode}
+              />
             </div>
-            {view !== 'story' && renderPath()}
+            {renderPath()}
             <div className="flex flex-wrap items-center gap-3 px-1 text-[10px] text-slate-500">
               {legendTypes.map((type) => <span key={type} className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: legendColors[type] }} />{type.replace('_', ' ')}</span>)}
             </div>
