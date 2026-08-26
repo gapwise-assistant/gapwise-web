@@ -19,6 +19,7 @@ import {
   ProjectOverviewAssessmentCacheRecord,
   StorageProvider,
 } from '@/lib/storage/types';
+import type { ProjectSnapshot } from '@/types/projectSnapshot';
 
 interface MockDatabase {
   users: Record<
@@ -35,11 +36,12 @@ interface MockDatabase {
       focusAssessments: FocusAssessmentCacheRecord[];
       projectOverviewAssessments: ProjectOverviewAssessmentCacheRecord[];
       askSuggestionAssessments: AskSuggestionsCacheRecord[];
+      projectSnapshots: ProjectSnapshot[];
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots';
 
 const EMPTY_USER = {
   contexts: [],
@@ -58,6 +60,7 @@ const EMPTY_USER = {
   focusAssessments: [],
   projectOverviewAssessments: [],
   askSuggestionAssessments: [],
+  projectSnapshots: [],
 };
 
 export class MockStorageProvider implements StorageProvider {
@@ -101,6 +104,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: current.focusAssessments ?? [],
       projectOverviewAssessments: current.projectOverviewAssessments ?? [],
       askSuggestionAssessments: current.askSuggestionAssessments ?? [],
+      projectSnapshots: current.projectSnapshots ?? [],
     };
     await this.writeDb(db);
   }
@@ -240,6 +244,27 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
   }
 
+  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
+    return (await this.getUser(userId)).projectSnapshots
+      .filter((snapshot) => snapshot.projectId === projectId)
+      .sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null> {
+    return (await this.getUser(userId)).projectSnapshots.find((snapshot) => snapshot.id === snapshotId) ?? null;
+  }
+
+  async saveProjectSnapshot(userId: string, snapshot: ProjectSnapshot): Promise<void> {
+    const existing = await this.getProjectSnapshot(userId, snapshot.id);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(snapshot)) {
+        throw new Error('Project snapshots are immutable and cannot be overwritten.');
+      }
+      return;
+    }
+    await this.upsert(userId, 'projectSnapshots', { ...snapshot, userId });
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return (await this.getUser(userId)).feedback;
   }
@@ -291,6 +316,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: [],
       projectOverviewAssessments: [],
       askSuggestionAssessments: [],
+      projectSnapshots: [],
     };
     await this.writeDb(db);
   }
@@ -321,6 +347,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: user?.focusAssessments ?? [],
       projectOverviewAssessments: user?.projectOverviewAssessments ?? [],
       askSuggestionAssessments: user?.askSuggestionAssessments ?? [],
+      projectSnapshots: user?.projectSnapshots ?? [],
     };
   }
 

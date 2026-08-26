@@ -59,7 +59,7 @@ describe('POST /api/ask/proposal', () => {
     vi.mocked(persistAskProposal).mockResolvedValue({} as never);
   });
 
-  it('does not persist an AI-derived proposal until Add is selected', async () => {
+  it('persists a dismissed proposal state without applying it to the project', async () => {
     const response = await POST(request({
       userId: 'demo-user',
       action: 'dismiss',
@@ -71,9 +71,11 @@ describe('POST /api/ask/proposal', () => {
 
     expect(response.status).toBe(200);
     expect(persistAskProposal).not.toHaveBeenCalled();
-    expect(storage.saveAskMessage).not.toHaveBeenCalled();
+    expect(storage.saveAskMessage).toHaveBeenCalledWith('demo-user', expect.objectContaining({
+      contextProposals: [expect.objectContaining({ id: 'proposal_1', confirmationStatus: 'dismissed' })],
+    }));
     await expect(response.json()).resolves.toMatchObject({
-      proposal: expect.objectContaining({ id: 'proposal_1', confirmationStatus: 'proposed' }),
+      proposal: expect.objectContaining({ id: 'proposal_1', confirmationStatus: 'dismissed' }),
     });
   });
 

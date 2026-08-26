@@ -34,7 +34,7 @@ export type AskOutcome = 'exploration' | 'recommendation' | 'conclusion';
 export type AskResponseOutcome = AskOutcome;
 
 export type AskContextProposalStatus = 'OPEN' | 'RESOLVED' | 'DEFERRED';
-export type AskProposalConfirmationStatus = 'proposed' | 'added' | 'dismissed';
+export type AskProposalConfirmationStatus = 'pending' | 'added' | 'dismissed' | 'proposed';
 /** @deprecated Use AskProposalConfirmationStatus for UI confirmation state. */
 export type AskProposalStatus = AskProposalConfirmationStatus;
 
@@ -80,11 +80,11 @@ export function normalizeAskContextProposal(value: unknown): AskContextProposal 
   const rawConfirmationStatus = typeof record.confirmationStatus === 'string' && askProposalConfirmationStatuses.has(record.confirmationStatus as AskProposalConfirmationStatus)
     ? record.confirmationStatus as AskProposalConfirmationStatus
     : undefined;
-  // Dismissal is local UI state now. Older persisted dismissed records are
-  // treated as pending again so they remain recoverable and addable.
   const confirmationStatus: AskProposalConfirmationStatus = rawConfirmationStatus === 'added' || rawStatus === 'added'
     ? 'added'
-    : 'proposed';
+    : rawConfirmationStatus === 'dismissed' || rawStatus === 'dismissed'
+      ? 'dismissed'
+      : 'pending';
   const graphStatus = legacyGraphStatus
     ?? (rawStatus && askContextProposalStatuses.has(rawStatus as AskContextProposalStatus)
       ? rawStatus as AskContextProposalStatus
@@ -158,6 +158,10 @@ export interface AskExecution {
   route: AskRoute;
   agent: string;
   toolCalls: string[];
+  /** Identifies deterministic demo output separately from a live agent run. */
+  mode?: 'live' | 'simulated';
+  fixtureId?: string;
+  fixtureVersion?: number;
 }
 
 export interface AskOpenQuestion {

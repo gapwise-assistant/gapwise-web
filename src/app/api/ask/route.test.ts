@@ -208,7 +208,7 @@ describe('POST /api/ask', () => {
       proposals: [expect.objectContaining({
         id: 'proposal_ask_assistant_message_proposal_0',
         status: 'OPEN',
-        confirmationStatus: 'proposed',
+        confirmationStatus: 'pending',
         sourceMessageId: 'ask_assistant_message_proposal',
       })],
     }));
@@ -217,7 +217,7 @@ describe('POST /api/ask', () => {
         type: 'UNKNOWN',
         text: 'Whether the supplier can deliver by Friday.',
         status: 'OPEN',
-        confirmationStatus: 'proposed',
+        confirmationStatus: 'pending',
       })],
     });
   });
@@ -273,9 +273,9 @@ describe('POST /api/ask', () => {
       generatedBy: 'local-fallback',
       modelConfig: expect.objectContaining({
         provider: 'Deterministic local response',
-        agent: 'Partner Agent',
+        agent: 'Local demo Ask',
         model: 'gemini-3.5-flash-lite',
-        execution: 'Not called locally; Partner Agent would be used when ADK is available',
+        execution: 'Simulated fixture; no Gemini/ADK call was made',
       }),
       sessionId: 'local_fallback_session',
     });

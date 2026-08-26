@@ -15,6 +15,14 @@ import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
 
 const EVERYTHING_SCOPE: AppScope = { type: 'everything' };
 const localContextInstruction = 'Deterministic local demo response based only on the selected project context.';
+const localAskExecution = {
+  route: 'internal_context' as const,
+  agent: 'Local demo Ask',
+  toolCalls: [],
+  mode: 'simulated' as const,
+  fixtureId: 'local-context',
+  fixtureVersion: 1,
+};
 
 async function loadLocalAskContext(params: {
   userId: string;
@@ -201,6 +209,7 @@ export async function askGapswiseLocally(params: {
     outcome: 'exploration',
     sessionId: params.sessionId?.trim() || `demo_${params.projectId ?? 'everything'}_${Date.now()}`,
     sources: sourcesFromPack(pack),
+    execution: localAskExecution,
     promptUsed: promptUsedFromContext(params.message, contextUsed),
     contextUsed,
   };

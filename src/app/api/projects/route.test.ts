@@ -111,7 +111,7 @@ describe('/api/projects', () => {
       );
 
       expect(response.status).toBe(201);
-      const savedProject = vi.mocked(saveProject).mock.calls[0]?.[1];
+      const savedProject = vi.mocked(saveProject).mock.calls.at(-1)?.[1];
       expect(savedProject?.deadline).toBeUndefined();
       expect(savedProject?.sources).toEqual(expect.arrayContaining([
         expect.objectContaining({

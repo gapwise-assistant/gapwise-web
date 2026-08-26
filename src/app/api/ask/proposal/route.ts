@@ -5,6 +5,7 @@ import { persistAskProposal } from '@/lib/ask/conversationContext';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { normalizeAskContextProposals, type AskContextProposal } from '@/types/ask';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
 
@@ -73,38 +74,60 @@ export async function POST(request: Request) {
     return NextResponse.json({ proposal });
   }
 
-  // Dismissal is intentionally local UI state. Keep the endpoint tolerant of
-  // older clients, but never record a permanent rejection in chat or project
-  // storage.
-  if (parsed.data.action === 'dismiss') {
-    return NextResponse.json({ proposal });
-  }
-
   let updatedProposal: AskContextProposal = {
     ...proposal,
-    confirmationStatus: 'added',
+    confirmationStatus: parsed.data.action === 'add' ? 'added' : 'dismissed',
     sourceMessageId: proposal.sourceMessageId ?? message.id,
   };
 
-  try {
-    if (parsed.data.action === 'add') {
-      await persistAskProposal({
-        userId,
-        projectId: parsed.data.projectId,
-        assistantMessageId: message.id,
-        proposal: updatedProposal,
-      });
-    }
+  const messageWithProposal = (nextProposal: AskContextProposal) => ({
+    ...message,
+    contextProposals: storedProposals.map((candidate) =>
+      candidate.id === nextProposal.id ? nextProposal : candidate
+    ),
+    proposals: storedProposals.map((candidate) =>
+      candidate.id === nextProposal.id ? nextProposal : candidate
+    ),
+  });
 
-    await storage.saveAskMessage(userId, {
-      ...message,
-      contextProposals: storedProposals.map((candidate) =>
-        candidate.id === updatedProposal.id ? updatedProposal : candidate
-      ),
-      proposals: storedProposals.map((candidate) =>
-        candidate.id === updatedProposal.id ? updatedProposal : candidate
-      ),
-    });
+  try {
+    if (parsed.data.action === 'dismiss') {
+      await storage.saveAskMessage(userId, messageWithProposal(updatedProposal));
+    } else {
+      // Mark the proposal as added before applying it so a completed graph
+      // mutation and its durable proposal state cannot diverge on reload.
+      await storage.saveAskMessage(userId, messageWithProposal(updatedProposal));
+      try {
+        await persistAskProposal({
+          userId,
+          projectId: parsed.data.projectId,
+          assistantMessageId: message.id,
+          proposal: updatedProposal,
+        });
+      } catch (error) {
+        const pending: AskContextProposal = { ...updatedProposal, confirmationStatus: 'pending' };
+        await storage.saveAskMessage(userId, messageWithProposal(pending));
+        throw error;
+      }
+    }
+    if (parsed.data.projectId) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: parsed.data.projectId,
+          trigger: {
+            type: parsed.data.action === 'add' ? 'ask_proposal_added' : 'ask_proposal_dismissed',
+            askMessageId: message.id,
+            proposalId: updatedProposal.id,
+          },
+          label: parsed.data.action === 'add' ? 'Ask proposal added' : 'Ask proposal dismissed',
+          summary: updatedProposal.text,
+        });
+      } catch (snapshotError) {
+        // Snapshot observability must not make a completed proposal action fail.
+        console.warn('[Project snapshots] proposal snapshot unavailable', snapshotError);
+      }
+    }
     return NextResponse.json({ proposal: updatedProposal });
   } catch (error) {
     if (error instanceof StorageError) return errorResponse(error, storageErrorStatus(error));

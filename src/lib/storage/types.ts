@@ -4,6 +4,7 @@ import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
+import type { ProjectSnapshot } from '@/types/projectSnapshot';
 
 export interface BaseEntity {
   id: string;
@@ -79,6 +80,7 @@ export interface FirestoreContext extends BaseEntity {
   clarity_score: number;
   active_question?: CandidateGap | null;
   historyEvents?: ProjectHistoryEvent[];
+  branch?: Project['branch'];
 }
 
 export interface FirestoreConversation extends BaseEntity {
@@ -115,6 +117,10 @@ export interface FocusAssessmentCacheRecord {
   assessment: FocusAssessment | null;
   createdAt: string;
   updatedAt: string;
+  provenance?: {
+    origin: 'branched_snapshot';
+    sourceSnapshotId: string;
+  };
 }
 
 export interface ProjectOverviewAssessmentCacheRecord {
@@ -125,6 +131,10 @@ export interface ProjectOverviewAssessmentCacheRecord {
   assessment: ProjectOverviewAssessment;
   createdAt: string;
   updatedAt: string;
+  provenance?: {
+    origin: 'branched_snapshot';
+    sourceSnapshotId: string;
+  };
 }
 
 export interface AskSuggestionsCacheRecord {
@@ -180,6 +190,10 @@ export interface StorageProvider {
   saveProjectOverviewAssessment(userId: string, record: ProjectOverviewAssessmentCacheRecord): Promise<void>;
   getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null>;
   saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void>;
+
+  listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]>;
+  getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null>;
+  saveProjectSnapshot(userId: string, snapshot: ProjectSnapshot): Promise<void>;
 
   getFeedback(userId: string): Promise<FirestoreFeedback[]>;
   saveFeedback(userId: string, feedback: FirestoreFeedback): Promise<void>;

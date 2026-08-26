@@ -1,9 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadProject, resetDemoProject, saveProject } from '@/lib/storage';
+import { getStorageProvider, loadProject, resetDemoProject, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import type { Project } from '@/types/clarity';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
+
+function snapshotTrigger(before: Project | null, after: Project): { type: 'decision_confirmed' | 'decision_edited' | 'gap_resolved' | 'action_completed' | 'focus_changed'; nodeId?: string } | null {
+  if (!before) return null;
+  const beforeById = new Map(before.nodes.map((node) => [node.id, node]));
+  for (const node of after.nodes) {
+    const previous = beforeById.get(node.id);
+    if (!previous) continue;
+    if (node.type === 'DECISION' && previous.status === 'OPEN' && node.status === 'RESOLVED') {
+      return { type: 'decision_confirmed', nodeId: node.id };
+    }
+    if (node.type === 'DECISION' && node.status === 'RESOLVED' && previous.decision_outcome !== node.decision_outcome) {
+      return { type: 'decision_edited', nodeId: node.id };
+    }
+    if ((node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && previous.status === 'OPEN' && node.status === 'RESOLVED') {
+      return { type: 'gap_resolved', nodeId: node.id };
+    }
+    if (node.type === 'NEXT_ACTION' && previous.status === 'OPEN' && node.status === 'RESOLVED') {
+      return { type: 'action_completed', nodeId: node.id };
+    }
+  }
+  const beforeFocus = before.active_question?.node_id;
+  const afterFocus = after.active_question?.node_id;
+  return beforeFocus !== afterFocus ? { type: 'focus_changed', nodeId: afterFocus } : null;
+}
 
 function jsonError(error: unknown) {
   if (error instanceof StorageError) {
@@ -53,7 +79,22 @@ export async function POST(request: NextRequest) {
       throw new StorageError('Missing project payload.', 'VALIDATION_ERROR');
     }
 
-    const project = await saveProject(userId, body.project as Parameters<typeof saveProject>[1]);
+    const requestedProject = body.project as Parameters<typeof saveProject>[1];
+    const before = await getStorageProvider().getProject(userId, requestedProject.id);
+    const project = await saveProject(userId, requestedProject);
+    const trigger = snapshotTrigger(before, project);
+    if (trigger) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: project.id,
+          trigger,
+          label: trigger.type.replaceAll('_', ' '),
+        });
+      } catch (snapshotError) {
+        console.warn('[Project snapshots] project mutation snapshot unavailable', snapshotError);
+      }
+    }
     return NextResponse.json({ project });
   } catch (error) {
     return jsonError(error);

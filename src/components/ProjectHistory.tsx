@@ -6,11 +6,14 @@ import type { ClarityNode, HistoryNodeSnapshot, Project, ProjectHistoryChange, P
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import { historyCurrentFocus } from '@/lib/history/projectHistory';
 import { authFetch } from '@/lib/auth/client';
+import type { ProjectSnapshot } from '@/types/projectSnapshot';
+import { ProjectSnapshotModal } from '@/components/ProjectSnapshotModal';
 
 interface ProjectHistoryProps {
   project: Project;
   userId?: string;
   onNavigateToSource?: (sourceId: string) => void;
+  onProjectBranched?: (project: Project) => void;
 }
 
 const CHANGE_LABELS: Record<ProjectHistoryChange['kind'], string> = {
@@ -104,12 +107,16 @@ function HistoryEventCard({
   expanded,
   onToggle,
   onNavigateToSource,
+  snapshot,
+  onViewSnapshot,
 }: {
   project: Project;
   event: ProjectHistoryEvent;
   expanded: boolean;
   onToggle: () => void;
   onNavigateToSource?: (sourceId: string) => void;
+  snapshot?: ProjectSnapshot;
+  onViewSnapshot?: () => void;
 }) {
   const source = sourceName(project, event.sourceId);
   const affectedNodes: HistoryNodeSnapshot[] = event.affectedNodes?.length
@@ -141,6 +148,15 @@ function HistoryEventCard({
           >
             {expanded ? 'Hide details' : 'Show details'}
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </button>
+        )}
+        {snapshot && (
+          <button
+            type="button"
+            onClick={onViewSnapshot}
+            className="inline-flex shrink-0 items-center rounded-md border border-cyan-800/80 bg-cyan-950/30 px-2.5 py-1.5 text-xs font-bold text-cyan-200 hover:border-cyan-500 hover:bg-cyan-900/40"
+          >
+            View this moment
           </button>
         )}
       </div>
@@ -205,9 +221,13 @@ function focusFromAssessment(assessment: FocusAssessment): ProjectHistoryFocus {
   };
 }
 
-export function ProjectHistory({ project, userId, onNavigateToSource }: ProjectHistoryProps) {
+export function ProjectHistory({ project, userId, onNavigateToSource, onProjectBranched }: ProjectHistoryProps) {
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [sharedFocus, setSharedFocus] = useState<ProjectHistoryFocus | null | undefined>(undefined);
+  const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<ProjectSnapshot | null>(null);
+  const [snapshotError, setSnapshotError] = useState('');
+  const [branchingSnapshotId, setBranchingSnapshotId] = useState<string | null>(null);
   const events = useMemo(
     () => {
       const persisted = [...(project.historyEvents ?? [])];
@@ -243,6 +263,65 @@ export function ProjectHistory({ project, userId, onNavigateToSource }: ProjectH
     return () => controller.abort();
   }, [project.id, project.updated_at, userId]);
 
+  React.useEffect(() => {
+    if (!userId) {
+      setSnapshots([]);
+      return;
+    }
+    const controller = new AbortController();
+    setSnapshotError('');
+    authFetch(`/api/projects/${encodeURIComponent(project.id)}/snapshots?userId=${encodeURIComponent(userId)}`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Project history snapshots unavailable');
+        return response.json() as Promise<{ snapshots?: ProjectSnapshot[] }>;
+      })
+      .then((body) => setSnapshots(Array.isArray(body.snapshots) ? body.snapshots : []))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setSnapshots([]);
+        setSnapshotError('Historical snapshots are temporarily unavailable.');
+      });
+    return () => controller.abort();
+  }, [project.id, userId]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedSnapshot(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
+
+  const snapshotForEvent = (event: ProjectHistoryEvent): ProjectSnapshot | undefined =>
+    snapshots.find((snapshot) => snapshot.trigger.historyEventId === event.id)
+    ?? snapshots.find((snapshot) => event.sourceId && snapshot.trigger.sourceId === event.sourceId)
+    ?? snapshots.find((snapshot) => event.primaryNodeId && snapshot.trigger.nodeId === event.primaryNodeId)
+    ?? (event.type === 'project_started' ? snapshots.find((snapshot) => snapshot.trigger.type === 'project_created') : undefined);
+
+  const branchSelectedSnapshot = async () => {
+    if (!selectedSnapshot || !userId) return;
+    setBranchingSnapshotId(selectedSnapshot.id);
+    setSnapshotError('');
+    try {
+      const response = await authFetch(`/api/projects/${encodeURIComponent(project.id)}/snapshots/${encodeURIComponent(selectedSnapshot.id)}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, clientRequestId: `history-branch:${selectedSnapshot.id}` }),
+      });
+      const body = await response.json().catch(() => ({})) as { project?: Project; error?: string };
+      if (!response.ok || !body.project) throw new Error(body.error ?? 'The project could not be created from this moment.');
+      setSelectedSnapshot(null);
+      onProjectBranched?.(body.project);
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'The project could not be created from this moment.');
+    } finally {
+      setBranchingSnapshotId(null);
+    }
+  };
+
   const currentFocus = sharedFocus !== undefined
     ? sharedFocus ?? undefined
     : historyCurrentFocus(project);
@@ -270,6 +349,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource }: ProjectH
         {events.map((event, index) => {
           const previous = events[index - 1];
           const showDate = !previous || dateLabel(previous.createdAt) !== dateLabel(event.createdAt);
+          const snapshot = snapshotForEvent(event);
           return (
             <React.Fragment key={event.id}>
               {showDate && <p className="-ml-6 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">{dateLabel(event.createdAt)}</p>}
@@ -279,16 +359,30 @@ export function ProjectHistory({ project, userId, onNavigateToSource }: ProjectH
                 expanded={Boolean(expandedEvents[event.id])}
                 onToggle={() => setExpandedEvents((current) => ({ ...current, [event.id]: !current[event.id] }))}
                 onNavigateToSource={onNavigateToSource}
+                snapshot={snapshot}
+                onViewSnapshot={() => snapshot && setSelectedSnapshot(snapshot)}
               />
             </React.Fragment>
           );
         })}
       </div>
 
+      {snapshotError && !selectedSnapshot && <p role="status" className="text-xs text-amber-300">{snapshotError}</p>}
+
       <div className="rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-4 sm:p-5">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-300">NOW</p>
         <p className="mt-2 text-sm font-bold leading-relaxed text-slate-100">{currentFocus?.title ?? 'No current focus is recorded yet.'}</p>
       </div>
+
+      {selectedSnapshot && (
+        <ProjectSnapshotModal
+          snapshot={selectedSnapshot}
+          isBranching={branchingSnapshotId === selectedSnapshot.id}
+          error={snapshotError}
+          onClose={() => setSelectedSnapshot(null)}
+          onBranch={branchSelectedSnapshot}
+        />
+      )}
     </section>
   );
 }

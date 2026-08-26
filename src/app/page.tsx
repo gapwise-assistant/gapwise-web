@@ -555,6 +555,21 @@ export default function Home() {
     setActiveTab('scope');
   }, []);
 
+  const handleProjectBranched = useCallback((branchedProject: Project) => {
+    const nextScope: AppScope = { type: 'project', projectId: branchedProject.id };
+    setProjects((current) => [
+      branchedProject,
+      ...current.filter((candidate) => candidate.id !== branchedProject.id),
+    ]);
+    setProject(branchedProject);
+    setScope(nextScope);
+    setProjectFocusKey((current) => current + 1);
+    setActiveTab('scope');
+    persistScopeToAPI(userId, nextScope).then((savedToApi) => {
+      setStorageMessage(savedToApi ? '' : 'Project created. Scope could not be saved to persistent storage.');
+    });
+  }, [userId]);
+
   const handleCreateProject = useCallback(async (input: CreateProjectInput) => {
     const result = await createProjectViaAPI(userId, input);
     setProjects(result.projects);
@@ -1429,6 +1444,7 @@ export default function Home() {
               openContext({ sourceId, tab: 'recent' });
             }}
             onViewToday={() => setActiveTab('today')}
+            onProjectBranched={handleProjectBranched}
             gapsNavigationRequest={gapsNavigationRequest}
             onGapsNavigationHandled={() => setGapsNavigationRequest(null)}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}

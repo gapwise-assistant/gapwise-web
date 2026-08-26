@@ -4,6 +4,7 @@ import { answerQuestion, editAnsweredQuestion, reopenAnsweredQuestion } from '@/
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { saveFeedback } from '@/lib/tools/feedbackTools';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
 
@@ -58,6 +59,19 @@ export async function POST(request: Request) {
     const body = requestSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await answerQuestion({ ...body, userId });
+    if (result.projectId) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: result.projectId,
+          trigger: { type: 'gap_resolved', nodeId: result.resolvedNodeId },
+          label: 'Question resolved',
+          summary: body.answer,
+        });
+      } catch (snapshotError) {
+        console.warn('[Project snapshots] resolved question snapshot unavailable', snapshotError);
+      }
+    }
     if (body.feedback) {
       await saveFeedback(userId, {
         id: body.feedback.id ?? `question_feedback_${body.nodeId}`,
@@ -84,6 +98,19 @@ export async function PATCH(request: Request) {
       const body = reopenRequestSchema.parse(rawBody);
       const userId = await requireAuthenticatedUserId(request, body.userId);
       const result = await reopenAnsweredQuestion({ ...body, userId });
+      if (result.projectId) {
+        try {
+          await createProjectSnapshot({
+            userId,
+            projectId: result.projectId,
+            trigger: { type: 'gap_reopened', nodeId: body.nodeId },
+            label: 'Question reopened',
+            summary: body.question,
+          });
+        } catch (snapshotError) {
+          console.warn('[Project snapshots] reopened question snapshot unavailable', snapshotError);
+        }
+      }
       return NextResponse.json({
         ...result,
         message: 'Response cancelled. The question is open again.',
@@ -92,6 +119,17 @@ export async function PATCH(request: Request) {
     const body = editRequestSchema.parse(rawBody);
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await editAnsweredQuestion({ ...body, userId });
+    try {
+      await createProjectSnapshot({
+        userId,
+        projectId: result.projectId,
+        trigger: { type: 'answer_edited', nodeId: body.nodeId },
+        label: 'Answer edited',
+        summary: body.answer,
+      });
+    } catch (snapshotError) {
+      console.warn('[Project snapshots] edited answer snapshot unavailable', snapshotError);
+    }
     return NextResponse.json({
       ...result,
       message: 'Answer updated. Gapwise understanding was refreshed.',

@@ -12,6 +12,7 @@ import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { AskChatMessage, AskChatSession, AskContextProposal, AskOpenQuestion, AskSearchSuggestions, AskTarget, normalizeAskContextProposals } from '@/types/ask';
 import { logAskDebug } from '@/lib/ask/debug';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
 
@@ -39,7 +40,8 @@ function configuredModelConfig(provider: string, execution: string, agent = 'Par
 function localModelConfig() {
   return configuredModelConfig(
     'Deterministic local response',
-    'Not called locally; Partner Agent would be used when ADK is available',
+    'Simulated fixture; no Gemini/ADK call was made',
+    'Local demo Ask',
   );
 }
 
@@ -395,6 +397,23 @@ export async function POST(request: Request) {
           outputSummary: `${agentName} response returned to Ask UI`,
         }],
       });
+    }
+    if (persistedTurn && parsed.data.projectId) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: parsed.data.projectId,
+          trigger: {
+            type: 'ask_response_created',
+            askMessageId: persistedResult.assistantMessageId,
+            sourceId: persistedTurn.context.sourceId,
+          },
+          label: 'Ask response created',
+          summary: 'An Ask conversation response was saved for this project.',
+        });
+      } catch (snapshotError) {
+        console.warn('[Project snapshots] Ask response snapshot unavailable', snapshotError);
+      }
     }
     return NextResponse.json(isDemoMode()
       ? {

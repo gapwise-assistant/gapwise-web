@@ -337,6 +337,7 @@ export function AskGapswise({
   const [confirmedDecisionMessageIds, setConfirmedDecisionMessageIds] = useState<Set<string>>(new Set());
   const [proposalBusyIds, setProposalBusyIds] = useState<Set<string>>(new Set());
   const [hiddenProposalKeys, setHiddenProposalKeys] = useState<Set<string>>(new Set());
+  const [shownProposalKeys, setShownProposalKeys] = useState<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -350,6 +351,8 @@ export function AskGapswise({
 
   useEffect(() => {
     setHasLoadedRemoteState(false);
+    setHiddenProposalKeys(new Set());
+    setShownProposalKeys(new Set());
     try {
       const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
       const parsedChats: ChatSession[] = storedChats ? JSON.parse(storedChats) : [];
@@ -583,7 +586,6 @@ export function AskGapswise({
     const uiKey = proposalUiKey(message.id, proposal);
     if (action === 'dismiss') {
       setHiddenProposalKeys((current) => new Set(current).add(uiKey));
-      return;
     }
     if (!proposal.id || proposalBusyIds.has(proposal.id)) return;
     setProposalBusyIds((current) => new Set(current).add(proposal.id as string));
@@ -606,6 +608,13 @@ export function AskGapswise({
       updateProposalStatus(message.id, body.proposal);
       await onProjectContextChanged?.();
     } catch (caught) {
+      if (action === 'dismiss') {
+        setHiddenProposalKeys((current) => {
+          const next = new Set(current);
+          next.delete(uiKey);
+          return next;
+        });
+      }
       setError(caught instanceof Error ? caught.message : 'The proposal action failed.');
     } finally {
       setProposalBusyIds((current) => {
@@ -856,8 +865,24 @@ export function AskGapswise({
 
                     {(() => {
                       const contextProposals = normalizeAskContextProposals(message.contextProposals ?? message.proposals);
-                      const visibleProposals = contextProposals.filter((proposal) => !hiddenProposalKeys.has(proposalUiKey(message.id, proposal)));
-                      const hiddenProposals = contextProposals.filter((proposal) => hiddenProposalKeys.has(proposalUiKey(message.id, proposal)));
+                      const isHidden = (proposal: AskContextProposal) =>
+                        (proposal.confirmationStatus === 'dismissed'
+                          && !shownProposalKeys.has(proposalUiKey(message.id, proposal)))
+                        || hiddenProposalKeys.has(proposalUiKey(message.id, proposal));
+                      const visibleProposals = contextProposals.filter((proposal) => !isHidden(proposal));
+                      const hiddenProposals = contextProposals.filter(isHidden);
+                      const showHiddenProposals = () => {
+                        setHiddenProposalKeys((current) => {
+                          const next = new Set(current);
+                          hiddenProposals.forEach((proposal) => next.delete(proposalUiKey(message.id, proposal)));
+                          return next;
+                        });
+                        setShownProposalKeys((current) => {
+                          const next = new Set(current);
+                          hiddenProposals.forEach((proposal) => next.add(proposalUiKey(message.id, proposal)));
+                          return next;
+                        });
+                      };
                       if (contextProposals.length === 0) return null;
                       return (
                         <>
@@ -874,7 +899,7 @@ export function AskGapswise({
                                     </div>
                                     <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{proposal.text}</p>
                                     {proposal.reasoning && <p className="mt-1 text-xs leading-relaxed text-slate-400">{proposal.reasoning}</p>}
-                                    {(!proposal.confirmationStatus || proposal.confirmationStatus === 'proposed') && (
+                                    {(!proposal.confirmationStatus || proposal.confirmationStatus === 'pending' || proposal.confirmationStatus === 'proposed') && (
                                       <div className="mt-3 flex flex-wrap gap-2">
                                         <button
                                           type="button"
@@ -904,11 +929,7 @@ export function AskGapswise({
                               <span className="text-xs font-semibold text-slate-500">Potential project update dismissed</span>
                               <button
                                 type="button"
-                                onClick={() => setHiddenProposalKeys((current) => {
-                                  const next = new Set(current);
-                                  hiddenProposals.forEach((proposal) => next.delete(proposalUiKey(message.id, proposal)));
-                                  return next;
-                                })}
+                                onClick={showHiddenProposals}
                                 className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
                               >
                                 Show

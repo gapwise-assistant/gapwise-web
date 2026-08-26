@@ -20,8 +20,9 @@ import {
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
+import type { ProjectSnapshot } from '@/types/projectSnapshot';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -279,6 +280,51 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'askSuggestionAssessments', record);
   }
 
+  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
+    const snapshots = await this.list<ProjectSnapshot>(userId, 'projectSnapshots');
+    return snapshots
+      .filter((snapshot) => snapshot.projectId === projectId)
+      .sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null> {
+    try {
+      const snapshot = await this.collection(userId, 'projectSnapshots').doc(snapshotId).get();
+      return snapshot.exists ? this.fromFirestore<ProjectSnapshot>(snapshot.data()!) : null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveProjectSnapshot(userId: string, snapshot: ProjectSnapshot): Promise<void> {
+    const ref = this.collection(userId, 'projectSnapshots').doc(snapshot.id);
+    try {
+      const existing = await ref.get();
+      if (existing.exists) {
+        const stored = this.fromFirestore<ProjectSnapshot>(existing.data()!);
+        if (JSON.stringify(stored) !== JSON.stringify(snapshot)) {
+          throw new StorageError('Project snapshots are immutable and cannot be overwritten.', 'VALIDATION_ERROR');
+        }
+        return;
+      }
+      await ref.create(stripUndefined({ ...snapshot, userId }));
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      // Two identical transitions can race. Re-read after an ALREADY_EXISTS
+      // response and accept only the identical immutable record.
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (code.includes('already-exists') || code === '6') {
+        const existing = await ref.get();
+        if (existing.exists) {
+          const stored = this.fromFirestore<ProjectSnapshot>(existing.data()!);
+          if (JSON.stringify(stored) === JSON.stringify(snapshot)) return;
+          throw new StorageError('Project snapshots are immutable and cannot be overwritten.', 'VALIDATION_ERROR');
+        }
+      }
+      throw this.toStorageError(error);
+    }
+  }
+
   async getFeedback(userId: string): Promise<FirestoreFeedback[]> {
     return this.list<FirestoreFeedback>(userId, 'feedback');
   }
@@ -332,6 +378,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'focusAssessments',
       'projectOverviewAssessments',
       'askSuggestionAssessments',
+      'projectSnapshots',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();

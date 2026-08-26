@@ -12,6 +12,7 @@ import { StorageError } from '@/lib/storage/types';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
@@ -313,6 +314,24 @@ export async function POST(request: Request) {
         contextCount: result.project.nodes.length,
       }],
     });
+  }
+
+  if (!result.skipped && !result.error && source.projectId !== '__general_context__') {
+    try {
+      await createProjectSnapshot({
+        userId: source.userId,
+        projectId: source.projectId,
+        trigger: {
+          type: 'context_processed',
+          sourceId: source.sourceId,
+          historyEventId: result.project.historyEvents?.at(-1)?.id,
+        },
+        label: 'Context processed',
+        summary: `Processed ${source.filename}.`,
+      });
+    } catch (error) {
+      console.warn('[Project snapshots] context snapshot unavailable', error);
+    }
   }
 
   return NextResponse.json({

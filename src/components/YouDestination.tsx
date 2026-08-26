@@ -43,6 +43,7 @@ interface ScopeDestinationProps {
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onNavigateToSource: (sourceId: string) => void;
   onViewToday?: () => void;
+  onProjectBranched?: (project: Project) => void;
   gapsNavigationRequest?: { status: GapStatusFilter; key: number } | null;
   onGapsNavigationHandled?: () => void;
   reasoningPathNodeId?: string | null;
@@ -91,6 +92,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   onEditAnsweredQuestion,
   onNavigateToSource,
   onViewToday,
+  onProjectBranched,
   gapsNavigationRequest,
   onGapsNavigationHandled,
   reasoningPathNodeId,
@@ -540,7 +542,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'gaps' && renderProjectQuestions()}
-      {projectSection === 'history' && <ProjectHistory userId={userId} project={project} onNavigateToSource={onNavigateToSource} />}
+      {projectSection === 'history' && <ProjectHistory userId={userId} project={project} onNavigateToSource={onNavigateToSource} onProjectBranched={onProjectBranched} />}
       {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} onResolveQuestion={onAnswerQuestion} />}
       {projectSection === 'context' && (
         <ContextInbox

@@ -44,6 +44,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
         clarity_score: project.clarity_score,
         active_question: project.active_question ?? null,
         historyEvents: project.historyEvents ?? [],
+        branch: project.branch,
         status: project.status === 'archived' ? 'ARCHIVED' : 'ACTIVE',
         createdAt: project.created_at,
         updatedAt,
@@ -167,6 +168,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
     clarity_score: context.clarity_score,
     active_question: context.active_question ?? null,
     historyEvents: context.historyEvents ?? [],
+    branch: context.branch,
     created_at: context.createdAt,
     updated_at: context.updatedAt,
     nodes: nodes.map((node) => ({

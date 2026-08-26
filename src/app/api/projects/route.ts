@@ -7,6 +7,7 @@ import { listProjects, loadProjectState, saveProject, setActiveProjectId, setApp
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { isLocalhostRequest } from '@/lib/runtime/demoMode';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
 
@@ -73,6 +74,21 @@ export async function POST(request: NextRequest) {
     const userId = await requireAuthenticatedUserId(request, body.userId);
     let project = createProjectFromInput(body);
     if (body.description) {
+      // Persist the goal-only state first so the creation snapshot is a true
+      // starting point, then process the optional initial context as its own
+      // immutable transition.
+      await saveProject(userId, project);
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: project.id,
+          trigger: { type: 'project_created' },
+          label: 'Project created',
+          summary: 'The project and its initial goal were created.',
+        });
+      } catch (error) {
+        console.warn('[Project snapshots] creation snapshot unavailable', error);
+      }
       const processed = await processContextSource(project, {
         sourceId: `${project.id}_initial_context`,
         filename: 'Initial context',
@@ -85,6 +101,36 @@ export async function POST(request: NextRequest) {
       project = processed.project;
     }
     await saveProject(userId, project);
+    if (!body.description) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: project.id,
+          trigger: { type: 'project_created' },
+          label: 'Project created',
+          summary: 'The project and its initial goal were created.',
+        });
+      } catch (error) {
+        console.warn('[Project snapshots] creation snapshot unavailable', error);
+      }
+    }
+    if (body.description && project.sources.some((source) => source.id === `${project.id}_initial_context`)) {
+      try {
+        await createProjectSnapshot({
+          userId,
+          projectId: project.id,
+          trigger: {
+            type: 'context_processed',
+            sourceId: `${project.id}_initial_context`,
+            historyEventId: project.historyEvents?.at(-1)?.id,
+          },
+          label: 'Initial context processed',
+          summary: 'The initial context was processed into the project understanding.',
+        });
+      } catch (error) {
+        console.warn('[Project snapshots] context snapshot unavailable', error);
+      }
+    }
     const scope = { type: 'project' as const, projectId: project.id };
     await setAppScope(userId, scope);
     const projects = await listProjects(userId);

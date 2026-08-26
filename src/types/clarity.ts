@@ -303,6 +303,7 @@ export interface DecisionValueAssessment {
 
 export type ProjectHistoryEventType =
   | 'project_started'
+  | 'project_branched'
   | 'context_added'
   | 'decision_resolved'
   | 'gap_resolved'
@@ -417,6 +418,14 @@ export interface Project {
     projectId?: string;
   }[];
   historyEvents?: ProjectHistoryEvent[];
+  branch?: {
+    sourceProjectId: string;
+    sourceSnapshotId: string;
+    sourceProjectTitle: string;
+    branchedAt: string;
+    snapshotCreatedAt: string;
+    requestId?: string;
+  };
   created_at: string;
   updated_at: string;
 }
