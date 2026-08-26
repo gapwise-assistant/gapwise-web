@@ -17,6 +17,7 @@ const contextPackRequestSchema = z.object({
   excludeMessageId: z.string().trim().min(1).optional(),
   excludeSourceId: z.string().trim().min(1).optional(),
   graphReasoning: z.boolean().optional(),
+  reasoningMode: z.enum(['factual', 'reasoning', 'impact', 'decision', 'focus']).optional(),
 });
 
 export async function POST(request: Request) {
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
     excludeMessageId: parsed.data.excludeMessageId,
     excludeSourceId: parsed.data.excludeSourceId,
     graphReasoning: parsed.data.graphReasoning,
+    reasoningMode: parsed.data.reasoningMode,
   });
 
   return NextResponse.json({ contextPack });

@@ -28,6 +28,7 @@ export async function POST(request: Request) {
       profile: DEFAULT_USER_PROFILE,
       scope,
       includeBroadContext: true,
+      reasoningMode: 'focus',
     });
     const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE);
     return NextResponse.json({ focusAssessment });

@@ -8,6 +8,7 @@ import type {
   AskContextProposal,
   AskGraphReasoningTrace,
   AskOpenQuestion,
+  AskRetrievedEvidence,
   AskResponse,
   AskResponseOutcome,
   AskRoute,
@@ -16,6 +17,7 @@ import type {
 } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
 import { focusAssessmentPromptSection, type FocusAssessment } from '@/lib/focus/focusAssessment';
+import type { ProjectReasoningMode } from '@/lib/retrieval/projectReasoningContext';
 
 export type { AskSource } from '@/types/ask';
 
@@ -39,6 +41,7 @@ export interface AskResult {
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  retrievedEvidence?: AskRetrievedEvidence[];
   /** Development-only routing diagnostics; removed from the public API response. */
   graphReasoning?: AskGraphReasoningTrace;
 }
@@ -92,6 +95,29 @@ const evidenceSchema = z.object({
   excerpt: z.string(),
   score: z.number().optional(),
   supports: z.array(z.string()).optional(),
+  selectionReason: z.enum(['query_match', 'seed_provenance', 'expanded_node_provenance']).optional(),
+});
+
+const projectReasoningContextSchema = z.object({
+  mode: z.enum(['factual', 'reasoning', 'impact', 'decision', 'focus']),
+  seedNodes: z.array(graphNodeSchema).default([]),
+  expandedNodes: z.array(graphNodeSchema).default([]),
+  relationships: z.array(z.object({
+    id: z.string(),
+    source: z.string(),
+    target: z.string(),
+    type: z.string(),
+    confidence: z.number().optional(),
+  })).default([]),
+  evidence: z.array(evidenceSchema).default([]),
+  paths: z.array(z.object({
+    nodeIds: z.array(z.string()),
+    edgeIds: z.array(z.string()),
+  })).default([]),
+  diagnostics: z.object({
+    seedMethod: z.enum(['lexical', 'fallback']),
+    truncated: z.boolean(),
+  }),
 });
 
 const askSourceSchema = z.object({
@@ -152,6 +178,7 @@ const contextPackResponseSchema = z.object({
       status: z.enum(['pending', 'confirmed']).optional(),
     })).default([]),
     graphContext: askGraphContextSchema.optional(),
+    projectReasoningContext: projectReasoningContextSchema.optional(),
   }),
 });
 type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
@@ -159,6 +186,7 @@ type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
 const askRouteResponseSchema = z.object({
   route: z.enum(['web_research', 'internal_context', 'graph_reasoning', 'ask_clarification']),
   reason: z.string().default(''),
+  reasoningMode: z.enum(['factual', 'reasoning', 'impact', 'decision', 'focus']).optional(),
 });
 
 const askProposalTypeSchema = z.enum([
@@ -639,18 +667,21 @@ function requiresGraphReasoning(message: string): boolean {
 
 function applyGraphReasoningOverride(
   message: string,
-  decision: { route: AskRoutingDecision; reason: string },
-): { route: AskRoutingDecision; reason: string } {
+  decision: { route: AskRoutingDecision; reason: string; reasoningMode?: ProjectReasoningMode },
+): { route: AskRoutingDecision; reason: string; reasoningMode?: ProjectReasoningMode } {
   if (
     decision.route === 'web_research'
-    || decision.route === 'graph_reasoning'
     || explicitlyRequestsWebResearch(message)
   ) return decision;
+  if (decision.route === 'graph_reasoning') {
+    return { ...decision, reasoningMode: decision.reasoningMode ?? 'reasoning' };
+  }
   if (!requiresGraphReasoning(message)) return decision;
 
   const promoted = {
     route: 'graph_reasoning' as const,
     reason: `${decision.reason} Generic causal project reasoning requires the canonical graph slice.`,
+    reasoningMode: 'reasoning' as const,
   };
   logAskDebug('graph-reasoning-promoted', {
     originalRoute: decision.route,
@@ -663,7 +694,7 @@ function applyGraphReasoningOverride(
 function routingFallback(
   message: string,
   error: AskAgentError,
-): { route: AskRoutingDecision; reason: string } {
+): { route: AskRoutingDecision; reason: string; reasoningMode?: ProjectReasoningMode } {
   // Explicit web requests must never silently fall through to the Partner
   // Agent, because that could present unverified model memory as research.
   if (explicitlyRequestsWebResearch(message)) throw error;
@@ -693,7 +724,7 @@ export async function determineAskRoute(
   message: string,
   contextPack: AskContextPack | null,
   sources: AskSource[] = [],
-): Promise<{ route: AskRoutingDecision; reason: string }> {
+): Promise<{ route: AskRoutingDecision; reason: string; reasoningMode?: ProjectReasoningMode }> {
   const routingContext = trustedRoutingContext(contextPack, sources);
   logAskDebug('routing-request', {
     endpoint: `${agentBaseUrl()}/internal/ask-route`,
@@ -769,8 +800,9 @@ export async function determineAskRoute(
   }
 
   const route = applyGraphReasoningOverride(message, {
-    route: parsed.data.route,
+    route: parsed.data.route as AskRoute,
     reason: parsed.data.reason,
+    ...(parsed.data.reasoningMode ? { reasoningMode: parsed.data.reasoningMode } : {}),
   });
   logAskDebug('routing-response', {
     ...parsed.data,
@@ -921,6 +953,44 @@ function mergedContextEvidence(contextPack: AskContextPack): Array<z.infer<typeo
   return Array.from(merged.values());
 }
 
+function askRetrievedEvidence(contextPack: AskContextPack | null): AskRetrievedEvidence[] {
+  if (!contextPack) return [];
+  const merged = new Map<string, AskRetrievedEvidence>();
+  const add = (
+    item: z.infer<typeof evidenceSchema>,
+    fallbackReason: AskRetrievedEvidence['selectionReason'],
+  ) => {
+    const evidence: AskRetrievedEvidence = {
+      sourceId: item.source_id,
+      title: humanizeSourceTitle(item.filename),
+      excerpt: item.excerpt,
+      ...(item.score !== undefined ? { score: item.score } : {}),
+      supports: item.supports ?? [],
+      selectionReason: item.selectionReason ?? fallbackReason,
+    };
+    const existing = merged.get(evidence.sourceId);
+    if (!existing) {
+      merged.set(evidence.sourceId, evidence);
+      return;
+    }
+    const reasonRank = (reason: AskRetrievedEvidence['selectionReason']): number =>
+      reason === 'seed_provenance' ? 3 : reason === 'expanded_node_provenance' ? 2 : 1;
+    merged.set(evidence.sourceId, {
+      ...existing,
+      excerpt: existing.excerpt.length >= evidence.excerpt.length ? existing.excerpt : evidence.excerpt,
+      score: Math.max(existing.score ?? 0, evidence.score ?? 0),
+      supports: Array.from(new Set([...existing.supports, ...evidence.supports])),
+      selectionReason: reasonRank(existing.selectionReason) >= reasonRank(evidence.selectionReason)
+        ? existing.selectionReason
+        : evidence.selectionReason,
+    });
+  };
+  contextPack.relevantEvidence.forEach((item) => add(item, 'query_match'));
+  contextPack.provenanceSources.forEach((item) => add(item, 'seed_provenance'));
+  contextPack.projectReasoningContext?.evidence.forEach((item) => add(item, item.selectionReason ?? 'expanded_node_provenance'));
+  return Array.from(merged.values());
+}
+
 function structuredAskResponseInstructions(openQuestions: AskOpenQuestion[]): string {
   const questionTargets = openQuestions.length
     ? openQuestions.map((question) => `- ${question.id}: ${compactContextText(question.text, 360)}`).join('\n')
@@ -957,6 +1027,41 @@ function availableOpenQuestions(
     ...suppliedQuestions,
     ...(contextPack?.unresolvedGaps ?? []).map((question) => ({ id: question.id, text: question.text })),
   ].map((question) => [question.id, question] as const)).values());
+}
+
+function reasoningContextPromptSection(contextPack: AskContextPack): string | undefined {
+  const reasoning = contextPack.projectReasoningContext;
+  if (!reasoning) return undefined;
+  const nodes = [...reasoning.seedNodes, ...reasoning.expandedNodes];
+  if (nodes.length === 0 && reasoning.relationships.length === 0 && reasoning.evidence.length === 0) return undefined;
+  const nodeLines = (items: typeof nodes) => items.map((node) =>
+    `- ${node.id} [${node.type}, ${node.status ?? 'UNKNOWN'}] ${compactContextText(node.text, 360)}`
+  ).join('\n');
+  const relationshipLines = reasoning.relationships.map((edge) =>
+    `- ${edge.source} -[${edge.type}]-> ${edge.target}`
+  ).join('\n');
+  const pathLines = reasoning.paths.map((path) =>
+    `- Nodes: ${path.nodeIds.join(' → ')}; edges: ${path.edgeIds.join(', ')}`
+  ).join('\n');
+  const evidenceLines = reasoning.evidence.map((source) =>
+    `- ${source.filename}: ${compactContextText(source.excerpt, 360)}${source.supports?.length ? ` (supports: ${source.supports.slice(0, 3).join(' · ')})` : ''}`
+  ).join('\n');
+  return [
+    'RELEVANT PROJECT STATE',
+    'This is a bounded, read-only retrieval of canonical project state for graph reasoning.',
+    'Project nodes and persisted relationships are authoritative. Source excerpts are evidence. Inferences not represented by an edge must be described as inferences.',
+    'Do not treat OPEN decisions as resolved. Only blocks and depends_on represent blocking/prerequisite sequencing; informs and affects do not by themselves block work.',
+    'SEED NODES',
+    nodeLines(reasoning.seedNodes) || '- None',
+    'RELATED PROJECT STATE',
+    nodeLines(reasoning.expandedNodes) || '- None',
+    'RECORDED RELATIONSHIPS',
+    relationshipLines || '- None',
+    'RELEVANT REASONING PATHS',
+    pathLines || '- None',
+    'SUPPORTING SOURCES',
+    evidenceLines || '- None',
+  ].join('\n');
 }
 
 function contextPromptForAgent(
@@ -1014,7 +1119,10 @@ function contextPromptForAgent(
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
   const focusSection = focusAssessmentPromptSection(focusAssessment, focusIntent);
   if (focusSection) sections.push(focusSection);
-  if (contextPack.graphContext
+  const sharedReasoningSection = reasoningContextPromptSection(contextPack);
+  if (sharedReasoningSection) {
+    sections.push(sharedReasoningSection);
+  } else if (contextPack.graphContext
     && (contextPack.graphContext.nodes.length > 0 || contextPack.graphContext.edges.length > 0)) {
     sections.push([
       'PROJECT_GRAPH_CONTEXT (graph reasoning is active)',
@@ -1048,6 +1156,7 @@ async function loadSafeSources(
   excludeMessageId?: string,
   excludeSourceId?: string,
   graphReasoning = false,
+  reasoningMode?: ProjectReasoningMode,
 ): Promise<{ sources: AskSource[]; contextPack: AskContextPack | null }> {
   try {
     const requestBody = {
@@ -1058,6 +1167,7 @@ async function loadSafeSources(
       ...(excludeMessageId ? { excludeMessageId } : {}),
       ...(excludeSourceId ? { excludeSourceId } : {}),
       ...(graphReasoning ? { graphReasoning: true } : {}),
+      ...(reasoningMode ? { reasoningMode } : {}),
     };
     logAskDebug('context-pack-request', {
       endpoint: `${gapswiseAppUrl()}/api/internal/context-pack`,
@@ -1099,12 +1209,25 @@ async function loadSafeSources(
         ? `Supports: ${item.supports.slice(0, 2).join(' · ')}`
         : 'Matched the question and response context.',
     }));
+    const reasoningSources: AskSource[] = (parsed.data.contextPack.projectReasoningContext?.evidence ?? []).map((item) => ({
+      id: item.source_id,
+      title: humanizeSourceTitle(item.filename),
+      excerpt: item.excerpt,
+      score: item.score,
+      kind: 'source',
+      supports: item.supports,
+      reason: item.supports?.length
+        ? `Selected through graph support: ${item.supports.slice(0, 2).join(' · ')}`
+        : 'Selected through a related project graph node.',
+    }));
     const selectedNodes = [
       ...parsed.data.contextPack.activeGoals,
       ...parsed.data.contextPack.unresolvedGaps,
       ...parsed.data.contextPack.recentlyResolvedGaps,
       ...parsed.data.contextPack.recentDecisions,
       ...parsed.data.contextPack.contradictions,
+      ...(parsed.data.contextPack.projectReasoningContext?.seedNodes ?? []),
+      ...(parsed.data.contextPack.projectReasoningContext?.expandedNodes ?? []),
     ];
     const graphSources: AskSource[] = selectedNodes
       .filter((node) => !node.source_refs.length)
@@ -1144,7 +1267,7 @@ async function loadSafeSources(
     const result = {
       sources: Array.from(
         new Map(
-          [...evidenceSources, ...graphSources, ...memorySources, ...calendarSources, ...researchSources]
+          [...evidenceSources, ...reasoningSources, ...graphSources, ...memorySources, ...calendarSources, ...researchSources]
             .map((source) => [source.id, source])
       ).values()
       ).slice(0, 8),
@@ -1312,6 +1435,7 @@ export async function askGapswise(params: {
       params.excludeMessageId,
       params.excludeSourceId,
       true,
+      routing.reasoningMode ?? 'reasoning',
     );
     if (graphContext.contextPack) {
       sources = graphContext.sources;
@@ -1396,7 +1520,9 @@ export async function askGapswise(params: {
     ? { outcome: 'exploration' as const, contextProposals: [], proposals: [] }
     : validatedResponseMetadata(adkTurn.response, contextPack, availableQuestions);
   const graph = contextPack?.graphContext;
+  const reasoningContext = contextPack?.projectReasoningContext;
   const graphTrace = graph ? {
+    reasoningMode: reasoningContext?.mode ?? routing.reasoningMode,
     startingNodeIds: graph.startingNodeIds,
     selectedNodeIds: graph.nodes.map((node) => node.id),
     selectedEdges: graph.edges.map((edge) => ({
@@ -1405,12 +1531,17 @@ export async function askGapswise(params: {
       target: edge.target,
       type: edge.type,
     })),
+    paths: reasoningContext?.paths ?? [],
+    retrievedEvidence: askRetrievedEvidence(contextPack),
     nodeCount: graph.nodes.length,
     edgeCount: graph.edges.length,
   } : {
+    reasoningMode: reasoningContext?.mode ?? routing.reasoningMode,
     startingNodeIds: [],
     selectedNodeIds: [],
     selectedEdges: [],
+    paths: [],
+    retrievedEvidence: askRetrievedEvidence(contextPack),
     nodeCount: 0,
     edgeCount: 0,
   };
@@ -1423,6 +1554,7 @@ export async function askGapswise(params: {
     openQuestions: availableQuestions,
     promptUsed,
     searchSuggestions: adkTurn.searchSuggestions,
+    retrievedEvidence: askRetrievedEvidence(contextPack),
     execution: { route: routing.route, agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
     ...(routing.route === 'graph_reasoning' ? { graphReasoning: graphTrace } : {}),
   };

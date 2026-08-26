@@ -410,6 +410,8 @@ describe('Context Pack retrieval and durable memory policy', () => {
     expect(normalPack.graphContext).toBeUndefined();
     expect(graphPack.graphContext).toMatchObject({ projectGoal: project.goal });
     expect(graphPack.graphContext?.nodes.length).toBeLessThanOrEqual(16);
+    expect(graphPack.projectReasoningContext).toMatchObject({ mode: 'reasoning' });
+    expect(graphPack.projectReasoningContext?.seedNodes.length).toBeLessThanOrEqual(5);
   });
 
   it('does not promote transient statements to durable memory', () => {

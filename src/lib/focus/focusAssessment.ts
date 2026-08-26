@@ -123,6 +123,16 @@ function compactProjectState(project: Project, contextPack: ContextPack, profile
     edges: project.edges
       .filter((edge) => edge.type === 'blocks' || edge.type === 'depends_on')
       .map((edge) => ({ source: edge.source, target: edge.target, type: edge.type })),
+    reasoningContext: contextPack.projectReasoningContext
+      ? {
+          mode: contextPack.projectReasoningContext.mode,
+          seedNodes: contextPack.projectReasoningContext.seedNodes.map((node) => ({ id: node.id, type: node.type, text: node.text })),
+          expandedNodes: contextPack.projectReasoningContext.expandedNodes.map((node) => ({ id: node.id, type: node.type, text: node.text })),
+          relationships: contextPack.projectReasoningContext.relationships.map((edge) => ({ source: edge.source, target: edge.target, type: edge.type })),
+          paths: contextPack.projectReasoningContext.paths,
+          evidence: contextPack.projectReasoningContext.evidence.map((source) => ({ source_id: source.source_id, supports: source.supports ?? [] })),
+        }
+      : null,
     profile,
   });
 }

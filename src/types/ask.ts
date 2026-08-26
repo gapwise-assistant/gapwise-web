@@ -122,6 +122,7 @@ export interface AskResponse {
 export type AskRoute = 'web_research' | 'internal_context' | 'graph_reasoning';
 
 export interface AskGraphReasoningTrace {
+  reasoningMode?: 'factual' | 'reasoning' | 'impact' | 'decision' | 'focus';
   startingNodeIds: string[];
   selectedNodeIds: string[];
   selectedEdges: Array<{
@@ -130,8 +131,27 @@ export interface AskGraphReasoningTrace {
     target: string;
     type: string;
   }>;
+  paths?: Array<{
+    nodeIds: string[];
+    edgeIds: string[];
+  }>;
+  retrievedEvidence?: AskRetrievedEvidence[];
   nodeCount: number;
   edgeCount: number;
+}
+
+export type AskRetrievedEvidenceSelectionReason =
+  | 'query_match'
+  | 'seed_provenance'
+  | 'expanded_node_provenance';
+
+export interface AskRetrievedEvidence {
+  sourceId: string;
+  title: string;
+  excerpt: string;
+  score?: number;
+  supports: string[];
+  selectionReason?: AskRetrievedEvidenceSelectionReason;
 }
 
 export interface AskExecution {
@@ -165,6 +185,8 @@ export interface AskResult {
   openQuestionIds?: string[];
   openQuestions?: AskOpenQuestion[];
   searchSuggestions?: AskSearchSuggestions;
+  /** The project evidence actually supplied to the Partner Agent for this turn. */
+  retrievedEvidence?: AskRetrievedEvidence[];
   /** Development-only routing diagnostics; removed from the public API response. */
   graphReasoning?: AskGraphReasoningTrace;
 }

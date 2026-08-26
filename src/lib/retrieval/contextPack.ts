@@ -6,7 +6,11 @@ import { rankNodes, rankSources, relevanceScore, tokenize } from '@/lib/retrieva
 import { memoriesFromProfile } from '@/lib/memory/store';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { canonicalOpenQuestions, canonicalResolvedQuestions } from '@/lib/questions/canonical';
-import { buildAskGraphContext } from '@/lib/ask/graphContext';
+import {
+  reasoningContextToAskGraphContext,
+  retrieveProjectReasoningContext,
+  type ProjectReasoningMode,
+} from '@/lib/retrieval/projectReasoningContext';
 
 const DEFAULT_LIMITS = {
   activeGoals: 3,
@@ -247,8 +251,17 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
         };
       })()
     : baseReasoningProject;
-  const graphContext: AskGraphContext | undefined = input.graphReasoning
-    ? buildAskGraphContext(reasoningProject, input.query)
+  const reasoningMode: ProjectReasoningMode | undefined = input.reasoningMode
+    ?? (input.graphReasoning ? 'reasoning' : undefined);
+  const projectReasoningContext = reasoningMode
+    ? retrieveProjectReasoningContext({
+        project: reasoningProject,
+        query: input.query,
+        mode: reasoningMode,
+      })
+    : undefined;
+  const graphContext: AskGraphContext | undefined = projectReasoningContext
+    ? reasoningContextToAskGraphContext(projectReasoningContext, reasoningProject.goal)
     : undefined;
 
   const activeGoals = rankNodes(
@@ -335,6 +348,9 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     ...recentDecisions,
     ...contradictions,
   ];
+  const reasoningNodes = projectReasoningContext
+    ? [...projectReasoningContext.seedNodes, ...projectReasoningContext.expandedNodes]
+    : [];
   const supportBySourceId = new Map<string, string[]>();
   selectedNodes.forEach((node) => {
     node.source_refs.forEach((sourceId) => {
@@ -375,6 +391,8 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
   ].forEach((node) => includedContextIds.add(node.id));
   relevantEvidence.forEach((evidence) => includedContextIds.add(evidence.source_id));
   provenanceSources.forEach((evidence) => includedContextIds.add(evidence.source_id));
+  reasoningNodes.forEach((node) => includedContextIds.add(node.id));
+  projectReasoningContext?.evidence.forEach((evidence) => includedContextIds.add(evidence.source_id));
   userPreferences.forEach((memory) => includedContextIds.add(memory.id));
   relevantConversationExcerpts.forEach((excerpt) => includedContextIds.add(excerpt.messageId));
   researchEvidence.forEach((research) => includedContextIds.add(research.id));
@@ -396,6 +414,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     relevantConversationExcerpts,
     researchEvidence,
     ...(graphContext ? { graphContext } : {}),
+    ...(projectReasoningContext ? { projectReasoningContext } : {}),
     includedContextIds: Array.from(includedContextIds),
   };
 }

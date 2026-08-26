@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       profile: DEFAULT_USER_PROFILE,
       durableMemories: memories,
       scope,
+      reasoningMode: 'focus',
     }, { now });
     const brief = generateDailyBrief({
       userId,

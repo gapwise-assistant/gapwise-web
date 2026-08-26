@@ -1,6 +1,7 @@
 import { ClarityNode, ContextSource, Project, UserMemoryProfile } from '@/types/clarity';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskResearchEvidence, RelevantConversationExcerpt } from '@/types/ask';
+import type { ProjectReasoningContext, ProjectReasoningMode } from '@/lib/retrieval/projectReasoningContext';
 
 export type MemoryCategory = 'career' | 'communication' | 'learning' | 'current_priorities' | 'custom';
 
@@ -32,6 +33,7 @@ export interface EvidenceExcerpt {
   score: number;
   derived_node_ids: string[];
   supports?: string[];
+  selectionReason?: 'query_match' | 'seed_provenance' | 'expanded_node_provenance';
 }
 
 export interface AskGraphContext {
@@ -72,6 +74,7 @@ export interface ContextPack {
   relevantConversationExcerpts?: RelevantConversationExcerpt[];
   researchEvidence?: AskResearchEvidence[];
   graphContext?: AskGraphContext;
+  projectReasoningContext?: ProjectReasoningContext;
 }
 
 export interface ContextPackInput {
@@ -90,7 +93,8 @@ export interface ContextPackInput {
   excludeSourceId?: string;
   /** Build the bounded canonical graph slice used only by graph-reasoning Ask. */
   graphReasoning?: boolean;
-  limits?: Partial<Record<keyof Omit<ContextPack, 'id' | 'query' | 'built_at' | 'includedContextIds' | 'provenanceSources' | 'graphContext'>, number>>;
+  reasoningMode?: ProjectReasoningMode;
+  limits?: Partial<Record<keyof Omit<ContextPack, 'id' | 'query' | 'built_at' | 'includedContextIds' | 'provenanceSources' | 'graphContext' | 'projectReasoningContext'>, number>>;
 }
 
 export type SourceLike = Pick<
