@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { materializeProjectSnapshot } from '@/lib/history/projectSnapshots';
 
 export const runtime = 'nodejs';
 
@@ -20,14 +21,12 @@ export async function GET(
     const { projectId, snapshotId } = await params;
     const userId = await requireAuthenticatedUserId(request, new URL(request.url).searchParams.get('userId') ?? undefined);
     const storage = getStorageProvider();
-    const [project, snapshot] = await Promise.all([
-      storage.getProject(userId, projectId),
-      storage.getProjectSnapshot(userId, snapshotId),
-    ]);
+    const project = await storage.getProject(userId, projectId);
+    const snapshot = await storage.getProjectSnapshot(userId, snapshotId);
     if (!project || !snapshot || snapshot.projectId !== projectId) {
       throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
     }
-    return NextResponse.json({ snapshot });
+    return NextResponse.json(await materializeProjectSnapshot({ userId, snapshotId }));
   } catch (error) {
     return errorResponse(error);
   }

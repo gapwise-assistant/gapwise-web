@@ -87,6 +87,7 @@ export async function persistAskConversationContext(params: {
   captureProcessingLog?: boolean;
 }): Promise<{
   sourceId: string;
+  historyEventId?: string;
   openQuestionIds: string[];
   openQuestions: Array<{ id: string; text: string }>;
 }> {
@@ -106,6 +107,9 @@ export async function persistAskConversationContext(params: {
   if (!result.skipped) await saveTarget(params.userId, result.project, target.isGeneral);
 
   const source = result.project.sources.find((candidate) => candidate.id === sourceId);
+  const historyEventId = [...(result.project.historyEvents ?? [])]
+    .reverse()
+    .find((event) => event.sourceId === sourceId)?.id;
   const sourceQuestionIds = new Set(source?.derived_node_ids ?? []);
   const openQuestions = canonicalOpenQuestions(result.project)
     .filter((node) => sourceQuestionIds.has(node.id) || canonicalQuestionGroups(result.project).some((group) =>
@@ -123,6 +127,7 @@ export async function persistAskConversationContext(params: {
 
   return {
     sourceId,
+    ...(historyEventId ? { historyEventId } : {}),
     openQuestionIds: uniqueOpenQuestions.map((question) => question.id),
     openQuestions: uniqueOpenQuestions,
   };

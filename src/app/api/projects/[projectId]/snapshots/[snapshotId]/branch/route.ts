@@ -46,7 +46,7 @@ export async function POST(
         projectId: result.project.id,
         trigger: { type: 'project_created' },
         label: 'Project branched',
-        summary: `Created from ${snapshot.project.title}.`,
+        summary: `Created from ${'projectState' in snapshot ? snapshot.projectState.title : snapshot.project.title}.`,
       });
     } catch (error) {
       console.warn('[Project snapshots] branch snapshot unavailable', error);

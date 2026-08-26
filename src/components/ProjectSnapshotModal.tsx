@@ -1,18 +1,18 @@
 'use client';
 
 import { X } from 'lucide-react';
-import type { ProjectSnapshot } from '@/types/projectSnapshot';
+import type { MaterializedProjectSnapshot } from '@/types/projectSnapshot';
 
 interface ProjectSnapshotModalProps {
-  snapshot: ProjectSnapshot;
+  snapshot: MaterializedProjectSnapshot;
   isBranching?: boolean;
   error?: string;
   onClose: () => void;
   onBranch: () => void;
 }
 
-function countNodes(snapshot: ProjectSnapshot, type: string, status?: string): number {
-  return snapshot.project.nodes.filter((node) =>
+function countNodes(project: MaterializedProjectSnapshot['project'], type: string, status?: string): number {
+  return project.nodes.filter((node) =>
     node.type === type && (!status || node.status === status),
   ).length;
 }
@@ -30,15 +30,19 @@ function timestamp(value: string): string {
     });
 }
 
-export function ProjectSnapshotModal({ snapshot, isBranching = false, error, onClose, onBranch }: ProjectSnapshotModalProps) {
-  const pendingProposals = snapshot.ask.messages
+export function ProjectSnapshotModal({ snapshot: materialized, isBranching = false, error, onClose, onBranch }: ProjectSnapshotModalProps) {
+  const { snapshot, project, ask, assessments, missingReferences } = materialized;
+  const pendingProposals = ask.messages
     .flatMap((message) => message.contextProposals ?? message.proposals ?? [])
-    .filter((proposal) => (proposal.confirmationStatus ?? 'pending') === 'pending');
-  const focus = snapshot.assessments.today?.focusAssessment ?? snapshot.assessments.focus;
-  const openQuestions = countNodes(snapshot, 'UNKNOWN', 'OPEN') + countNodes(snapshot, 'ASSUMPTION', 'OPEN');
-  const openDecisions = countNodes(snapshot, 'DECISION', 'OPEN');
-  const resolvedDecisions = countNodes(snapshot, 'DECISION', 'RESOLVED');
-  const activeSources = snapshot.project.sources.filter((source) => source.processing_status !== 'failed').length;
+    .filter((proposal) => {
+      const confirmationStatus = proposal.confirmationStatus ?? (proposal.status as unknown);
+      return confirmationStatus !== 'added' && confirmationStatus !== 'dismissed';
+    });
+  const focus = assessments.today?.focusAssessment ?? assessments.focus;
+  const openQuestions = countNodes(project, 'UNKNOWN', 'OPEN') + countNodes(project, 'ASSUMPTION', 'OPEN');
+  const openDecisions = countNodes(project, 'DECISION', 'OPEN');
+  const resolvedDecisions = countNodes(project, 'DECISION', 'RESOLVED');
+  const activeSources = project.sources.filter((source) => source.processing_status !== 'failed').length;
 
   return (
     <div
@@ -71,8 +75,8 @@ export function ProjectSnapshotModal({ snapshot, isBranching = false, error, onC
 
           <section>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Project state</p>
-            <p className="mt-2 text-base font-bold text-slate-100">{snapshot.project.title}</p>
-            <p className="mt-1 text-sm leading-relaxed text-slate-400">{snapshot.project.goal}</p>
+            <p className="mt-2 text-base font-bold text-slate-100">{project.title}</p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-400">{project.goal}</p>
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
                 ['Open questions', openQuestions],
@@ -95,16 +99,22 @@ export function ProjectSnapshotModal({ snapshot, isBranching = false, error, onC
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
               <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Ask activity</p>
-              <p className="mt-2 text-sm text-slate-300">{snapshot.ask.chats.length} chat{snapshot.ask.chats.length === 1 ? '' : 's'} · {snapshot.ask.messages.length} message{snapshot.ask.messages.length === 1 ? '' : 's'}</p>
+              <p className="mt-2 text-sm text-slate-300">{ask.chats.length} chat{ask.chats.length === 1 ? '' : 's'} · {ask.messages.length} message{ask.messages.length === 1 ? '' : 's'}</p>
               <p className="mt-1 text-xs text-slate-500">{pendingProposals.length} pending project update{pendingProposals.length === 1 ? '' : 's'}</p>
             </div>
           </section>
 
-          {snapshot.assessments.overview && (
+          {assessments.overview && (
             <section>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Overview at this moment</p>
-              <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{snapshot.assessments.overview.summary}</p>
+              <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{assessments.overview.summary}</p>
             </section>
+          )}
+
+          {missingReferences.length > 0 && (
+            <p role="status" className="text-xs text-amber-300">
+              Some historical records are unavailable: {missingReferences.map((item) => `${item.type}:${item.id}`).join(', ')}.
+            </p>
           )}
 
           {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}

@@ -20,7 +20,16 @@ import {
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
-import type { ProjectSnapshot } from '@/types/projectSnapshot';
+import {
+  PROJECT_SNAPSHOT_MAX_BYTES,
+  projectSnapshotToSummary,
+  snapshotRecordContentEqual,
+  snapshotReferencesRecord,
+  serializedProjectSnapshotSize,
+  type ProjectSnapshot,
+  type ProjectSnapshotSummary,
+  type SnapshotReferencedRecordType,
+} from '@/types/projectSnapshot';
 
 type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots';
 
@@ -36,6 +45,30 @@ function stripUndefined<T>(value: T): T {
     ) as T;
   }
   return value;
+}
+
+function snapshotsReferenceRecord(
+  snapshots: ProjectSnapshot[],
+  type: SnapshotReferencedRecordType,
+  id: string,
+): boolean {
+  return snapshots.some((snapshot) => snapshotReferencesRecord(snapshot, type, id));
+}
+
+function assertReferencedRecordCanChange(
+  snapshots: ProjectSnapshot[],
+  type: SnapshotReferencedRecordType,
+  existing: unknown,
+  next: unknown,
+  id: string,
+): void {
+  if (!snapshotsReferenceRecord(snapshots, type, id)) return;
+  if (!existing) {
+    throw new StorageError(`This ${type} is retained because a project snapshot references it.`, 'VALIDATION_ERROR');
+  }
+  if (!snapshotRecordContentEqual(type, existing, next)) {
+    throw new StorageError(`This ${type} is immutable because a project snapshot references it.`, 'VALIDATION_ERROR');
+  }
 }
 
 export class FirestoreStorageProvider implements StorageProvider {
@@ -66,12 +99,27 @@ export class FirestoreStorageProvider implements StorageProvider {
   async saveProject(userId: string, project: Project): Promise<void> {
     const collections = projectToCollections(userId, project);
     const batch = this.db.batch();
+    const snapshots = await this.list<ProjectSnapshot>(userId, 'projectSnapshots');
+    const currentSources = new Map((await this.getSources(userId)).map((source) => [source.id, source]));
+    collections.sources.forEach((source) => {
+      assertReferencedRecordCanChange(
+        snapshots,
+        'source',
+        currentSources.get(source.id),
+        source,
+        source.id,
+      );
+    });
 
     await Promise.all(
       (Object.keys(collections) as Array<keyof ProjectCollections>).map(async (collection) => {
         const snapshot = await this.collection(userId, collection).get();
         snapshot.docs
           .filter((doc) => this.belongsToProject(collection, doc.id, doc.data(), project.id))
+          .filter((doc) => collection !== 'sources' || snapshots.some((savedSnapshot) => {
+            if ('projectState' in savedSnapshot) return savedSnapshot.references.sourceIds.includes(doc.id);
+            return savedSnapshot.project.sources.some((source) => source.id === doc.id);
+          }) === false)
           .forEach((doc) => batch.delete(doc.ref));
         collections[collection].forEach((record) => {
           batch.set(this.collection(userId, collection).doc(record.id), stripUndefined(this.withServerUpdatedAt(record)));
@@ -180,10 +228,26 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async saveSource(userId: string, source: FirestoreSource): Promise<void> {
+    const [sources, snapshots] = await Promise.all([
+      this.getSources(userId),
+      this.list<ProjectSnapshot>(userId, 'projectSnapshots'),
+    ]);
+    assertReferencedRecordCanChange(
+      snapshots,
+      'source',
+      sources.find((candidate) => candidate.id === source.id),
+      source,
+      source.id,
+    );
     await this.save(userId, 'sources', source);
   }
 
   async deleteSource(userId: string, sourceId: string): Promise<void> {
+    const snapshots = await this.list<ProjectSnapshot>(userId, 'projectSnapshots');
+    const referenced = snapshotsReferenceRecord(snapshots, 'source', sourceId);
+    if (referenced) {
+      throw new StorageError('This source is retained because a project snapshot references it.', 'VALIDATION_ERROR');
+    }
     await this.collection(userId, 'sources').doc(sourceId).delete();
   }
 
@@ -200,13 +264,31 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async saveAskChat(userId: string, chat: AskChatSession): Promise<void> {
+    const [chats, snapshots] = await Promise.all([
+      this.getAskChats(userId),
+      this.list<ProjectSnapshot>(userId, 'projectSnapshots'),
+    ]);
+    assertReferencedRecordCanChange(
+      snapshots,
+      'chat',
+      chats.find((candidate) => candidate.id === chat.id),
+      chat,
+      chat.id,
+    );
     await this.save(userId, 'askChats', chat);
   }
 
   async deleteAskChat(userId: string, chatId: string): Promise<void> {
     try {
+      const snapshots = await this.list<ProjectSnapshot>(userId, 'projectSnapshots');
       const messages = await this.getAskMessages(userId);
       const research = await this.getAskResearch(userId);
+      const referenced = snapshotsReferenceRecord(snapshots, 'chat', chatId)
+        || messages.some((message) => message.chatId === chatId && snapshotsReferenceRecord(snapshots, 'message', message.id))
+        || research.some((item) => item.chatId === chatId && snapshotsReferenceRecord(snapshots, 'research', item.id));
+      if (referenced) {
+        throw new StorageError('This chat is retained because a project snapshot references it.', 'VALIDATION_ERROR');
+      }
       const batch = this.db.batch();
       batch.delete(this.collection(userId, 'askChats').doc(chatId));
       messages
@@ -226,6 +308,17 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async saveAskMessage(userId: string, message: AskChatMessage): Promise<void> {
+    const [messages, snapshots] = await Promise.all([
+      this.getAskMessages(userId),
+      this.list<ProjectSnapshot>(userId, 'projectSnapshots'),
+    ]);
+    assertReferencedRecordCanChange(
+      snapshots,
+      'message',
+      messages.find((candidate) => candidate.id === message.id),
+      message,
+      message.id,
+    );
     await this.save(userId, 'askMessages', message);
   }
 
@@ -234,6 +327,17 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void> {
+    const [researchRecords, snapshots] = await Promise.all([
+      this.getAskResearch(userId),
+      this.list<ProjectSnapshot>(userId, 'projectSnapshots'),
+    ]);
+    assertReferencedRecordCanChange(
+      snapshots,
+      'research',
+      researchRecords.find((candidate) => candidate.id === research.id),
+      research,
+      research.id,
+    );
     await this.save(userId, 'askResearch', research);
   }
 
@@ -280,11 +384,39 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'askSuggestionAssessments', record);
   }
 
-  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
-    const snapshots = await this.list<ProjectSnapshot>(userId, 'projectSnapshots');
-    return snapshots
-      .filter((snapshot) => snapshot.projectId === projectId)
-      .sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt));
+  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshotSummary[]> {
+    try {
+      // V2 stores a small listing index, so opening History does not read the
+      // project graph, source metadata, Ask records, or assessments for every
+      // historical moment. Legacy v1 documents are fetched individually only
+      // when they are encountered.
+      const projected = await this.collection(userId, 'projectSnapshots')
+        .where('projectId', '==', projectId)
+        .select('id', 'userId', 'projectId', 'sequence', 'createdAt', 'trigger', 'label', 'summary', 'schemaVersion', 'listSummary')
+        .get();
+      const summaries: ProjectSnapshotSummary[] = [];
+      const legacyRefs: FirebaseFirestore.DocumentReference[] = [];
+      projected.docs.forEach((doc) => {
+        const partial = this.fromFirestore<Partial<ProjectSnapshot>>(doc.data());
+        if (partial.projectId !== projectId) return;
+        if (partial.schemaVersion === 2 && 'listSummary' in partial && partial.listSummary) {
+          summaries.push(projectSnapshotToSummary(partial as ProjectSnapshot));
+        } else {
+          legacyRefs.push(doc.ref);
+        }
+      });
+      const legacySnapshots = await Promise.all(legacyRefs.map(async (ref) => {
+        const doc = await ref.get();
+        return doc.exists ? this.fromFirestore<ProjectSnapshot>(doc.data()!) : null;
+      }));
+      summaries.push(...legacySnapshots
+        .filter((snapshot): snapshot is ProjectSnapshot => snapshot !== null)
+        .filter((snapshot) => snapshot.projectId === projectId)
+        .map(projectSnapshotToSummary));
+      return summaries.sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt));
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
   }
 
   async getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null> {
@@ -297,6 +429,10 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async saveProjectSnapshot(userId: string, snapshot: ProjectSnapshot): Promise<void> {
+    const size = serializedProjectSnapshotSize(snapshot);
+    if (size > PROJECT_SNAPSHOT_MAX_BYTES) {
+      throw new StorageError(`Project snapshot is too large to store (${size} bytes).`, 'VALIDATION_ERROR');
+    }
     const ref = this.collection(userId, 'projectSnapshots').doc(snapshot.id);
     try {
       const existing = await ref.get();

@@ -407,6 +407,9 @@ export async function POST(request: Request) {
             type: 'ask_response_created',
             askMessageId: persistedResult.assistantMessageId,
             sourceId: persistedTurn.context.sourceId,
+            ...(persistedTurn.context.historyEventId
+              ? { historyEventId: persistedTurn.context.historyEventId }
+              : {}),
           },
           label: 'Ask response created',
           summary: 'An Ask conversation response was saved for this project.',

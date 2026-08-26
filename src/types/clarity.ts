@@ -310,7 +310,9 @@ export type ProjectHistoryEventType =
   | 'action_completed'
   | 'goal_changed'
   | 'focus_changed'
-  | 'context_changed';
+  | 'context_changed'
+  | 'ask_proposal_added'
+  | 'ask_proposal_dismissed';
 
 export type ProjectHistoryChangeKind =
   | 'learned'

@@ -37,6 +37,7 @@ import type { TodayQuestion } from '@/lib/today/sections';
 import { localQuestionPresentation } from '@/lib/today/questionPlans';
 import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
+import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
 import { DemoLoadingState } from '@/components/DemoLoadingState';
@@ -318,6 +319,29 @@ async function loadHarborHotelsCheckpointViaAPI(userId: string, checkpoint: 'ear
   };
 }
 
+async function createHarborHistoryDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+}> {
+  const res = await authFetch('/api/dev/harbor-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, fresh: true }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The Harbor history demo could not be created.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+  };
+}
+
 async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
   try {
     const res = await authFetch('/api/projects', {
@@ -421,6 +445,8 @@ export default function Home() {
   const [isLoadingHarborEarly, setIsLoadingHarborEarly] = useState(false);
   const [isLoadingHarborMiddle, setIsLoadingHarborMiddle] = useState(false);
   const [isLoadingHarborLate, setIsLoadingHarborLate] = useState(false);
+  const [isLoadingHarborHistoryDemo, setIsLoadingHarborHistoryDemo] = useState(false);
+  const [isLocalhostDeveloper, setIsLocalhostDeveloper] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
@@ -434,6 +460,9 @@ export default function Home() {
   const [gapsNavigationRequest, setGapsNavigationRequest] = useState<{ status: 'resolved'; key: number } | null>(null);
   const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
   const demoMode = auth.demoMode;
+  useEffect(() => {
+    setIsLocalhostDeveloper(isLocalhostBrowser());
+  }, []);
   const loadingDemoLabel = isLoadingCareerDemo
     ? 'Career demo'
     : isLoadingHackathonDemo
@@ -855,6 +884,24 @@ export default function Home() {
   const handleLoadHarborLate = useCallback(() => {
     void loadHarborCheckpoint('late', setIsLoadingHarborLate);
   }, [loadHarborCheckpoint]);
+
+  const handleCreateHarborHistoryDemo = useCallback(async () => {
+    setIsLoadingHarborHistoryDemo(true);
+    setDemoLoadError('');
+    try {
+      const result = await createHarborHistoryDemoViaAPI(userId);
+      setProjects(result.projects);
+      setProject(result.project);
+      setScope(result.scope);
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('scope');
+      setStorageMessage('');
+    } catch (caught) {
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The Harbor history demo could not be created.');
+    } finally {
+      setIsLoadingHarborHistoryDemo(false);
+    }
+  }, [userId]);
 
   const handleResetDemo = async () => {
     try {
@@ -1321,6 +1368,8 @@ export default function Home() {
         isLoadingHarborMiddle={isLoadingHarborMiddle}
         onLoadHarborLate={handleLoadHarborLate}
         isLoadingHarborLate={isLoadingHarborLate}
+        onCreateHarborHistoryDemo={isLocalhostDeveloper ? handleCreateHarborHistoryDemo : undefined}
+        isLoadingHarborHistoryDemo={isLoadingHarborHistoryDemo}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}

@@ -34,6 +34,8 @@ interface HeaderProps {
   isLoadingHarborMiddle?: boolean;
   onLoadHarborLate?: () => void;
   isLoadingHarborLate?: boolean;
+  onCreateHarborHistoryDemo?: () => void;
+  isLoadingHarborHistoryDemo?: boolean;
   onSelectProject: (projectId: string) => void;
   onSelectEverything: () => void;
   onOpenNewProject: () => void;
@@ -69,6 +71,8 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingHarborMiddle = false,
   onLoadHarborLate,
   isLoadingHarborLate = false,
+  onCreateHarborHistoryDemo,
+  isLoadingHarborHistoryDemo = false,
   onSelectProject,
   onSelectEverything,
   onOpenNewProject,
@@ -81,7 +85,7 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo || isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate;
+  const isAnyDemoLoading = isLoadingCareerDemo || isLoadingHackathonDemo || isLoadingKintaGenDemo || isLoadingBakeryDemo || isLoadingBakeryJourneyDemo || isLoadingNorthstarPilotDemo || isLoadingHarborEarly || isLoadingHarborMiddle || isLoadingHarborLate || isLoadingHarborHistoryDemo;
   const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '__everything__';
@@ -173,7 +177,7 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo || onLoadHarborEarly || onLoadHarborMiddle || onLoadHarborLate) && (
+          {(onLoadCareerDemo || onLoadHackathonDemo || onLoadKintaGenDemo || onLoadBakeryDemo || onLoadBakeryJourneyDemo || onLoadNorthstarPilotDemo || onLoadHarborEarly || onLoadHarborMiddle || onLoadHarborLate || onCreateHarborHistoryDemo) && (
             <div ref={demoMenuRef} className="relative">
               <button
                 type="button"
@@ -294,6 +298,22 @@ export const Header: React.FC<HeaderProps> = ({
                           {isLoadingHarborLate ? 'Building Harbor Hotels · Late…' : 'Harbor Hotels · Late'}
                         </button>
                       )}
+                    </div>
+                  )}
+                  {onCreateHarborHistoryDemo && (
+                    <div className="mt-1 border-t border-slate-800 pt-1">
+                      <p className="px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-slate-500">
+                        Developer fixtures
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setDemoMenuOpen(false); onCreateHarborHistoryDemo(); }}
+                        disabled={isAnyDemoLoading}
+                        className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-200 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {isLoadingHarborHistoryDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-emerald-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-emerald-300" />}
+                        {isLoadingHarborHistoryDemo ? 'Creating Harbor history demo…' : 'Create fresh Harbor history demo'}
+                      </button>
                     </div>
                   )}
                 </div>

@@ -18,6 +18,19 @@ const requestSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
 });
 
+function proposalHistoryEventId(
+  project: Awaited<ReturnType<typeof persistAskProposal>> | undefined,
+  assistantMessageId: string,
+  proposalId: string,
+): string | undefined {
+  const sourceId = `ask_proposal_${assistantMessageId}_${proposalId}`
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 240);
+  return [...(project?.historyEvents ?? [])]
+    .reverse()
+    .find((event) => event.sourceId === sourceId)?.id;
+}
+
 function errorResponse(error: unknown, status = 500) {
   return NextResponse.json({
     error: error instanceof Error ? error.message : 'Ask proposal action failed.',
@@ -91,6 +104,7 @@ export async function POST(request: Request) {
   });
 
   try {
+    let updatedProject: Awaited<ReturnType<typeof persistAskProposal>> | undefined;
     if (parsed.data.action === 'dismiss') {
       await storage.saveAskMessage(userId, messageWithProposal(updatedProposal));
     } else {
@@ -98,7 +112,7 @@ export async function POST(request: Request) {
       // mutation and its durable proposal state cannot diverge on reload.
       await storage.saveAskMessage(userId, messageWithProposal(updatedProposal));
       try {
-        await persistAskProposal({
+        updatedProject = await persistAskProposal({
           userId,
           projectId: parsed.data.projectId,
           assistantMessageId: message.id,
@@ -112,6 +126,11 @@ export async function POST(request: Request) {
     }
     if (parsed.data.projectId) {
       try {
+        const historyEventId = proposalHistoryEventId(
+          updatedProject,
+          message.id,
+          updatedProposal.id ?? parsed.data.proposalId,
+        );
         await createProjectSnapshot({
           userId,
           projectId: parsed.data.projectId,
@@ -119,6 +138,7 @@ export async function POST(request: Request) {
             type: parsed.data.action === 'add' ? 'ask_proposal_added' : 'ask_proposal_dismissed',
             askMessageId: message.id,
             proposalId: updatedProposal.id,
+            ...(historyEventId ? { historyEventId } : {}),
           },
           label: parsed.data.action === 'add' ? 'Ask proposal added' : 'Ask proposal dismissed',
           summary: updatedProposal.text,

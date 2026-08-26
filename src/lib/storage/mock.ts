@@ -17,9 +17,19 @@ import {
   FocusAssessmentCacheRecord,
   AskSuggestionsCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
+  StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
-import type { ProjectSnapshot } from '@/types/projectSnapshot';
+import {
+  PROJECT_SNAPSHOT_MAX_BYTES,
+  projectSnapshotToSummary,
+  snapshotRecordContentEqual,
+  snapshotReferencesRecord,
+  serializedProjectSnapshotSize,
+  type ProjectSnapshot,
+  type ProjectSnapshotSummary,
+  type SnapshotReferencedRecordType,
+} from '@/types/projectSnapshot';
 
 interface MockDatabase {
   users: Record<
@@ -63,6 +73,30 @@ const EMPTY_USER = {
   projectSnapshots: [],
 };
 
+function snapshotReferences(
+  snapshots: ProjectSnapshot[],
+  type: SnapshotReferencedRecordType,
+  id: string,
+): boolean {
+  return snapshots.some((snapshot) => snapshotReferencesRecord(snapshot, type, id));
+}
+
+function assertReferencedRecordCanChange(
+  snapshots: ProjectSnapshot[],
+  type: SnapshotReferencedRecordType,
+  existing: unknown,
+  next: unknown,
+  id: string,
+): void {
+  if (!snapshotReferences(snapshots, type, id)) return;
+  if (!existing) {
+    throw new StorageError(`This ${type} is retained because a project snapshot references it.`, 'VALIDATION_ERROR');
+  }
+  if (!snapshotRecordContentEqual(type, existing, next)) {
+    throw new StorageError(`This ${type} is immutable because a project snapshot references it.`, 'VALIDATION_ERROR');
+  }
+}
+
 export class MockStorageProvider implements StorageProvider {
   constructor(
     private readonly filePath = process.env.GAPSWISE_MOCK_STORAGE_PATH?.trim()
@@ -83,11 +117,33 @@ export class MockStorageProvider implements StorageProvider {
     const db = await this.readDb();
     const current = db.users[userId] ?? { ...EMPTY_USER };
     const nextProjectCollections = projectToCollections(userId, project);
+    const currentSources = new Map(current.sources.map((source) => [source.id, source]));
+    nextProjectCollections.sources.forEach((source) => {
+      assertReferencedRecordCanChange(
+        current.projectSnapshots,
+        'source',
+        currentSources.get(source.id),
+        source,
+        source.id,
+      );
+    });
+    const incomingSourceIds = new Set(nextProjectCollections.sources.map((source) => source.id));
+    const retainedSnapshotSources = current.sources.filter((source) =>
+      source.projectId === project.id
+      && !incomingSourceIds.has(source.id)
+      && current.projectSnapshots.some((snapshot) => {
+        if ('projectState' in snapshot) return snapshot.references.sourceIds.includes(source.id);
+        return snapshot.project.sources.some((item) => item.id === source.id);
+      }),
+    );
     db.users[userId] = {
       contexts: this.replaceProjectRecords(current.contexts, nextProjectCollections.contexts, project.id),
       nodes: this.replaceProjectRecords(current.nodes, nextProjectCollections.nodes, project.id),
       edges: this.replaceProjectRecords(current.edges, nextProjectCollections.edges, project.id),
-      sources: this.replaceProjectRecords(current.sources, nextProjectCollections.sources, project.id),
+      sources: [
+        ...this.replaceProjectRecords(current.sources, nextProjectCollections.sources, project.id),
+        ...retainedSnapshotSources,
+      ],
       conversations: this.replaceProjectRecords(
         current.conversations,
         nextProjectCollections.conversations,
@@ -171,10 +227,23 @@ export class MockStorageProvider implements StorageProvider {
   }
 
   async saveSource(userId: string, source: FirestoreSource): Promise<void> {
+    const user = await this.getUser(userId);
+    assertReferencedRecordCanChange(
+      user.projectSnapshots,
+      'source',
+      user.sources.find((candidate) => candidate.id === source.id),
+      source,
+      source.id,
+    );
     await this.upsert(userId, 'sources', { ...source, userId });
   }
 
   async deleteSource(userId: string, sourceId: string): Promise<void> {
+    const user = await this.getUser(userId);
+    const referenced = snapshotReferences(user.projectSnapshots, 'source', sourceId);
+    if (referenced) {
+      throw new StorageError('This source is retained because a project snapshot references it.', 'VALIDATION_ERROR');
+    }
     await this.remove(userId, 'sources', sourceId);
   }
 
@@ -191,12 +260,26 @@ export class MockStorageProvider implements StorageProvider {
   }
 
   async saveAskChat(userId: string, chat: AskChatSession): Promise<void> {
+    const user = await this.getUser(userId);
+    assertReferencedRecordCanChange(
+      user.projectSnapshots,
+      'chat',
+      user.askChats.find((candidate) => candidate.id === chat.id),
+      chat,
+      chat.id,
+    );
     await this.upsert(userId, 'askChats', { ...chat, userId });
   }
 
   async deleteAskChat(userId: string, chatId: string): Promise<void> {
     const db = await this.readDb();
     const user = db.users[userId] ?? { ...EMPTY_USER };
+    const referenced = snapshotReferences(user.projectSnapshots, 'chat', chatId)
+      || user.askMessages.some((message) => message.chatId === chatId && snapshotReferences(user.projectSnapshots, 'message', message.id))
+      || user.askResearch.some((research) => research.chatId === chatId && snapshotReferences(user.projectSnapshots, 'research', research.id));
+    if (referenced) {
+      throw new StorageError('This chat is retained because a project snapshot references it.', 'VALIDATION_ERROR');
+    }
     user.askChats = user.askChats.filter((chat) => chat.id !== chatId);
     user.askMessages = user.askMessages.filter((message) => message.chatId !== chatId);
     user.askResearch = user.askResearch.filter((research) => research.chatId !== chatId);
@@ -209,6 +292,14 @@ export class MockStorageProvider implements StorageProvider {
   }
 
   async saveAskMessage(userId: string, message: AskChatMessage): Promise<void> {
+    const user = await this.getUser(userId);
+    assertReferencedRecordCanChange(
+      user.projectSnapshots,
+      'message',
+      user.askMessages.find((candidate) => candidate.id === message.id),
+      message,
+      message.id,
+    );
     await this.upsert(userId, 'askMessages', { ...message, userId });
   }
 
@@ -217,6 +308,14 @@ export class MockStorageProvider implements StorageProvider {
   }
 
   async saveAskResearch(userId: string, research: AskResearchEvidence): Promise<void> {
+    const user = await this.getUser(userId);
+    assertReferencedRecordCanChange(
+      user.projectSnapshots,
+      'research',
+      user.askResearch.find((candidate) => candidate.id === research.id),
+      research,
+      research.id,
+    );
     await this.upsert(userId, 'askResearch', { ...research, userId });
   }
 
@@ -244,10 +343,11 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
   }
 
-  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
+  async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshotSummary[]> {
     return (await this.getUser(userId)).projectSnapshots
       .filter((snapshot) => snapshot.projectId === projectId)
-      .sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt));
+      .sort((left, right) => left.sequence - right.sequence || left.createdAt.localeCompare(right.createdAt))
+      .map(projectSnapshotToSummary);
   }
 
   async getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null> {
@@ -255,6 +355,10 @@ export class MockStorageProvider implements StorageProvider {
   }
 
   async saveProjectSnapshot(userId: string, snapshot: ProjectSnapshot): Promise<void> {
+    const size = serializedProjectSnapshotSize(snapshot);
+    if (size > PROJECT_SNAPSHOT_MAX_BYTES) {
+      throw new StorageError(`Project snapshot is too large to store (${size} bytes).`, 'VALIDATION_ERROR');
+    }
     const existing = await this.getProjectSnapshot(userId, snapshot.id);
     if (existing) {
       if (JSON.stringify(existing) !== JSON.stringify(snapshot)) {

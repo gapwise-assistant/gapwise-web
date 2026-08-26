@@ -54,6 +54,16 @@ function errorResponse(error: unknown) {
   );
 }
 
+function latestResolutionHistoryEventId(
+  project: Awaited<ReturnType<typeof answerQuestion>>['context'],
+  type: 'gap_resolved' | 'gap_reopened' | 'answer_edited',
+  nodeId?: string,
+): string | undefined {
+  return [...(project.historyEvents ?? [])]
+    .reverse()
+    .find((event) => event.type === type && (!nodeId || event.primaryNodeId === nodeId))?.id;
+}
+
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
@@ -64,7 +74,13 @@ export async function POST(request: Request) {
         await createProjectSnapshot({
           userId,
           projectId: result.projectId,
-          trigger: { type: 'gap_resolved', nodeId: result.resolvedNodeId },
+          trigger: {
+            type: 'gap_resolved',
+            nodeId: result.resolvedNodeId,
+            ...(latestResolutionHistoryEventId(result.context, 'gap_resolved', result.resolvedNodeId)
+              ? { historyEventId: latestResolutionHistoryEventId(result.context, 'gap_resolved', result.resolvedNodeId) }
+              : {}),
+          },
           label: 'Question resolved',
           summary: body.answer,
         });
@@ -103,7 +119,13 @@ export async function PATCH(request: Request) {
           await createProjectSnapshot({
             userId,
             projectId: result.projectId,
-            trigger: { type: 'gap_reopened', nodeId: body.nodeId },
+            trigger: {
+              type: 'gap_reopened',
+              nodeId: body.nodeId,
+              ...(latestResolutionHistoryEventId(result.context, 'gap_reopened', body.nodeId)
+                ? { historyEventId: latestResolutionHistoryEventId(result.context, 'gap_reopened', body.nodeId) }
+                : {}),
+            },
             label: 'Question reopened',
             summary: body.question,
           });
@@ -123,7 +145,13 @@ export async function PATCH(request: Request) {
       await createProjectSnapshot({
         userId,
         projectId: result.projectId,
-        trigger: { type: 'answer_edited', nodeId: body.nodeId },
+        trigger: {
+          type: 'answer_edited',
+          nodeId: body.nodeId,
+          ...(latestResolutionHistoryEventId(result.context, 'answer_edited', body.nodeId)
+            ? { historyEventId: latestResolutionHistoryEventId(result.context, 'answer_edited', body.nodeId) }
+            : {}),
+        },
         label: 'Answer edited',
         summary: body.answer,
       });

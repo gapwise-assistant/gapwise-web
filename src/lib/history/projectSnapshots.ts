@@ -26,9 +26,18 @@ import { listTraces } from '@/lib/observability/trace';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
-import type { ProjectSnapshot, SnapshotExecutionRecord } from '@/types/projectSnapshot';
+import {
+  PROJECT_SNAPSHOT_MAX_BYTES,
+  isProjectSnapshotV2,
+  serializedProjectSnapshotSize,
+  type MaterializedProjectSnapshot,
+  type ProjectSnapshot,
+  type ProjectSnapshotV2,
+  type SnapshotProjectState,
+  type SnapshotSourceMetadata,
+} from '@/types/projectSnapshot';
 
-const SNAPSHOT_SCHEMA_VERSION = 1;
+const SNAPSHOT_SCHEMA_VERSION = 2;
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -38,93 +47,56 @@ function sorted<T>(values: T[], key: (value: T) => string): T[] {
   return values.slice().sort((left, right) => key(left).localeCompare(key(right)));
 }
 
-function semanticProjectState(project: Project): unknown {
+function sourceMetadata(source: Project['sources'][number]): SnapshotSourceMetadata {
+  const { content: _content, processing_log: _processingLog, ...metadata } = clone(source);
+  return metadata;
+}
+
+export function compactProjectState(project: Project): SnapshotProjectState {
+  const state = clone(project);
   return {
-    title: project.title,
-    goal: project.goal,
-    deadline: project.deadline ?? null,
-    status: project.status ?? 'active',
-    one_sentence_context: project.one_sentence_context ?? null,
-    nodes: sorted(project.nodes, (node) => node.id).map((node) => ({
-      id: node.id,
-      type: node.type,
-      text: node.text,
-      status: node.status,
-      confidence: node.confidence,
-      impact: node.impact,
-      source_refs: sorted(node.source_refs, (value) => value),
-      decision_outcome: node.decision_outcome ?? null,
-      canonical_node_id: node.canonical_node_id ?? null,
-      canonical_question_id: node.canonical_question_id ?? null,
-    })),
-    edges: sorted(project.edges, (edge) => `${edge.source}:${edge.type}:${edge.target}`).map((edge) => ({
-      source: edge.source,
-      target: edge.target,
-      type: edge.type,
-    })),
-    sources: sorted(project.sources, (source) => source.id).map((source) => ({
-      id: source.id,
-      filename: source.filename,
-      type: source.type,
-      content: source.content,
-      derived_node_ids: sorted(source.derived_node_ids, (value) => value),
-      extraction_summary: source.extraction_summary ?? null,
-    })),
-    history: sorted(project.history, (entry) => `${entry.question}\u0000${entry.timestamp}\u0000${entry.answer}`).map((entry) => ({
-      question: entry.question,
-      answer: entry.answer,
-      graph_diff_summary: entry.graph_diff_summary,
-      nodeId: entry.nodeId ?? null,
-    })),
-    historyEvents: sorted(project.historyEvents ?? [], (event) => event.id).map((event) => ({
-      type: event.type,
-      title: event.title,
-      summary: event.summary ?? null,
-      primaryNodeId: event.primaryNodeId ?? null,
-      sourceNodeIds: sorted(event.sourceNodeIds ?? [], (value) => value),
-      affectedNodeIds: sorted(event.affectedNodeIds ?? [], (value) => value),
-      changes: (event.changes ?? []).map((change) => ({
-        kind: change.kind,
-        text: change.text,
-        nodeId: change.nodeId ?? null,
-      })),
-    })),
+    ...state,
+    sources: state.sources.map(sourceMetadata),
+  } as SnapshotProjectState;
+}
+
+function stableProjectState(project: Project): unknown {
+  const state = compactProjectState(project);
+  return {
+    ...state,
+    nodes: sorted(state.nodes, (node) => node.id),
+    edges: sorted(state.edges, (edge) => `${edge.source}:${edge.type}:${edge.target}`),
+    sources: sorted(state.sources, (source) => source.id),
+    history: sorted(state.history, (entry) => `${entry.question}\u0000${entry.timestamp}\u0000${entry.answer}`),
+    historyEvents: sorted(state.historyEvents ?? [], (event) => event.id),
   };
 }
 
-function proposalState(messages: AskChatMessage[]): unknown {
-  return sorted(messages, (message) => message.id).map((message) => ({
-    id: message.id,
-    chatId: message.chatId,
-    role: message.role,
-    text: message.text,
-    outcome: message.outcome ?? null,
-    conclusion: message.conclusion ?? null,
-    contextProposals: (message.contextProposals ?? message.proposals ?? []).map((proposal) => ({
-      id: proposal.id ?? null,
-      type: proposal.type,
-      text: proposal.text,
-      status: proposal.status,
-      confirmationStatus: proposal.confirmationStatus ?? 'pending',
-      sourceMessageId: proposal.sourceMessageId ?? null,
-    })),
-  }));
+function proposalConfirmationStatus(proposal: AskContextProposal): 'pending' | 'added' | 'dismissed' {
+  const value = proposal.confirmationStatus ?? (proposal.status as unknown);
+  if (value === 'added') return 'added';
+  if (value === 'dismissed') return 'dismissed';
+  return 'pending';
 }
 
-function idFor(prefix: string, value: string, projectId: string): string {
-  return `${prefix}_${projectId}_${value}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+function proposalStates(messages: AskChatMessage[]): ProjectSnapshotV2['proposalStates'] {
+  return messages.flatMap((message) =>
+    (message.contextProposals ?? message.proposals ?? [])
+      .map((proposal, index) => ({
+        proposalId: proposal.id ?? `${message.id}:proposal:${index}`,
+        messageId: message.id,
+        confirmationStatus: proposalConfirmationStatus(proposal),
+      })),
+  );
 }
 
-function validIso(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : value;
+function sourceReferenceIds(project: Project): string[] {
+  return [...new Set(project.sources.map((source) => source.id))].sort((left, right) => left.localeCompare(right));
 }
 
 function snapshotCreatedAt(
   project: Project,
-  trigger: ProjectSnapshot['trigger'],
-  chats: AskChatSession[],
+  trigger: ProjectSnapshotV2['trigger'],
   messages: AskChatMessage[],
 ): string {
   const historyEvent = trigger.historyEventId
@@ -143,17 +115,36 @@ function snapshotCreatedAt(
     ? messages.find((candidate) =>
       (candidate.contextProposals ?? candidate.proposals ?? []).some((proposal) => proposal.id === trigger.proposalId))
     : undefined;
+  const candidates = [
+    historyEvent?.createdAt,
+    message?.createdAt,
+    proposalMessage?.createdAt,
+    source?.processed_at,
+    source?.extracted_at,
+    node?.updated_at,
+    project.updated_at,
+    project.created_at,
+  ].filter((value): value is string => Boolean(value));
+  const firstValid = candidates.find((value) => !Number.isNaN(new Date(value).getTime()));
+  return firstValid ?? new Date(0).toISOString();
+}
 
-  return validIso(
-    historyEvent?.createdAt
-      ?? message?.createdAt
-      ?? proposalMessage?.createdAt
-      ?? source?.processed_at
-      ?? source?.extracted_at
-      ?? node?.updated_at
-      ?? project.updated_at
-      ?? project.created_at,
-  ) ?? new Date(0).toISOString();
+function traceIdsForProject(userId: string, project: Project): string[] {
+  const projectOwnedIds = new Set([
+    project.id,
+    ...project.nodes.map((node) => node.id),
+    ...project.sources.map((source) => source.id),
+    ...(project.historyEvents ?? []).map((event) => event.id),
+  ]);
+  return listTraces(userId)
+    .filter((trace) => trace.decisionMapActivity?.projectId === project.id
+      || trace.contextIds.some((id) => projectOwnedIds.has(id))
+      || trace.askGraphReasoningContext?.selectedNodeIds.some((id) => projectOwnedIds.has(id)))
+    .map((trace) => trace.id);
+}
+
+function idFor(prefix: string, value: string, projectId: string): string {
+  return `${prefix}_${projectId}_${value}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
 }
 
 function nextProjectTitle(baseTitle: string, projects: Project[]): string {
@@ -174,13 +165,29 @@ function mapValue(value: string | undefined, maps: Map<string, string>[]): strin
   return value;
 }
 
-function remapDeep<T>(value: T, maps: Map<string, string>[]): T {
-  if (typeof value === 'string') return (mapValue(value, maps) ?? value) as T;
-  if (Array.isArray(value)) return value.map((item) => remapDeep(item, maps)) as T;
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, remapDeep(item, maps)]),
-  ) as T;
+function remapHistoryNodeSnapshot(snapshot: HistoryNodeSnapshot, nodeIds: Map<string, string>): HistoryNodeSnapshot {
+  return { ...snapshot, nodeId: mapValue(snapshot.nodeId, [nodeIds]) };
+}
+
+function remapHistoryChange(change: ProjectHistoryChange, nodeIds: Map<string, string>): ProjectHistoryChange {
+  return {
+    ...change,
+    nodeId: mapValue(change.nodeId, [nodeIds]),
+    snapshot: change.snapshot ? remapHistoryNodeSnapshot(change.snapshot, nodeIds) : undefined,
+  };
+}
+
+function remapHistoryFocus(
+  focus: ProjectHistoryFocus,
+  nodeIds: Map<string, string>,
+  sourceIds: Map<string, string>,
+): ProjectHistoryFocus {
+  return {
+    ...focus,
+    actionNodeId: mapValue(focus.actionNodeId, [nodeIds]),
+    sourceNodeIds: focus.sourceNodeIds?.map((id) => nodeIds.get(id) ?? id),
+    sourceIds: focus.sourceIds?.map((id) => sourceIds.get(id) ?? id),
+  };
 }
 
 function remapHistoryEvent(
@@ -199,60 +206,14 @@ function remapHistoryEvent(
     affectedNodeIds: event.affectedNodeIds?.map((id) => nodeIds.get(id) ?? id),
     affectedNodes: event.affectedNodes?.map((node) => remapHistoryNodeSnapshot(node, nodeIds)),
     primaryNodeId: mapValue(event.primaryNodeId, [nodeIds]),
-    primarySnapshot: event.primarySnapshot
-      ? remapHistoryNodeSnapshot(event.primarySnapshot, nodeIds)
-      : undefined,
+    primarySnapshot: event.primarySnapshot ? remapHistoryNodeSnapshot(event.primarySnapshot, nodeIds) : undefined,
     changes: event.changes?.map((change) => remapHistoryChange(change, nodeIds)),
-    focusBefore: event.focusBefore
-      ? remapHistoryFocus(event.focusBefore, nodeIds, sourceIds)
-      : undefined,
-    focusAfter: event.focusAfter
-      ? remapHistoryFocus(event.focusAfter, nodeIds, sourceIds)
-      : undefined,
+    focusBefore: event.focusBefore ? remapHistoryFocus(event.focusBefore, nodeIds, sourceIds) : undefined,
+    focusAfter: event.focusAfter ? remapHistoryFocus(event.focusAfter, nodeIds, sourceIds) : undefined,
   };
 }
 
-function remapHistoryNodeSnapshot(
-  snapshot: HistoryNodeSnapshot,
-  nodeIds: Map<string, string>,
-): HistoryNodeSnapshot {
-  return {
-    ...snapshot,
-    nodeId: mapValue(snapshot.nodeId, [nodeIds]),
-  };
-}
-
-function remapHistoryChange(
-  change: ProjectHistoryChange,
-  nodeIds: Map<string, string>,
-): ProjectHistoryChange {
-  return {
-    ...change,
-    nodeId: mapValue(change.nodeId, [nodeIds]),
-    snapshot: change.snapshot
-      ? remapHistoryNodeSnapshot(change.snapshot, nodeIds)
-      : undefined,
-  };
-}
-
-function remapHistoryFocus(
-  focus: ProjectHistoryFocus,
-  nodeIds: Map<string, string>,
-  sourceIds: Map<string, string>,
-): ProjectHistoryFocus {
-  return {
-    ...focus,
-    actionNodeId: mapValue(focus.actionNodeId, [nodeIds]),
-    sourceNodeIds: focus.sourceNodeIds?.map((id) => nodeIds.get(id) ?? id),
-    sourceIds: focus.sourceIds?.map((id) => sourceIds.get(id) ?? id),
-  };
-}
-
-function remapDecisionValueTarget(
-  target: DecisionValueTarget,
-  nodeIds: Map<string, string>,
-  edgeIds: Map<string, string>,
-): DecisionValueTarget {
+function remapDecisionValueTarget(target: DecisionValueTarget, nodeIds: Map<string, string>, edgeIds: Map<string, string>): DecisionValueTarget {
   return {
     ...target,
     node_id: nodeIds.get(target.node_id) ?? target.node_id,
@@ -274,26 +235,19 @@ function remapCandidateGap(
     decision_value: gap.decision_value
       ? {
         ...gap.decision_value,
-        affected_targets: gap.decision_value.affected_targets.map((target) =>
-          remapDecisionValueTarget(target, nodeIds, edgeIds)),
+        affected_targets: gap.decision_value.affected_targets.map((target) => remapDecisionValueTarget(target, nodeIds, edgeIds)),
         strongest_path: gap.decision_value.strongest_path
           ? remapDecisionValueTarget(gap.decision_value.strongest_path, nodeIds, edgeIds)
           : null,
       }
       : undefined,
     guidance: gap.guidance
-      ? {
-        ...gap.guidance,
-        supportingIds: gap.guidance.supportingIds.map((id) => mapValue(id, [nodeIds, sourceIds]) ?? id),
-      }
+      ? { ...gap.guidance, supportingIds: gap.guidance.supportingIds.map((id) => mapValue(id, [nodeIds, sourceIds]) ?? id) }
       : undefined,
   };
 }
 
-function remapFocusAssessment(
-  assessment: FocusAssessment,
-  maps: Record<string, Map<string, string>>,
-): FocusAssessment {
+function remapFocusAssessment(assessment: FocusAssessment, maps: Record<string, Map<string, string>>): FocusAssessment {
   return {
     ...clone(assessment),
     targetNodeId: mapValue(assessment.targetNodeId, [maps.nodeIds]),
@@ -305,19 +259,12 @@ function remapFocusAssessment(
   };
 }
 
-function remapOverviewAssessment(
-  assessment: ProjectOverviewAssessment,
-  maps: Record<string, Map<string, string>>,
-): ProjectOverviewAssessment {
+function remapOverviewAssessment(assessment: ProjectOverviewAssessment, maps: Record<string, Map<string, string>>): ProjectOverviewAssessment {
   const nodeIds = (ids: string[]) => ids.map((id) => maps.nodeIds.get(id) ?? id);
   const historyIds = (ids: string[]) => ids.map((id) => maps.historyIds.get(id) ?? id);
   return {
     ...clone(assessment),
-    meaningfulChanges: assessment.meaningfulChanges.map((change) => ({
-      ...change,
-      sourceNodeIds: nodeIds(change.sourceNodeIds),
-      historyEventIds: historyIds(change.historyEventIds),
-    })),
+    meaningfulChanges: assessment.meaningfulChanges.map((change) => ({ ...change, sourceNodeIds: nodeIds(change.sourceNodeIds), historyEventIds: historyIds(change.historyEventIds) })),
     goalImpact: {
       ...assessment.goalImpact,
       positiveFactors: assessment.goalImpact.positiveFactors.map((factor) => ({ ...factor, sourceNodeIds: nodeIds(factor.sourceNodeIds) })),
@@ -333,7 +280,7 @@ function remapProject(
   source: Project,
   projectId: string,
   title: string,
-  snapshot: ProjectSnapshot,
+  sourceSnapshot: ProjectSnapshot,
   requestId?: string,
 ): { project: Project; maps: Record<string, Map<string, string>> } {
   const projectIds = new Map([[source.id, projectId]]);
@@ -341,15 +288,6 @@ function remapProject(
   const edgeIds = new Map(source.edges.map((edge) => [edge.id, idFor('edge', edge.id, projectId)]));
   const sourceIds = new Map(source.sources.map((item) => [item.id, idFor('source', item.id, projectId)]));
   const historyIds = new Map((source.historyEvents ?? []).map((event) => [event.id, idFor('history', event.id, projectId)]));
-  const chats = snapshot.ask.chats;
-  const messages = snapshot.ask.messages;
-  const research = snapshot.ask.research;
-  const chatIds = new Map(chats.map((chat) => [chat.id, idFor('chat', chat.id, projectId)]));
-  const messageIds = new Map(messages.map((message) => [message.id, idFor('message', message.id, projectId)]));
-  const proposalIds = new Map(messages.flatMap((message) => (message.contextProposals ?? message.proposals ?? [])
-    .filter((proposal): proposal is typeof proposal & { id: string } => Boolean(proposal.id))
-    .map((proposal) => [proposal.id, idFor('proposal', proposal.id, projectId)])));
-  const researchIds = new Map(research.map((item) => [item.id, idFor('research', item.id, projectId)]));
   const now = new Date().toISOString();
   const branched: Project = {
     ...clone(source),
@@ -357,21 +295,10 @@ function remapProject(
     title,
     created_at: now,
     updated_at: now,
-    active_question: source.active_question
-      ? remapCandidateGap(source.active_question, nodeIds, edgeIds, sourceIds)
-      : null,
-    history: source.history.map((entry) => ({
-      ...entry,
-      projectId,
-      nodeId: mapValue(entry.nodeId, [nodeIds]),
-    })),
-    historyEvents: (source.historyEvents ?? []).map((event) =>
-      remapHistoryEvent(event, projectId, nodeIds, sourceIds, historyIds)),
-    sources: source.sources.map((item) => ({
-      ...item,
-      id: sourceIds.get(item.id) ?? item.id,
-      derived_node_ids: item.derived_node_ids.map((id) => nodeIds.get(id) ?? id),
-    })),
+    active_question: source.active_question ? remapCandidateGap(source.active_question, nodeIds, edgeIds, sourceIds) : null,
+    history: source.history.map((entry) => ({ ...entry, projectId, nodeId: mapValue(entry.nodeId, [nodeIds]) })),
+    historyEvents: (source.historyEvents ?? []).map((event) => remapHistoryEvent(event, projectId, nodeIds, sourceIds, historyIds)),
+    sources: source.sources.map((item) => ({ ...item, id: sourceIds.get(item.id) ?? item.id, derived_node_ids: item.derived_node_ids.map((id) => nodeIds.get(id) ?? id) })),
     nodes: source.nodes.map((node) => ({
       ...node,
       id: nodeIds.get(node.id) ?? node.id,
@@ -379,18 +306,13 @@ function remapProject(
       canonical_node_id: mapValue(node.canonical_node_id, [nodeIds]),
       canonical_question_id: mapValue(node.canonical_question_id, [nodeIds]),
     })),
-    edges: source.edges.map((edge) => ({
-      ...edge,
-      id: edgeIds.get(edge.id) ?? edge.id,
-      source: nodeIds.get(edge.source) ?? edge.source,
-      target: nodeIds.get(edge.target) ?? edge.target,
-    })),
+    edges: source.edges.map((edge) => ({ ...edge, id: edgeIds.get(edge.id) ?? edge.id, source: nodeIds.get(edge.source) ?? edge.source, target: nodeIds.get(edge.target) ?? edge.target })),
     branch: {
       sourceProjectId: source.id,
-      sourceSnapshotId: snapshot.id,
+      sourceSnapshotId: sourceSnapshot.id,
       sourceProjectTitle: source.title,
       branchedAt: now,
-      snapshotCreatedAt: snapshot.createdAt,
+      snapshotCreatedAt: sourceSnapshot.createdAt,
       ...(requestId ? { requestId } : {}),
     },
   };
@@ -400,86 +322,62 @@ function remapProject(
     createdAt: now,
     type: 'project_branched',
     title: `Created from ${source.title}`,
-    summary: `Created from the historical moment on ${new Date(snapshot.createdAt).toLocaleString()}.`,
+    summary: `Created from the historical moment on ${new Date(sourceSnapshot.createdAt).toLocaleString()}.`,
   };
   branched.historyEvents = [...(branched.historyEvents ?? []), branchEvent];
-  return { project: branched, maps: { projectIds, nodeIds, edgeIds, sourceIds, historyIds, chatIds, messageIds, proposalIds, researchIds } };
+  return { project: branched, maps: { projectIds, nodeIds, edgeIds, sourceIds, historyIds } };
 }
 
-function remapAskTarget(
-  target: AskTarget | undefined,
-  nodeIds: Map<string, string>,
-): AskTarget | undefined {
-  if (!target) return undefined;
-  return {
-    ...target,
-    id: nodeIds.get(target.id) ?? target.id,
-  };
+function remapAskTarget(target: AskTarget | undefined, nodeIds: Map<string, string>): AskTarget | undefined {
+  return target ? { ...target, id: nodeIds.get(target.id) ?? target.id } : undefined;
 }
 
-function remapAskSource(
-  source: AskSource,
-  nodeIds: Map<string, string>,
-  sourceIds: Map<string, string>,
-): AskSource {
-  return {
-    ...source,
-    id: mapValue(source.id, [nodeIds, sourceIds]) ?? source.id,
-  };
-}
-
-function remapAskProposal(
-  proposal: AskContextProposal,
-  messageIds: Map<string, string>,
-  proposalIds: Map<string, string>,
-): AskContextProposal {
-  return {
-    ...proposal,
-    id: proposal.id ? proposalIds.get(proposal.id) ?? proposal.id : undefined,
-    sourceMessageId: proposal.sourceMessageId
-      ? messageIds.get(proposal.sourceMessageId) ?? proposal.sourceMessageId
-      : undefined,
-  };
+function remapAskSource(source: AskSource, nodeIds: Map<string, string>, sourceIds: Map<string, string>): AskSource {
+  return { ...source, id: mapValue(source.id, [nodeIds, sourceIds]) ?? source.id };
 }
 
 function remapAsk(
-  snapshot: ProjectSnapshot,
+  ask: MaterializedProjectSnapshot['ask'],
   project: Project,
   maps: Record<string, Map<string, string>>,
-): { chats: AskChatSession[]; messages: AskChatMessage[]; research: AskResearchEvidence[] } {
-  const chats = snapshot.ask.chats.map((chat) => ({
+): MaterializedProjectSnapshot['ask'] {
+  const chatIds = new Map(ask.chats.map((chat) => [chat.id, idFor('chat', chat.id, project.id)]));
+  const messageIds = new Map(ask.messages.map((message) => [message.id, idFor('message', message.id, project.id)]));
+  const proposalIds = new Map(ask.messages.flatMap((message) => (message.contextProposals ?? message.proposals ?? [])
+    .filter((proposal): proposal is AskContextProposal & { id: string } => Boolean(proposal.id))
+    .map((proposal) => [proposal.id, idFor('proposal', proposal.id, project.id)])));
+  const researchIds = new Map(ask.research.map((item) => [item.id, idFor('research', item.id, project.id)]));
+  const chats = ask.chats.map((chat) => ({
     ...clone(chat),
-    id: maps.chatIds.get(chat.id) ?? chat.id,
+    id: chatIds.get(chat.id) ?? chat.id,
     projectId: project.id,
     target: remapAskTarget(chat.target, maps.nodeIds),
-    // ADK sessions are external execution state and must not be reused by a branch.
     adkSessionId: undefined,
   }));
-  const messages = snapshot.ask.messages.map((message) => {
+  const messages = ask.messages.map((message) => {
     const proposals = (message.contextProposals ?? message.proposals ?? []).map((proposal) => ({
-      ...remapAskProposal(proposal, maps.messageIds, maps.proposalIds),
+      ...clone(proposal),
+      id: proposal.id ? proposalIds.get(proposal.id) ?? proposal.id : undefined,
+      sourceMessageId: proposal.sourceMessageId ? messageIds.get(proposal.sourceMessageId) ?? proposal.sourceMessageId : undefined,
     }));
     return {
       ...clone(message),
-      id: maps.messageIds.get(message.id) ?? message.id,
-      chatId: maps.chatIds.get(message.chatId) ?? message.chatId,
+      id: messageIds.get(message.id) ?? message.id,
+      chatId: chatIds.get(message.chatId) ?? message.chatId,
       projectId: project.id,
       resolvesQuestionId: mapValue(message.resolvesQuestionId, [maps.nodeIds]),
       openQuestionIds: message.openQuestionIds?.map((id) => maps.nodeIds.get(id) ?? id),
-      openQuestions: message.openQuestions?.map((question) => ({
-        ...question,
-        id: maps.nodeIds.get(question.id) ?? question.id,
-      })),
+      openQuestions: message.openQuestions?.map((question) => ({ ...question, id: maps.nodeIds.get(question.id) ?? question.id })),
       sources: message.sources.map((source) => remapAskSource(source, maps.nodeIds, maps.sourceIds)),
       contextProposals: proposals,
       proposals,
     };
   });
-  const research = snapshot.ask.research.map((item) => ({
+  const research = ask.research.map((item) => ({
     ...clone(item),
-    id: maps.researchIds.get(item.id) ?? item.id,
-    chatId: maps.chatIds.get(item.chatId) ?? item.chatId,
-    assistantMessageId: maps.messageIds.get(item.assistantMessageId) ?? item.assistantMessageId,
+    id: researchIds.get(item.id) ?? item.id,
+    chatId: chatIds.get(item.chatId) ?? item.chatId,
+    assistantMessageId: messageIds.get(item.assistantMessageId) ?? item.assistantMessageId,
     projectId: project.id,
     targetQuestionId: mapValue(item.targetQuestionId, [maps.nodeIds]),
     targetDecisionId: mapValue(item.targetDecisionId, [maps.nodeIds]),
@@ -488,16 +386,7 @@ function remapAsk(
   return { chats, messages, research };
 }
 
-async function persistedAssessments(
-  userId: string,
-  project: Project,
-  askMessages: AskChatMessage[],
-): Promise<{
-  focus: FocusAssessment | null;
-  overview: ProjectSnapshot['assessments']['overview'];
-  today: ProjectSnapshot['assessments']['today'];
-  execution: SnapshotExecutionRecord[];
-}> {
+async function persistedAssessments(userId: string, project: Project): Promise<ProjectSnapshotV2['assessments']> {
   const storage = getStorageProvider();
   const contextPack = await buildContextPackForUser({
     userId,
@@ -506,89 +395,165 @@ async function persistedAssessments(
     profile: DEFAULT_USER_PROFILE,
     scope: { type: 'project', projectId: project.id },
     includeBroadContext: true,
-  }, {
-    listMemories: async () => storage.getMemories(userId),
-  });
+  }, { listMemories: async () => storage.getMemories(userId) });
   const focusVersion = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
   const focusRecord = await storage.getFocusAssessment(userId, focusAssessmentCacheId(project.id, focusVersion));
   const focus = focusRecord?.assessment ?? null;
   const overviewVersion = await overviewProjectStateVersion(project, project.historyEvents ?? [], focus, contextPack);
-  const overviewRecord = await storage.getProjectOverviewAssessment(
-    userId,
-    projectOverviewAssessmentCacheId(project.id, overviewVersion),
-  );
-  const memories = await storage.getMemories(userId);
-  const brief = generateDailyBrief({
+  const overviewRecord = await storage.getProjectOverviewAssessment(userId, projectOverviewAssessmentCacheId(project.id, overviewVersion));
+  const fullBrief = generateDailyBrief({
     userId,
     project,
-    memories,
+    memories: await storage.getMemories(userId),
     contextPack,
     force: false,
   });
-  const today = {
-    brief,
-    focusAssessment: focus,
-    generatedAt: brief.generated_at,
-    projectStateVersion: focusVersion,
+  const brief = {
+    ...fullBrief,
+    recommendations: fullBrief.recommendations.map(({ context_pack: _contextPack, ...recommendation }) => recommendation),
   };
-  const projectOwnedIds = new Set([
-    project.id,
-    ...project.nodes.map((node) => node.id),
-    ...project.sources.map((source) => source.id),
-    ...(project.historyEvents ?? []).map((event) => event.id),
+  return {
+    focus: clone(focus),
+    overview: clone(overviewRecord?.assessment ?? null),
+    today: {
+      brief,
+      focusAssessment: clone(focus),
+      generatedAt: brief.generated_at,
+      projectStateVersion: focusVersion,
+    },
+  };
+}
+
+function snapshotSectionSizes(snapshot: ProjectSnapshotV2): Record<string, number> {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  return {
+    projectState: bytes(snapshot.projectState),
+    references: bytes(snapshot.references),
+    proposalStates: bytes(snapshot.proposalStates),
+    assessments: bytes(snapshot.assessments),
+  };
+}
+
+function assertSnapshotSize(snapshot: ProjectSnapshotV2): void {
+  const bytes = serializedProjectSnapshotSize(snapshot);
+  if (bytes <= PROJECT_SNAPSHOT_MAX_BYTES) return;
+  console.warn('[Project snapshots] manifest exceeds size limit', {
+    bytes,
+    limit: PROJECT_SNAPSHOT_MAX_BYTES,
+    sections: snapshotSectionSizes(snapshot),
+  });
+  throw new StorageError(`Project snapshot is too large to store (${bytes} bytes).`, 'VALIDATION_ERROR');
+}
+
+export async function materializeProjectSnapshot(params: {
+  userId: string;
+  snapshotId: string;
+}): Promise<MaterializedProjectSnapshot> {
+  const storage = getStorageProvider();
+  const snapshot = await storage.getProjectSnapshot(params.userId, params.snapshotId);
+  if (!snapshot || snapshot.userId !== params.userId) {
+    throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
+  }
+  if (!isProjectSnapshotV2(snapshot)) {
+    return {
+      snapshot,
+      project: clone(snapshot.project),
+      ask: clone(snapshot.ask),
+      assessments: clone(snapshot.assessments),
+      missingReferences: [],
+    };
+  }
+
+  const [sources, chats, messages, research] = await Promise.all([
+    storage.getSources(params.userId),
+    storage.getAskChats(params.userId),
+    storage.getAskMessages(params.userId),
+    storage.getAskResearch(params.userId),
   ]);
-  const execution: SnapshotExecutionRecord[] = [
-    ...listTraces(userId)
-      .filter((trace) => trace.decisionMapActivity?.projectId === project.id
-        || trace.contextIds.some((id) => projectOwnedIds.has(id))
-        || trace.askGraphReasoningContext?.selectedNodeIds.some((id) => projectOwnedIds.has(id)))
-      .map((trace) => ({
-      id: trace.id,
-      kind: 'trace' as const,
-      createdAt: trace.started_at,
-      trace,
-      })),
-    ...askMessages
-      .filter((message) => message.role === 'assistant' && message.execution)
-      .map((message) => ({
-        id: `${message.id}:execution`,
-        kind: 'ask' as const,
-        createdAt: message.createdAt,
-        execution: message.execution,
-        messageId: message.id,
-      })),
-  ];
-  return { focus, overview: overviewRecord?.assessment ?? null, today, execution };
+  const missingReferences: MaterializedProjectSnapshot['missingReferences'] = [];
+  const sourceRecords = new Map(sources.map((source) => [source.id, source]));
+  const historicalSources = snapshot.projectState.sources.map((metadata) => {
+    const source = sourceRecords.get(metadata.id);
+    if (!source) {
+      missingReferences.push({ type: 'source', id: metadata.id });
+      return { ...clone(metadata), content: '' } as Project['sources'][number];
+    }
+    return { ...clone(metadata), content: source.content } as Project['sources'][number];
+  });
+  const chatsById = new Map(chats.map((chat) => [chat.id, chat]));
+  const messagesById = new Map(messages.map((message) => [message.id, message]));
+  const researchById = new Map(research.map((item) => [item.id, item]));
+  const selectedChats = snapshot.references.chatIds.flatMap((id) => {
+    const chat = chatsById.get(id);
+    if (!chat) missingReferences.push({ type: 'chat', id });
+    return chat ? [clone(chat)] : [];
+  });
+  const proposalStatus = new Map(snapshot.proposalStates.map((state) => [state.proposalId, state.confirmationStatus]));
+  const selectedMessages = snapshot.references.messageIds.flatMap((id) => {
+    const message = messagesById.get(id);
+    if (!message) {
+      missingReferences.push({ type: 'message', id });
+      return [];
+    }
+    const apply = (proposal: AskContextProposal, index: number): AskContextProposal => {
+      const proposalId = proposal.id ?? `${message.id}:proposal:${index}`;
+      return proposalStatus.has(proposalId)
+        ? { ...proposal, confirmationStatus: proposalStatus.get(proposalId) }
+      : { ...proposal };
+    };
+    const contextProposals = (message.contextProposals ?? message.proposals ?? []).map(apply);
+    return [{ ...clone(message), contextProposals, proposals: contextProposals }];
+  });
+  const selectedResearch = snapshot.references.researchIds.flatMap((id) => {
+    const item = researchById.get(id);
+    if (!item) missingReferences.push({ type: 'research', id });
+    return item ? [clone(item)] : [];
+  });
+  const traces = new Set(listTraces(params.userId).map((trace) => trace.id));
+  snapshot.references.traceIds.forEach((id) => {
+    if (!traces.has(id)) missingReferences.push({ type: 'trace', id });
+  });
+  const { sources: _sources, ...stateWithoutSources } = clone(snapshot.projectState);
+  return {
+    snapshot,
+    project: { ...stateWithoutSources, sources: historicalSources } as Project,
+    ask: { chats: selectedChats, messages: selectedMessages, research: selectedResearch },
+    assessments: clone(snapshot.assessments),
+    missingReferences,
+  };
 }
 
 export async function createProjectSnapshot(params: {
   userId: string;
   projectId: string;
-  trigger: ProjectSnapshot['trigger'];
+  trigger: ProjectSnapshotV2['trigger'];
   label: string;
   summary?: string;
-}): Promise<ProjectSnapshot> {
+}): Promise<ProjectSnapshotV2> {
   const storage = getStorageProvider();
   const project = await storage.getProject(params.userId, params.projectId);
   if (!project) throw new StorageError('The project for this snapshot was not found.', 'VALIDATION_ERROR');
-  const allChats = await storage.getAskChats(params.userId);
-  const allMessages = await storage.getAskMessages(params.userId);
-  const projectChatIds = new Set(
-    allChats.filter((chat) => chat.projectId === project.id).map((chat) => chat.id),
-  );
-  const messages = allMessages.filter((message) =>
-    projectChatIds.has(message.chatId) || message.projectId === project.id,
-  );
-  const chatIds = new Set([
-    ...projectChatIds,
-    ...messages.map((message) => message.chatId),
+  const [allChats, allMessages, allResearch] = await Promise.all([
+    storage.getAskChats(params.userId),
+    storage.getAskMessages(params.userId),
+    storage.getAskResearch(params.userId),
   ]);
-  const chats = allChats.filter((chat) => chatIds.has(chat.id));
-  const allResearch = await storage.getAskResearch(params.userId);
-  const research = allResearch.filter((item) => chatIds.has(item.chatId) || item.projectId === project.id);
+  const projectChatIds = new Set(allChats.filter((chat) => chat.projectId === project.id).map((chat) => chat.id));
+  const messages = allMessages.filter((message) => projectChatIds.has(message.chatId) || message.projectId === project.id);
+  const chatIds = [...new Set([...projectChatIds, ...messages.map((message) => message.chatId)])].sort((left, right) => left.localeCompare(right));
+  const research = allResearch.filter((item) => chatIds.includes(item.chatId) || item.projectId === project.id);
+  const references = {
+    sourceIds: sourceReferenceIds(project),
+    chatIds,
+    messageIds: messages.map((message) => message.id).sort((left, right) => left.localeCompare(right)),
+    researchIds: research.map((item) => item.id).sort((left, right) => left.localeCompare(right)),
+    traceIds: traceIdsForProject(params.userId, project),
+  };
+  const snapshotProposalStates = proposalStates(messages);
   const stateVersion = await hashText(JSON.stringify({
-    project: semanticProjectState(project),
-    ask: proposalState(messages),
+    project: stableProjectState(project),
+    references,
+    proposalStates: snapshotProposalStates,
     research: sorted(research, (item) => item.id).map((item) => ({
       id: item.id,
       text: item.text,
@@ -604,29 +569,39 @@ export async function createProjectSnapshot(params: {
     .join('|') || params.trigger.type;
   const snapshotId = `${project.id}:snapshot:${params.trigger.type}:${await hashText(`${triggerIdentity}|${stateVersion}|v${SNAPSHOT_SCHEMA_VERSION}`)}`;
   const existing = await storage.getProjectSnapshot(params.userId, snapshotId);
-  if (existing) return existing;
-  const assessments = await persistedAssessments(params.userId, project, messages);
+  if (existing) {
+    if (!isProjectSnapshotV2(existing)) throw new StorageError('A legacy snapshot uses the current snapshot identity.', 'VALIDATION_ERROR');
+    return existing;
+  }
+  const assessments = await persistedAssessments(params.userId, project);
   const snapshots = await storage.listProjectSnapshots(params.userId, project.id);
-  const createdAt = snapshotCreatedAt(project, params.trigger, chats, messages);
-  const snapshot: ProjectSnapshot = {
+  const snapshot: ProjectSnapshotV2 = {
     id: snapshotId,
     userId: params.userId,
     projectId: project.id,
     sequence: Math.max(0, ...snapshots.map((item) => item.sequence)) + 1,
-    createdAt,
+    createdAt: snapshotCreatedAt(project, params.trigger, messages),
     trigger: params.trigger,
     label: params.label,
     ...(params.summary ? { summary: params.summary } : {}),
-    project: clone(project),
-    ask: { chats: clone(chats), messages: clone(messages), research: clone(research) },
-    assessments: {
-      focus: clone(assessments.focus),
-      overview: clone(assessments.overview),
-      today: clone(assessments.today),
+    projectState: compactProjectState(project),
+    references,
+    proposalStates: snapshotProposalStates,
+    listSummary: {
+      counts: {
+        nodes: project.nodes.length,
+        edges: project.edges.length,
+        sources: references.sourceIds.length,
+        chats: references.chatIds.length,
+        messages: references.messageIds.length,
+        pendingProposals: snapshotProposalStates.filter((item) => item.confirmationStatus === 'pending').length,
+      },
+      ...(assessments.focus?.title ? { focusTitle: assessments.focus.title } : {}),
     },
-    execution: clone(assessments.execution),
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    assessments,
+    schemaVersion: 2,
   };
+  assertSnapshotSize(snapshot);
   await storage.saveProjectSnapshot(params.userId, snapshot);
   return snapshot;
 }
@@ -642,32 +617,29 @@ export async function branchProjectFromSnapshot(params: {
   if (!snapshot || snapshot.userId !== params.userId) {
     throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
   }
+  const materialized = await materializeProjectSnapshot(params);
+  const missingRequired = materialized.missingReferences.filter((item) => item.type !== 'trace');
+  if (missingRequired.length > 0) {
+    throw new StorageError(`The snapshot cannot be branched because referenced records are missing: ${missingRequired.map((item) => `${item.type}:${item.id}`).join(', ')}.`, 'VALIDATION_ERROR');
+  }
   const projects = await storage.listProjects(params.userId);
   if (params.clientRequestId) {
-    const existingBranch = projects.find((project) =>
-      project.branch?.sourceSnapshotId === snapshot.id
-      && project.branch.requestId === params.clientRequestId,
-    );
+    const existingBranch = projects.find((project) => project.branch?.sourceSnapshotId === snapshot.id && project.branch.requestId === params.clientRequestId);
     if (existingBranch) return { project: existingBranch, sourceSnapshot: snapshot };
   }
-  const title = nextProjectTitle(params.requestedTitle?.trim() || snapshot.project.title, projects);
+  const title = nextProjectTitle(params.requestedTitle?.trim() || materialized.project.title, projects);
   const identity = params.clientRequestId
     ? await hashText(`${snapshot.id}|${params.clientRequestId}`)
     : `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const branchId = `project_${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'branch'}_${identity.slice(0, 24)}`;
-  const remapped = remapProject(snapshot.project, branchId, title, snapshot, params.clientRequestId);
-  const ask = remapAsk(snapshot, remapped.project, remapped.maps);
+  const remapped = remapProject(materialized.project, branchId, title, snapshot, params.clientRequestId);
+  const ask = remapAsk(materialized.ask, remapped.project, remapped.maps);
   await storage.saveProject(params.userId, remapped.project);
   for (const chat of ask.chats) await storage.saveAskChat(params.userId, chat);
   for (const message of ask.messages) await storage.saveAskMessage(params.userId, message);
   for (const item of ask.research) await storage.saveAskResearch(params.userId, item);
-
-  const focus = snapshot.assessments.focus
-    ? remapFocusAssessment(snapshot.assessments.focus, remapped.maps)
-    : null;
-  const overview = snapshot.assessments.overview
-    ? remapOverviewAssessment(snapshot.assessments.overview, remapped.maps)
-    : null;
+  const focus = materialized.assessments.focus ? remapFocusAssessment(materialized.assessments.focus, remapped.maps) : null;
+  const overview = materialized.assessments.overview ? remapOverviewAssessment(materialized.assessments.overview, remapped.maps) : null;
   const focusVersion = await focusProjectStateVersion(remapped.project);
   const now = new Date().toISOString();
   await storage.saveFocusAssessment(params.userId, {
@@ -679,7 +651,7 @@ export async function branchProjectFromSnapshot(params: {
     createdAt: now,
     updatedAt: now,
     provenance: { origin: 'branched_snapshot', sourceSnapshotId: snapshot.id },
-  } as Parameters<typeof storage.saveFocusAssessment>[1]);
+  });
   if (overview) {
     const contextPack = await buildContextPackForUser({
       userId: params.userId,
@@ -699,7 +671,7 @@ export async function branchProjectFromSnapshot(params: {
       createdAt: now,
       updatedAt: now,
       provenance: { origin: 'branched_snapshot', sourceSnapshotId: snapshot.id },
-    } as Parameters<typeof storage.saveProjectOverviewAssessment>[1]);
+    });
   }
   return { project: remapped.project, sourceSnapshot: snapshot };
 }
