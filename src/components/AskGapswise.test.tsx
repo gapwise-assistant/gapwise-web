@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, refreshAskProjectBeforeCompletion, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
+import { askHandoffMatchesScope, askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, refreshAskProjectBeforeCompletion, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 
 function chat(id: string, question: string, messagesCount = 1): ChatSession {
@@ -14,6 +14,20 @@ function chat(id: string, question: string, messagesCount = 1): ChatSession {
 }
 
 describe('Ask chat picker', () => {
+  it('only allows a targeted handoff to run in its persisted scope', () => {
+    const handoff = {
+      id: 'handoff_1',
+      scopeType: 'project' as const,
+      projectId: 'riverside',
+      prompt: 'Help me decide',
+      target: { type: 'decision' as const, id: 'decision_1', text: 'Choose a format.' },
+    };
+
+    expect(askHandoffMatchesScope(handoff, { type: 'project', projectId: 'everything-else' })).toBe(false);
+    expect(askHandoffMatchesScope(handoff, { type: 'project', projectId: 'riverside' })).toBe(true);
+    expect(askHandoffMatchesScope({ ...handoff, scopeType: 'general', projectId: undefined }, { type: 'everything' })).toBe(true);
+  });
+
   it('keeps older chats available while a new unsent chat is active', () => {
     const options = chatPickerOptions(
       [chat('older-1', 'Review the first decision'), chat('older-2', 'Compare the alternatives')],

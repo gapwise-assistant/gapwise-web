@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BookOpen, ChevronRight, Eye, EyeOff, Globe, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, X } from 'lucide-react';
-import { AskContextProposal, AskExecution, AskOpenQuestion, AskResearchEvidence, AskResponseOutcome, AskSearchSuggestions, AskSource, AskTarget, normalizeAskContextProposals } from '@/types/ask';
+import { AskContextProposal, AskExecution, AskOpenQuestion, AskResearchEvidence, AskResponseOutcome, AskSearchSuggestions, AskSource, AskTarget, normalizeAskContextProposals, PendingAskHandoff } from '@/types/ask';
 import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
@@ -10,6 +10,7 @@ import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
 import { AskSourceModal } from '@/components/AskSourceModal';
+import { formatDateTime } from '@/lib/datetime/displayDateTime';
 
 interface AskGapswiseProps {
   userId: string;
@@ -18,7 +19,7 @@ interface AskGapswiseProps {
   initialPrompt?: string;
   autoSendInitialPrompt?: boolean;
   onInitialPromptSent?: () => void;
-  newChatPrompt?: { id: string; text: string; target?: AskTarget } | null;
+  newChatPrompt?: PendingAskHandoff | null;
   onNewChatPromptOpened?: () => void;
   onProjectContextChanged?: () => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
@@ -117,29 +118,16 @@ function titleForMessage(message: string): string {
   return compact.length > 42 ? `${compact.slice(0, 41).replace(/\s+\S*$/, '')}…` : compact || 'New chat';
 }
 
-function chatTimestamp(createdAt: string): string {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return 'Unknown time';
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
 function chatQuestion(chat: ChatSession): string {
   return chat.firstQuestion || chat.title || 'New chat';
 }
 
 function chatLabel(chat: ChatSession): string {
-  return `${chatTimestamp(chat.createdAt)} · ${titleForMessage(chatQuestion(chat))}`;
+  return `${formatDateTime(chat.createdAt)} · ${titleForMessage(chatQuestion(chat))}`;
 }
 
 function chatHoverLabel(chat: ChatSession): string {
-  return `${chatTimestamp(chat.createdAt)} · ${chatQuestion(chat)}`;
+  return `${formatDateTime(chat.createdAt)} · ${chatQuestion(chat)}`;
 }
 
 function logAskBrowserDebug(stage: string, details: unknown): void {
@@ -178,6 +166,13 @@ export function chatPickerOptions(chats: ChatSession[], draftChat: ChatSession |
     });
   });
   return options;
+}
+
+export function askHandoffMatchesScope(handoff: PendingAskHandoff, scope: AppScope): boolean {
+  if (handoff.scopeType === 'project') {
+    return scope.type === 'project' && scope.projectId === handoff.projectId;
+  }
+  return scope.type === 'everything';
 }
 
 export function restoreChatSessions(
@@ -331,10 +326,13 @@ export function AskGapswise({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSentRef = useRef<string | null>(null);
   const handledNewChatPromptRef = useRef<string | null>(null);
+  const processingNewChatPromptRef = useRef<string | null>(null);
+  const failedNewChatPromptRef = useRef<string | null>(null);
 
   const activeChat = useMemo(() => {
     if (draftChat && draftChat.id === activeChatId) return draftChat;
-    return chats.find((chat) => chat.id === activeChatId) ?? chats[0] ?? draftChat ?? null;
+    if (activeChatId) return chats.find((chat) => chat.id === activeChatId) ?? null;
+    return draftChat ?? chats[0] ?? null;
   }, [activeChatId, chats, draftChat]);
 
   useEffect(() => {
@@ -592,9 +590,9 @@ export function AskGapswise({
     }
   };
 
-  const sendMessage = async (promptText: string, chatOverride?: ChatSession) => {
+  const sendMessage = async (promptText: string, chatOverride?: ChatSession, allowWhileLoading = false) => {
     const text = promptText.trim();
-    if (!text || isLoading) return;
+    if (!text || (isLoading && !allowWhileLoading)) return;
     const userMsgId = `user_${Date.now()}`;
     const userMsg: ChatMessage = { id: userMsgId, role: 'user', text };
     const chatToUse = chatOverride ?? activeChat ?? newChat();
@@ -682,17 +680,68 @@ export function AskGapswise({
   useEffect(() => {
     if (!hasLoadedPersistedState || !hasLoadedRemoteState || !newChatPrompt) return;
     if (handledNewChatPromptRef.current === newChatPrompt.id) return;
-    handledNewChatPromptRef.current = newChatPrompt.id;
-    const text = newChatPrompt.text.trim();
-    onNewChatPromptOpened?.();
+    if (processingNewChatPromptRef.current === newChatPrompt.id) return;
+    if (failedNewChatPromptRef.current === newChatPrompt.id) return;
+    if (!askHandoffMatchesScope(newChatPrompt, scope)) return;
+
+    const handoff = newChatPrompt;
+    const text = handoff.prompt.trim();
     if (!text) return;
-    const fresh = newChat(newChatPrompt.target);
-    setDraftChat(fresh);
-    setActiveChatId(fresh.id);
-    setInput('');
-    setError('');
-    void sendMessage(text, fresh);
-  }, [hasLoadedPersistedState, hasLoadedRemoteState, newChatPrompt, onNewChatPromptOpened, sendMessage]);
+    processingNewChatPromptRef.current = handoff.id;
+
+    const persistHandoffChat = async (): Promise<ChatSession> => {
+      const fresh = newChat(handoff.target);
+      const response = await authFetch('/api/ask/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          chat: {
+            id: fresh.id,
+            scopeType: handoff.scopeType,
+            ...(handoff.scopeType === 'project' && handoff.projectId ? { projectId: handoff.projectId } : {}),
+            title: titleForMessage(text),
+            target: handoff.target,
+            createdAt: fresh.createdAt,
+            updatedAt: fresh.createdAt,
+          },
+        }),
+      });
+      const body = await response.json().catch(() => ({})) as { chat?: PersistedAskChat; error?: string };
+      if (!response.ok || !body.chat) {
+        throw new Error(body.error ?? 'The discussion could not be started.');
+      }
+      return {
+        ...fresh,
+        title: body.chat.title || fresh.title,
+        createdAt: body.chat.createdAt || fresh.createdAt,
+        sessionId: body.chat.adkSessionId ?? null,
+        target: body.chat.target ?? fresh.target,
+      };
+    };
+
+    const startHandoff = async () => {
+      try {
+        const fresh = await persistHandoffChat();
+        setChats((current) => [fresh, ...current.filter((chat) => chat.id !== fresh.id)]);
+        setDraftChat(null);
+        setActiveChatId(fresh.id);
+        setInput('');
+        setError('');
+        handledNewChatPromptRef.current = handoff.id;
+        failedNewChatPromptRef.current = null;
+        onNewChatPromptOpened?.();
+        await sendMessage(text, fresh, true);
+      } catch (caught) {
+        failedNewChatPromptRef.current = handoff.id;
+        setError(caught instanceof Error ? caught.message : 'The discussion could not be started.');
+      } finally {
+        processingNewChatPromptRef.current = null;
+      }
+    };
+
+    void startHandoff();
+  }, [hasLoadedPersistedState, hasLoadedRemoteState, newChatPrompt, onNewChatPromptOpened, scope, sendMessage, userId]);
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();

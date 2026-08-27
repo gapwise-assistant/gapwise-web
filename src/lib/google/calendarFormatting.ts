@@ -1,16 +1,4 @@
-const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-};
-
-const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-};
+import { formatDateOnly, formatDateTime, formatTime } from '@/lib/datetime/displayDateTime';
 
 /** Extracts the complete ISO timestamp from a mapped Calendar commitment. */
 export function calendarTimestampFromText(
@@ -24,10 +12,10 @@ export function calendarTimestampFromText(
 export function formatCalendarDateTime(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return undefined;
 
   const hasTime = /T\d{2}:\d{2}/.test(value);
-  return date.toLocaleString(undefined, hasTime ? DATE_TIME_OPTIONS : DATE_OPTIONS);
+  return hasTime ? formatDateTime(value) : formatDateOnly(value);
 }
 
 function compactDuration(milliseconds: number): string {
@@ -50,7 +38,7 @@ function isTomorrow(date: Date, now: Date): boolean {
 function formatClockTime(value: string): string | undefined {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
-  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return formatTime(value);
 }
 
 function formatClockRange(startValue: string, endValue: string | undefined): string | undefined {
@@ -80,11 +68,7 @@ export function formatCalendarSchedule(
     ? 'Today'
     : isTomorrow(start, now)
       ? 'Tomorrow'
-      : start.toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          ...(start.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
-        });
+      : formatDateOnly(start, { includeYear: start.getFullYear() !== now.getFullYear() });
   const timeLabel = end && !Number.isNaN(end.getTime()) && localDateKey(end) === localDateKey(start)
     ? formatClockRange(startValue, endValue)
     : formatClockTime(startValue);

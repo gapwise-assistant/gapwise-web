@@ -5,6 +5,7 @@ import type {
   GapGuidance,
   Project,
 } from '@/types/clarity';
+import { formatDateOnly } from '@/lib/datetime/displayDateTime';
 
 function clean(value: string): string {
   return value.replace(/\s+/g, ' ').trim().replace(/[.?!]+$/, '');
@@ -54,11 +55,7 @@ function validDeadline(deadline: string | undefined): string | null {
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(deadline.trim());
   const parsed = new Date(dateOnly ? `${deadline.trim()}T12:00:00` : deadline);
   if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  return formatDateOnly(parsed, { locale: 'en-US', month: 'long' });
 }
 
 function targetRationale(target: ClarityNode): string | null {

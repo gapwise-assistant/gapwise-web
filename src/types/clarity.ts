@@ -236,6 +236,8 @@ export interface ContextProcessingLog {
   };
   stages: ContextProcessingLogStage[];
   error?: string;
+  truncated?: boolean;
+  original_size_bytes?: number;
 }
 
 export interface QuestionReconciliationSummary {

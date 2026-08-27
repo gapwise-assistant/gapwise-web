@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildContextSourceObjectName,
   deleteContextSourceObject,
+  deleteContextSourceObjectsForUser,
   makeGsUrl,
   sanitizeObjectFilename,
   uploadContextSourcePdf,
@@ -101,5 +102,29 @@ describe('Cloud Storage context assets', () => {
         storage: storage as any,
       })
     ).rejects.toThrow(/bucket does not match/);
+  });
+
+  it('deletes only configured-bucket objects in the authenticated user path', async () => {
+    process.env.CLOUD_STORAGE_BUCKET = 'gapwise-505217-context';
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    const deleteObject = vi.fn().mockResolvedValue(undefined);
+    const file = vi.fn(() => ({ delete: deleteObject }));
+    const bucket = vi.fn(() => ({ file }));
+    const storage = { bucket };
+
+    const result = await deleteContextSourceObjectsForUser({
+      userId: 'demo-user',
+      storageUrls: [
+        'gs://gapwise-505217-context/users/demo-user/sources/src-1/brief.pdf',
+        'gs://gapwise-505217-context/users/another-user/sources/src-2/brief.pdf',
+        'gs://other-bucket/users/demo-user/sources/src-3/brief.pdf',
+      ],
+      storage: storage as any,
+    });
+
+    expect(result.deleted).toBe(1);
+    expect(result.failed).toHaveLength(2);
+    expect(file).toHaveBeenCalledTimes(1);
+    expect(file).toHaveBeenCalledWith('users/demo-user/sources/src-1/brief.pdf');
   });
 });

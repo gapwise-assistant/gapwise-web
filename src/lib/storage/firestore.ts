@@ -1,5 +1,5 @@
 import { FieldValue, Firestore } from 'firebase-admin/firestore';
-import { Project } from '@/types/clarity';
+import type { ContextProcessingLog, Project } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -17,6 +17,8 @@ import {
   FocusAssessmentCacheRecord,
   AskSuggestionsCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
+  DeveloperGenerationRun,
+  DeveloperGenerationStep,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
@@ -30,8 +32,9 @@ import {
   type ProjectSnapshotSummary,
   type SnapshotReferencedRecordType,
 } from '@/types/projectSnapshot';
+import { compactProcessingLogForFirestore } from '@/lib/context/processingLog';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -45,6 +48,18 @@ function stripUndefined<T>(value: T): T {
     ) as T;
   }
   return value;
+}
+
+function firestoreSafeRecord<T>(record: T): T {
+  if (!record || typeof record !== 'object') return stripUndefined(record);
+  const candidate = record as Record<string, unknown>;
+  const withSafeProcessingLog = 'processing_log' in candidate && candidate.processing_log
+    ? {
+        ...candidate,
+        processing_log: compactProcessingLogForFirestore(candidate.processing_log as ContextProcessingLog),
+      }
+    : record;
+  return stripUndefined(withSafeProcessingLog) as T;
 }
 
 function snapshotsReferenceRecord(
@@ -128,7 +143,7 @@ export class FirestoreStorageProvider implements StorageProvider {
           }) === false)
           .forEach((doc) => batch.delete(doc.ref));
         collections[collection].forEach((record) => {
-          batch.set(this.collection(userId, collection).doc(record.id), stripUndefined(this.withServerUpdatedAt(record)));
+          batch.set(this.collection(userId, collection).doc(record.id), firestoreSafeRecord(this.withServerUpdatedAt(record)));
         });
       })
     );
@@ -390,6 +405,49 @@ export class FirestoreStorageProvider implements StorageProvider {
     await this.save(userId, 'askSuggestionAssessments', record);
   }
 
+  async listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]> {
+    try {
+      let query: FirebaseFirestore.Query = this.collection(userId, 'developerGenerationRuns');
+      if (projectId) query = query.where('projectId', '==', projectId);
+      const snapshot = await query.get();
+      return snapshot.docs
+        .map((doc) => this.fromFirestore<DeveloperGenerationRun>(doc.data()))
+        .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null> {
+    try {
+      const snapshot = await this.collection(userId, 'developerGenerationRuns').doc(runId).get();
+      return snapshot.exists ? this.fromFirestore<DeveloperGenerationRun>(snapshot.data()!) : null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveDeveloperGenerationRun(userId: string, run: DeveloperGenerationRun): Promise<void> {
+    await this.save(userId, 'developerGenerationRuns', run);
+  }
+
+  async getDeveloperGenerationSteps(userId: string, runId: string): Promise<DeveloperGenerationStep[]> {
+    try {
+      const snapshot = await this.collection(userId, 'developerGenerationSteps')
+        .where('runId', '==', runId)
+        .get();
+      return snapshot.docs
+        .map((doc) => this.fromFirestore<DeveloperGenerationStep>(doc.data()))
+        .sort((left, right) => left.sequence - right.sequence);
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveDeveloperGenerationStep(userId: string, step: DeveloperGenerationStep): Promise<void> {
+    await this.save(userId, 'developerGenerationSteps', step);
+  }
+
   async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshotSummary[]> {
     try {
       // V2 stores a small listing index, so opening History does not read the
@@ -521,6 +579,8 @@ export class FirestoreStorageProvider implements StorageProvider {
       'projectOverviewAssessments',
       'askSuggestionAssessments',
       'projectSnapshots',
+      'developerGenerationRuns',
+      'developerGenerationSteps',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();
@@ -562,7 +622,7 @@ export class FirestoreStorageProvider implements StorageProvider {
   ): Promise<void> {
     try {
       await this.collection(userId, collection).doc(record.id).set(
-        stripUndefined(this.withServerUpdatedAt({ ...record, userId })),
+        firestoreSafeRecord(this.withServerUpdatedAt({ ...record, userId })),
         {
           merge: true,
         }

@@ -12,7 +12,9 @@ import {
   hasUsefulSuggestedAnswer,
   localQuestionPresentations,
   localQuestionSuggestions,
+  normalizeQuestionPlanRequest,
   parseQuestionPresentations,
+  QuestionPlanRequestInput,
   TodayQuestionPresentation,
   TodayQuestionSuggestion,
 } from '@/lib/today/questionPlans';
@@ -23,7 +25,10 @@ import { OpenQuestions, OpenQuestionRowItem } from '@/components/OpenQuestions';
 import { RecommendedFocus } from '@/components/RecommendedFocus';
 import { canonicalQuestionGroups, semanticallyEquivalentQuestion } from '@/lib/questions/canonical';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 import { focusAssessmentToGuidance } from '@/lib/focus/presentation';
+import { isLocalhostBrowser } from '@/lib/runtime/localhost';
+import { formatDateOnly } from '@/lib/datetime/displayDateTime';
 
 interface TodayProps {
   userId: string;
@@ -122,6 +127,32 @@ function TodayUnavailable() {
   );
 }
 
+function valueAtPath(value: unknown, path: unknown[]): unknown {
+  return path.reduce<unknown>((current, segment) => {
+    if (typeof segment === 'number' && Array.isArray(current)) return current[segment];
+    if (typeof segment === 'string' && current && typeof current === 'object') {
+      return (current as Record<string, unknown>)[segment];
+    }
+    return undefined;
+  }, value);
+}
+
+function logQuestionPlanValidation(body: unknown, request: QuestionPlanRequestInput): void {
+  if (!isLocalhostBrowser() || !body || typeof body !== 'object') return;
+  const issues = (body as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return;
+  console.warn('[Gapwise Today question plans validation]', issues.map((issue) => {
+    const record = issue && typeof issue === 'object' ? issue as Record<string, unknown> : {};
+    const path = Array.isArray(record.path) ? record.path : [];
+    const received = valueAtPath(request, path);
+    return {
+      path: path.join('.'),
+      rule: typeof record.code === 'string' ? record.code : 'validation',
+      receivedLength: typeof received === 'string' || Array.isArray(received) ? received.length : undefined,
+    };
+  }));
+}
+
 function decisionForQuestion(project: Project, nodeId: string): string | undefined {
   const edge = project.edges.find((candidate) =>
     ['blocks', 'depends_on', 'affects', 'informs'].includes(candidate.type) &&
@@ -178,7 +209,7 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   if (project.deadline) {
     const deadline = new Date(`${project.deadline}T12:00:00`);
     if (!Number.isNaN(deadline.getTime())) {
-      const readableDate = deadline.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+      const readableDate = formatDateOnly(deadline, { locale: 'en-US' });
       const decisionKind = /go\s*\/\s*no[- ]go|launch|pilot/i.test(decision.text)
         ? 'go/no-go decision'
         : 'project decision';
@@ -284,6 +315,11 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const focusTargetNode = focusTargetNodeId
     ? project.nodes.find((node) => node.id === focusTargetNodeId) ?? null
     : null;
+  const focusTargetSatisfied = Boolean(
+    focusTargetNode
+    && focusTargetNode.type === 'NEXT_ACTION'
+    && isNextActionSatisfied(project, focusTargetNode),
+  );
   const representedNodeIds = useMemo(() => new Set(
     focusAssessment?.representedNodeIds ?? (focusTargetNode ? [focusTargetNode.id] : []),
   ), [focusAssessment?.representedNodeIds, focusTargetNode]);
@@ -372,10 +408,19 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       || Boolean(hiddenRecommendations[`rec_gap_${focusTargetNode.id}`])
     : false;
   const showRecommendedFocus = Boolean(
-    focusGuidance && (!focusTargetNode || focusTargetNode.status === 'OPEN') && !focusHidden,
+    focusGuidance
+    && !focusTargetSatisfied
+    && (!focusTargetNode || focusTargetNode.status === 'OPEN')
+    && !focusHidden,
   );
   const comingUp = buildComingUp(brief, new Date(), 4);
-  const questionPlanKey = JSON.stringify(feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })));
+  const questionPlanRequest = useMemo(() => normalizeQuestionPlanRequest({
+    userId,
+    ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
+    scopeLabel: scope.type === 'project' ? project.title : 'Everything',
+    questions: feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })),
+  }), [feedQuestions, project.title, scope, userId]);
+  const questionPlanKey = JSON.stringify(questionPlanRequest);
 
   React.useEffect(() => {
     if (!feedQuestions.length) {
@@ -385,36 +430,35 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       return;
     }
 
-    const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(feedQuestions).map((suggestion) => [suggestion.questionId, suggestion]));
-    const fallbackPresentations = Object.fromEntries(localQuestionPresentations(feedQuestions).map((presentation) => [presentation.questionId, presentation]));
+    const fallbackSuggestions = Object.fromEntries(localQuestionSuggestions(questionPlanRequest.questions).map((suggestion) => [suggestion.questionId, suggestion]));
+    const fallbackPresentations = Object.fromEntries(localQuestionPresentations(questionPlanRequest.questions).map((presentation) => [presentation.questionId, presentation]));
     setQuestionSuggestions(fallbackSuggestions);
     setQuestionPresentations(fallbackPresentations);
     setQuestionSuggestionWarning('');
     const controller = new AbortController();
-    const scopeProjectId = scope.type === 'project' ? scope.projectId : undefined;
-    const scopeLabel = scope.type === 'project' ? project.title : 'Everything';
-
     authFetch('/api/today/question-plans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userId,
-        ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
-        scopeLabel,
-        questions: feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })),
+        ...questionPlanRequest,
       }),
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) throw new Error('Today question plans unavailable');
-        return response.json();
+        return response.json().catch(() => ({})).then((body) => {
+          if (!response.ok) {
+            logQuestionPlanValidation(body, questionPlanRequest);
+            throw new Error('Today question plans unavailable');
+          }
+          return body;
+        });
       })
       .then((body) => {
         const suggestions = Array.isArray(body.suggestions) ? body.suggestions as TodayQuestionSuggestion[] : [];
         setQuestionSuggestions(Object.fromEntries(suggestions.map((suggestion) => [suggestion.questionId, suggestion])));
         const presentations = Array.isArray(body.presentations)
-          ? parseQuestionPresentations(JSON.stringify({ presentations: body.presentations }), feedQuestions)
-          : localQuestionPresentations(feedQuestions);
+          ? parseQuestionPresentations(JSON.stringify({ presentations: body.presentations }), questionPlanRequest.questions)
+          : localQuestionPresentations(questionPlanRequest.questions);
         setQuestionPresentations(Object.fromEntries(presentations.map((presentation) => [presentation.questionId, presentation])));
         setQuestionSuggestionWarning(typeof body.warning === 'string' ? body.warning : '');
       })

@@ -1,5 +1,6 @@
 import type { ClarityNode, GapGuidance, Project } from '@/types/clarity';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 export function focusAssessmentToGuidance(assessment: FocusAssessment): GapGuidance {
   return {
@@ -20,5 +21,6 @@ export function focusActionNodeForAssessment(
   if (!targetNodeId) return null;
   const node = project.nodes.find((candidate) => candidate.id === targetNodeId);
   if (!node || node.status !== 'OPEN') return null;
+  if (node.type === 'NEXT_ACTION' && isNextActionSatisfied(project, node)) return null;
   return ['DECISION', 'UNKNOWN', 'ASSUMPTION', 'NEXT_ACTION'].includes(node.type) ? node : null;
 }

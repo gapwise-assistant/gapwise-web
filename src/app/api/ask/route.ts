@@ -13,6 +13,7 @@ import { StorageError } from '@/lib/storage/types';
 import { AskChatMessage, AskChatSession, AskContextProposal, AskOpenQuestion, AskSearchSuggestions, AskTarget, normalizeAskContextProposals } from '@/types/ask';
 import { logAskDebug } from '@/lib/ask/debug';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { boundedId } from '@/lib/ids/boundedId';
 
 export const runtime = 'nodejs';
 
@@ -65,7 +66,7 @@ function titleForMessage(message: string): string {
 }
 
 function assistantMessageId(userMessageId: string): string {
-  return `ask_assistant_${userMessageId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+  return boundedId('ask_assistant', userMessageId);
 }
 
 async function persistUserAskMessage(params: {
@@ -187,15 +188,15 @@ async function persistAssistantAskMessage(params: {
     ...(params.resolvesQuestionId ? { resolvesQuestionId: params.resolvesQuestionId } : {}),
     ...(params.conclusion ? { conclusion: params.conclusion } : {}),
     ...(params.contextProposals?.length ? {
-      contextProposals: params.contextProposals.map((proposal, index) => ({
+      contextProposals: params.contextProposals.map((proposal) => ({
         ...proposal,
-        id: proposal.id ?? `proposal_${id}_${index}`,
+        id: proposal.id ?? boundedId('proposal', `${id}_${proposal.type}_${proposal.text}`),
         sourceMessageId: proposal.sourceMessageId ?? id,
       })),
       // Keep the old field readable for chats saved before this contract.
-      proposals: params.contextProposals.map((proposal, index) => ({
+      proposals: params.contextProposals.map((proposal) => ({
         ...proposal,
-        id: proposal.id ?? `proposal_${id}_${index}`,
+        id: proposal.id ?? boundedId('proposal', `${id}_${proposal.type}_${proposal.text}`),
         sourceMessageId: proposal.sourceMessageId ?? id,
       })),
     } : {}),
@@ -312,9 +313,9 @@ export async function POST(request: Request) {
     const assistantId = assistantMessageId(parsed.data.userMessageId);
     const contextProposals = normalizeAskContextProposals(
       result.contextProposals?.length ? result.contextProposals : result.proposals,
-    ).map((proposal, index) => ({
+    ).map((proposal) => ({
       ...proposal,
-      id: proposal.id ?? `proposal_${assistantId}_${index}`,
+      id: proposal.id ?? boundedId('proposal', `${assistantId}_${proposal.type}_${proposal.text}`),
       sourceMessageId: proposal.sourceMessageId ?? assistantId,
     }));
     await persistAssistantAskMessage({

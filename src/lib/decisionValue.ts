@@ -9,6 +9,7 @@ import type {
   Project,
   UserMemoryProfile,
 } from '@/types/clarity';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 const MAX_PATH_NODES = 7;
 const PATH_EDGE_TYPES = new Set<EdgeType>(['blocks', 'depends_on', 'informs', 'affects']);
@@ -49,9 +50,10 @@ function levelFor(score: number): DecisionValueLevel {
   return 'none';
 }
 
-function relevantTarget(node: ClarityNode): node is ClarityNode & { type: DecisionValueTarget['node_type'] } {
+function relevantTarget(project: Project, node: ClarityNode): node is ClarityNode & { type: DecisionValueTarget['node_type'] } {
   if (!TARGET_TYPES.has(node.type) || node.status === 'DEPRECATED') return false;
-  if (node.type === 'DECISION' || node.type === 'NEXT_ACTION') return node.status === 'OPEN';
+  if (node.type === 'DECISION') return node.status === 'OPEN';
+  if (node.type === 'NEXT_ACTION') return node.status === 'OPEN' && !isNextActionSatisfied(project, node);
   return node.status !== 'RESOLVED';
 }
 
@@ -167,7 +169,7 @@ function findAffectedTargets(project: Project, sourceNodeId: string): PathCandid
       const edges = [...current.edges, edge];
       const edgeStrength = EDGE_STRENGTH[edge.type as keyof typeof EDGE_STRENGTH] * (edge.confidence ?? 1);
       const strength = current.strength * edgeStrength;
-      if (relevantTarget(targetNode)) {
+      if (relevantTarget(project, targetNode)) {
         const importance = clamp(targetNode.impact * TARGET_TYPE_WEIGHT[targetNode.type]);
         const depthDiscount = Math.pow(0.84, Math.max(0, edges.length - 1));
         const pathValue = clamp(strength * depthDiscount * importance);

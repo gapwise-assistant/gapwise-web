@@ -2,6 +2,7 @@ import type { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarit
 import type { AskGraphContext, EvidenceExcerpt } from '@/types/contextPack';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { relevanceScore, tokenize } from '@/lib/retrieval/relevance';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 export type ProjectReasoningMode =
   | 'factual'
@@ -210,8 +211,11 @@ export function retrieveProjectReasoningContext(params: {
 }): ProjectReasoningContext {
   const limits = { ...DEFAULT_LIMITS, ...params.limits };
   const project = projectForReasoning(params.project);
-  const nodesById = new Map(project.nodes.map((node) => [node.id, node]));
-  const scored = project.nodes
+  const reasoningNodes = project.nodes.filter((node) =>
+    !(node.type === 'NEXT_ACTION' && node.status === 'OPEN' && isNextActionSatisfied(project, node))
+  );
+  const nodesById = new Map(reasoningNodes.map((node) => [node.id, node]));
+  const scored = reasoningNodes
     .map((node) => ({ node, score: nodeScore(params.query, node, params.mode) }))
     .sort(compareScoredNodes);
   const lexical = scored.filter(({ node }) => relevanceScore(params.query, nodeSearchText(node)) > 0);

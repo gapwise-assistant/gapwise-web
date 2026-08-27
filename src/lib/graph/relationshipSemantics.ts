@@ -29,20 +29,21 @@ export function isEvidenceNode(node: ClarityNode): boolean {
  * unverified.
  */
 export function hasConclusiveResultEvidence(node: ClarityNode): boolean {
-  if (
-    node.created_by === 'user'
-    && node.status === 'RESOLVED'
-    && ['KNOWN', 'EVIDENCE', 'EXPERIMENT', 'CONSTRAINT', 'PREFERENCE', 'DECISION'].includes(node.type)
-  ) {
-    return true;
-  }
-  if (!isEvidenceNode(node)) {
-    return node.type === 'DECISION' && node.status === 'RESOLVED';
-  }
+  if (node.status !== 'RESOLVED') return false;
 
   const text = node.text.trim();
   if (!text || /\b(?:(?:has|have|did|does)\s+not\s+(?:yet\s+)?(?:test(?:ed)?|verif(?:y|ied)|confirm(?:ed)?|record(?:ed)?|receiv(?:e|ed)|complet(?:e|ed)|resolv(?:e|ed))|not tested|still pending|under review|no response|result unknown|unresolved|unconfirmed|not verified|not recorded)\b/i.test(text)) {
     return false;
+  }
+  // Explicit answer workflows create user-owned resolved understanding nodes
+  // for facts, constraints, and preferences as well as evidence. Their
+  // resolved lifecycle state is authoritative once the text does not itself
+  // say that the result is pending. This branch deliberately comes after the
+  // pending-language guard so a stored fact such as "not confirmed yet"
+  // cannot resolve another node merely because it was persisted as RESOLVED.
+  if (node.created_by === 'user') return true;
+  if (!isEvidenceNode(node)) {
+    return node.type === 'DECISION' && node.status === 'RESOLVED';
   }
   return /\b(?:returned|created|produced|passed|failed|rejected|approved|confirmed|verified|recorded|completed|received|shows?|demonstrated|succeeded|successfully|matched|resolved)\b/i.test(text);
 }
@@ -78,7 +79,10 @@ export function relationshipRoleCompatible(
       return isEvidenceNode(source) && (isEvidenceNode(target) || question(target) || target.type === 'DECISION');
     case 'resolves':
       return hasConclusiveResultEvidence(source)
-        && (question(target) || target.type === 'DECISION');
+        && (
+          question(target)
+          || target.type === 'DECISION' && (isEvidenceNode(source) || source.type === 'DECISION')
+        );
     case 'satisfies':
       return source.type === 'NEXT_ACTION'
         && (question(target) || target.type === 'DECISION');
@@ -165,7 +169,7 @@ export function completionAllowedRelationshipTypes(
   if (source.type === 'UNKNOWN' && target.type === 'DECISION') {
     return structurallyAllowed.filter((relationship) => relationship === 'blocks' || relationship === 'affects');
   }
-  if (source.type === 'NEXT_ACTION' && questionOrDecisionTarget) {
+  if (source.type === 'NEXT_ACTION' && questionOrDecisionTarget && target.status === 'OPEN') {
     return structurallyAllowed.filter((relationship) =>
       relationship === 'satisfies' || relationship === 'informs' || relationship === 'affects',
     );

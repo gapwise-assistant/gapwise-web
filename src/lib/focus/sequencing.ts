@@ -1,5 +1,6 @@
 import type { ClarityNode, Project } from '@/types/clarity';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 const ACTIONABLE_PREREQUISITE_TYPES = new Set<ClarityNode['type']>([
   'DECISION',
@@ -8,6 +9,11 @@ const ACTIONABLE_PREREQUISITE_TYPES = new Set<ClarityNode['type']>([
   'NEXT_ACTION',
 ]);
 
+function isOpenUnfinishedNode(project: Project, node: ClarityNode): boolean {
+  return node.status === 'OPEN'
+    && !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(project, node));
+}
+
 /**
  * Canonical edge contract:
  * - A depends_on B: A is dependent, B is prerequisite.
@@ -15,6 +21,9 @@ const ACTIONABLE_PREREQUISITE_TYPES = new Set<ClarityNode['type']>([
  */
 export function getUnresolvedPrerequisites(project: Project, nodeId: string): ClarityNode[] {
   const nodesById = new Map(project.nodes.map((node) => [node.id, node]));
+  const targetNode = nodesById.get(nodeId);
+  if (!targetNode || !isOpenUnfinishedNode(project, targetNode)) return [];
+
   const visited = new Set<string>();
   const prerequisites = new Map<string, ClarityNode>();
 
@@ -29,7 +38,7 @@ export function getUnresolvedPrerequisites(project: Project, nodeId: string): Cl
       if (!prerequisiteId) continue;
 
       const prerequisite = nodesById.get(prerequisiteId);
-      if (!prerequisite || prerequisite.status !== 'OPEN') continue;
+      if (!prerequisite || !isOpenUnfinishedNode(project, prerequisite)) continue;
       prerequisites.set(prerequisite.id, prerequisite);
       visit(prerequisite.id);
     }

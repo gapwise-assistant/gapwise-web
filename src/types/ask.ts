@@ -10,6 +10,18 @@ export interface AskTarget {
   text: string;
 }
 
+/**
+ * A user action that moves from a project/general-context surface into a
+ * fresh, targeted Ask conversation.
+ */
+export interface PendingAskHandoff {
+  id: string;
+  scopeType: AskScopeType;
+  projectId?: string;
+  prompt: string;
+  target: AskTarget;
+}
+
 export type AskSourceKind = 'source' | 'graph' | 'memory' | 'calendar' | 'web';
 
 export interface AskSource {

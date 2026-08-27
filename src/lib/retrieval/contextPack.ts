@@ -5,6 +5,7 @@ import { SafeCalendarEvent } from '@/types/google';
 import { rankNodes, rankSources, relevanceScore, tokenize } from '@/lib/retrieval/relevance';
 import { memoriesFromProfile } from '@/lib/memory/store';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 import { canonicalOpenQuestions, canonicalResolvedQuestions } from '@/lib/questions/canonical';
 import {
   reasoningContextToAskGraphContext,
@@ -286,7 +287,11 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     .map((item) => item.node);
   const upcomingCommitments = rankNodes(
     input.query,
-    reasoningProject.nodes.filter((node) => node.type === 'NEXT_ACTION' && node.status === 'OPEN'),
+    reasoningProject.nodes.filter((node) =>
+      node.type === 'NEXT_ACTION'
+      && node.status === 'OPEN'
+      && !isNextActionSatisfied(reasoningProject, node)
+    ),
     limits.upcomingCommitments
   )
     .concat(input.calendarCommitments ?? [])

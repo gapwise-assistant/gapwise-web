@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { POST } from './route';
+import { QUESTION_PLAN_ID_MAX_LENGTH } from '@/lib/today/questionPlans';
 
 vi.mock('@/lib/ask/adkClient', () => ({
   AskAgentError: class AskAgentError extends Error {
@@ -111,6 +112,38 @@ describe('POST /api/today/question-plans', () => {
       generatedBy: 'gapswise-agent',
       suggestions: expect.arrayContaining(questions.map((item) => expect.objectContaining({ questionId: item.id }))),
       presentations: expect.arrayContaining(questions.map((item) => expect.objectContaining({ questionId: item.id }))),
+    });
+  });
+
+  it('accepts a prefixed maximum-length internal ID and normalizes long context before enrichment', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.mocked(askGapswise).mockResolvedValue({
+      answer: JSON.stringify({ suggestions: [], presentations: [] }),
+      sessionId: 'today_bounded_id',
+      sources: [],
+    });
+    const id = `question_${'x'.repeat(QUESTION_PLAN_ID_MAX_LENGTH - 'question_'.length)}`;
+
+    const response = await POST(request({
+      userId: 'demo-user',
+      projectId: 'project_bounded',
+      scopeLabel: '  Bounded project  ',
+      questions: [{
+        ...question,
+        id,
+        question: ' What\n is the budget? ',
+        presentationContext: [`  ${'context '.repeat(100)}  `],
+      }],
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askGapswise).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project_bounded',
+      message: expect.stringContaining(id),
+    }));
+    await expect(response.json()).resolves.toMatchObject({
+      suggestions: [{ questionId: id }],
+      presentations: [{ questionId: id }],
     });
   });
 });

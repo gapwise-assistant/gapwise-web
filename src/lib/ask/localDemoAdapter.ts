@@ -12,6 +12,7 @@ import { loadProjectForScope } from '@/lib/storage';
 import { contextualSuggestionsFromPack } from '@/lib/ask/suggestions';
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 import { KINTAGEN_DEMO_ID } from '@/lib/demo/kintagen';
+import { formatCompactDateTime } from '@/lib/datetime/displayDateTime';
 
 const EVERYTHING_SCOPE: AppScope = { type: 'everything' };
 const localContextInstruction = 'Deterministic local demo response based only on the selected project context.';
@@ -160,7 +161,7 @@ function eventSummary(pack: ContextPack): string {
   return pack.upcomingCommitments.slice(0, 3).map((event) => {
     const title = event.text.match(/^Google Calendar event: ([^.]+)\./)?.[1] ?? event.text;
     const start = event.text.match(/Starts ([^.]+)\./)?.[1];
-    return `- **${title}**${start ? ` — ${new Date(start).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}`;
+    return `- **${title}**${start ? ` — ${formatCompactDateTime(start, { locale: 'en-US' })}` : ''}`;
   }).join('\n');
 }
 

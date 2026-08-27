@@ -285,6 +285,137 @@ describe('project snapshots', () => {
     expect((await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId })).project.id).toBe(branched.project.id);
   });
 
+  it('bounds long branch IDs and remaps every referenced record consistently', async () => {
+    const storage = getStorageProvider();
+    const project = makeProject('Long branch IDs project', '2026-08-25T13:30:00.000Z');
+    const long = 'long-identity-'.repeat(24);
+    const longNodeId = `${long}node`;
+    const longSecondNodeId = `${long}node-2`;
+    const longEdgeId = `${long}edge`;
+    const longSourceId = `${long}source`;
+    const longHistoryId = `${long}history`;
+    const longChatId = `${long}chat`;
+    const longMessageId = `${long}message`;
+    const longResearchId = `${long}research`;
+    const longProposalId = `${long}proposal`;
+    const longSecondProposalId = `${long}proposal-2`;
+
+    project.sources.push({
+      id: longSourceId,
+      filename: 'Long source note',
+      type: 'note',
+      content: 'A source with a long legacy identity.',
+      extracted_at: '2026-08-25T13:31:00.000Z',
+      derived_node_ids: [longNodeId, longSecondNodeId],
+      processing_status: 'completed',
+    });
+    project.nodes.push(
+      { ...node(longNodeId, 'A long canonical fact.'), source_refs: [longSourceId] },
+      { ...node(longSecondNodeId, 'A second long canonical fact.'), source_refs: [longSourceId] },
+    );
+    project.edges.push({ id: longEdgeId, source: longNodeId, target: longSecondNodeId, type: 'informs', confidence: 0.8 });
+    project.historyEvents = [...(project.historyEvents ?? []), {
+      id: longHistoryId,
+      projectId: project.id,
+      createdAt: '2026-08-25T13:32:00.000Z',
+      type: 'context_added',
+      title: 'Long context added',
+      summary: 'A long-identity source was added.',
+      sourceId: longSourceId,
+      sourceNodeIds: [longNodeId],
+    }];
+
+    const chat: AskChatSession = {
+      id: longChatId,
+      userId,
+      scopeType: 'project',
+      projectId: project.id,
+      title: 'Long identity chat',
+      createdAt: '2026-08-25T13:33:00.000Z',
+      updatedAt: '2026-08-25T13:33:00.000Z',
+    };
+    const message: AskChatMessage = {
+      id: longMessageId,
+      chatId: chat.id,
+      userId,
+      projectId: project.id,
+      role: 'assistant',
+      text: 'A long identity assistant response.',
+      sources: [{ id: longSourceId, title: 'Long source', excerpt: 'Source excerpt.', kind: 'source' }],
+      createdAt: '2026-08-25T13:34:00.000Z',
+      contextProposals: [
+        { id: longProposalId, type: 'RISK', text: 'The long project may slip.', status: 'OPEN', sourceMessageId: longMessageId },
+        { id: longSecondProposalId, type: 'ASSUMPTION', text: 'The long project will stay on schedule.', status: 'OPEN', sourceMessageId: longMessageId },
+      ],
+    };
+    const research: AskResearchEvidence = {
+      id: longResearchId,
+      userId,
+      chatId: chat.id,
+      assistantMessageId: message.id,
+      projectId: project.id,
+      text: 'Long research record.',
+      sources: message.sources,
+      retrievedAt: '2026-08-25T13:35:00.000Z',
+      createdAt: '2026-08-25T13:35:00.000Z',
+      updatedAt: '2026-08-25T13:35:00.000Z',
+      provenance: 'assistant_web_research_confirmed_by_user',
+    };
+
+    await storage.saveProject(userId, project);
+    await storage.saveAskChat(userId, chat);
+    await storage.saveAskMessage(userId, message);
+    await storage.saveAskResearch(userId, research);
+    const snapshot = await createProjectSnapshot({
+      userId,
+      projectId: project.id,
+      trigger: { type: 'context_processed', sourceId: longSourceId, historyEventId: longHistoryId },
+      label: 'Long identity state',
+    });
+
+    const branched = await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id });
+    const allIds = [
+      branched.project.id,
+      ...branched.project.nodes.map((item) => item.id),
+      ...branched.project.edges.map((item) => item.id),
+      ...branched.project.sources.map((item) => item.id),
+      ...(branched.project.historyEvents ?? []).map((item) => item.id),
+    ];
+    const branchAskChats = (await storage.getAskChats(userId)).filter((item) => item.projectId === branched.project.id);
+    const branchAskMessages = (await storage.getAskMessages(userId)).filter((item) => item.projectId === branched.project.id);
+    const branchResearch = (await storage.getAskResearch(userId)).filter((item) => item.projectId === branched.project.id);
+    const branchProposals = branchAskMessages.flatMap((item) => item.contextProposals ?? item.proposals ?? []);
+    allIds.push(...branchAskChats.map((item) => item.id), ...branchAskMessages.map((item) => item.id), ...branchResearch.map((item) => item.id), ...branchProposals.flatMap((item) => item.id ? [item.id] : []));
+
+    expect(allIds.every((id) => id.length <= 240)).toBe(true);
+    expect(new Set(allIds).size).toBe(allIds.length);
+    const nodeIds = new Set(branched.project.nodes.map((item) => item.id));
+    const sourceIds = new Set(branched.project.sources.map((item) => item.id));
+    expect(branched.project.edges.every((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))).toBe(true);
+    expect(branched.project.nodes.find((item) => item.text === 'A long canonical fact.')?.source_refs.every((id) => sourceIds.has(id))).toBe(true);
+    expect(branched.project.sources.find((item) => item.filename === 'Long source note')?.derived_node_ids.every((id) => nodeIds.has(id))).toBe(true);
+    expect(branchAskMessages[0]?.chatId).toBe(branchAskChats[0]?.id);
+    expect(branchResearch[0]?.assistantMessageId).toBe(branchAskMessages[0]?.id);
+    expect(new Set(branchProposals.map((item) => item.id)).size).toBe(2);
+  });
+
+  it('rejects a branch when remapping would leave duplicate record IDs before saving', async () => {
+    const storage = getStorageProvider();
+    const project = makeProject('Colliding branch IDs project', '2026-08-25T13:45:00.000Z');
+    project.nodes.push(node('question_old', 'A duplicate legacy node identity.'));
+    await storage.saveProject(userId, project);
+    const snapshot = await createProjectSnapshot({
+      userId,
+      projectId: project.id,
+      trigger: { type: 'context_processed' },
+      label: 'Colliding state',
+    });
+
+    await expect(branchProjectFromSnapshot({ userId, snapshotId: snapshot.id }))
+      .rejects.toThrow('remapped node IDs are not unique');
+    expect(await storage.listProjects(userId)).toHaveLength(1);
+  });
+
   it('keeps version 1 snapshots readable', async () => {
     const storage = getStorageProvider();
     const project = createProjectFromInput({ name: 'Legacy project', goal: 'Read old snapshots.' }, '2026-08-25T14:00:00.000Z');

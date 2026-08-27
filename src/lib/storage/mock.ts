@@ -17,6 +17,8 @@ import {
   FocusAssessmentCacheRecord,
   AskSuggestionsCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
+  DeveloperGenerationRun,
+  DeveloperGenerationStep,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
@@ -47,11 +49,13 @@ interface MockDatabase {
       projectOverviewAssessments: ProjectOverviewAssessmentCacheRecord[];
       askSuggestionAssessments: AskSuggestionsCacheRecord[];
       projectSnapshots: ProjectSnapshot[];
+      developerGenerationRuns: DeveloperGenerationRun[];
+      developerGenerationSteps: DeveloperGenerationStep[];
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps';
 
 const EMPTY_USER = {
   contexts: [],
@@ -71,6 +75,8 @@ const EMPTY_USER = {
   projectOverviewAssessments: [],
   askSuggestionAssessments: [],
   projectSnapshots: [],
+  developerGenerationRuns: [],
+  developerGenerationSteps: [],
 };
 
 function snapshotReferences(
@@ -167,6 +173,8 @@ export class MockStorageProvider implements StorageProvider {
       projectOverviewAssessments: current.projectOverviewAssessments ?? [],
       askSuggestionAssessments: current.askSuggestionAssessments ?? [],
       projectSnapshots: current.projectSnapshots ?? [],
+      developerGenerationRuns: current.developerGenerationRuns ?? [],
+      developerGenerationSteps: current.developerGenerationSteps ?? [],
     };
     await this.writeDb(db);
   }
@@ -349,6 +357,30 @@ export class MockStorageProvider implements StorageProvider {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
   }
 
+  async listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]> {
+    return (await this.getUser(userId)).developerGenerationRuns
+      .filter((run) => !projectId || run.projectId === projectId)
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  }
+
+  async getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null> {
+    return (await this.getUser(userId)).developerGenerationRuns.find((run) => run.id === runId) ?? null;
+  }
+
+  async saveDeveloperGenerationRun(userId: string, run: DeveloperGenerationRun): Promise<void> {
+    await this.upsert(userId, 'developerGenerationRuns', { ...run, userId });
+  }
+
+  async getDeveloperGenerationSteps(userId: string, runId: string): Promise<DeveloperGenerationStep[]> {
+    return (await this.getUser(userId)).developerGenerationSteps
+      .filter((step) => step.runId === runId)
+      .sort((left, right) => left.sequence - right.sequence);
+  }
+
+  async saveDeveloperGenerationStep(userId: string, step: DeveloperGenerationStep): Promise<void> {
+    await this.upsert(userId, 'developerGenerationSteps', { ...step, userId });
+  }
+
   async listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshotSummary[]> {
     return (await this.getUser(userId)).projectSnapshots
       .filter((snapshot) => snapshot.projectId === projectId)
@@ -427,6 +459,8 @@ export class MockStorageProvider implements StorageProvider {
       projectOverviewAssessments: [],
       askSuggestionAssessments: [],
       projectSnapshots: [],
+      developerGenerationRuns: [],
+      developerGenerationSteps: [],
     };
     await this.writeDb(db);
   }
@@ -458,6 +492,8 @@ export class MockStorageProvider implements StorageProvider {
       projectOverviewAssessments: user?.projectOverviewAssessments ?? [],
       askSuggestionAssessments: user?.askSuggestionAssessments ?? [],
       projectSnapshots: user?.projectSnapshots ?? [],
+      developerGenerationRuns: user?.developerGenerationRuns ?? [],
+      developerGenerationSteps: user?.developerGenerationSteps ?? [],
     };
   }
 

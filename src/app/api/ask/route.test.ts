@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
+import { boundedId } from '@/lib/ids/boundedId';
 import { POST } from './route';
 import { askGapswiseLocally } from '@/lib/ask/localDemoAdapter';
 import { getStorageProvider } from '@/lib/storage';
@@ -203,13 +204,15 @@ describe('POST /api/ask', () => {
 
     expect(response.status).toBe(200);
     expect(persistAskConversationContext).toHaveBeenCalledOnce();
+    const assistantId = boundedId('ask_assistant', 'message_proposal');
+    const proposalId = boundedId('proposal', `${assistantId}_UNKNOWN_Whether the supplier can deliver by Friday.`);
     expect(askStorage.saveAskMessage).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
       role: 'assistant',
       proposals: [expect.objectContaining({
-        id: 'proposal_ask_assistant_message_proposal_0',
+        id: proposalId,
         status: 'OPEN',
         confirmationStatus: 'pending',
-        sourceMessageId: 'ask_assistant_message_proposal',
+        sourceMessageId: assistantId,
       })],
     }));
     await expect(response.json()).resolves.toMatchObject({

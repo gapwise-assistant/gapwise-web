@@ -10,6 +10,7 @@ import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { getVertexGenAIClient } from '@/lib/google/genai';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 export type ProjectTrajectory =
   | 'exploring'
@@ -276,7 +277,8 @@ function buildPackage(
     const overlap = [...nodeTokens].filter((token) => goalTokens.has(token)).length;
     const isOpenPriority = node.status === 'OPEN' && [
       'DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK', 'NEXT_ACTION',
-    ].includes(node.type);
+    ].includes(node.type)
+      && !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(reasoningProject, node));
     return (goalNodeIds.has(node.id) ? 40 : 0)
       + (focusNodeIds.has(node.id) ? 35 : 0)
       + (recentNodeIds.has(node.id) ? 30 : 0)
@@ -317,6 +319,7 @@ function buildPackage(
     openItems: selectedNodes
       .filter((node) => node.status === 'OPEN')
       .filter((node) => ['DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK', 'NEXT_ACTION'].includes(node.type))
+      .filter((node) => !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(reasoningProject, node)))
       .slice(0, 18)
       .map((node) => ({ id: node.id, type: node.type, text: node.text, impact: node.impact })),
     recentlyResolved: selectedNodes

@@ -150,6 +150,63 @@ export interface AskSuggestionsCacheRecord {
   updatedAt: string;
 }
 
+export type DeveloperGenerationRunStatus = 'running' | 'completed' | 'failed';
+
+export type DeveloperGenerationStepCategory =
+  | 'project'
+  | 'source'
+  | 'ask'
+  | 'proposal'
+  | 'resolution'
+  | 'storage'
+  | 'snapshot'
+  | 'assessment'
+  | 'validation';
+
+export type DeveloperGenerationStepStatus = 'running' | 'completed' | 'failed' | 'skipped';
+
+export interface DeveloperGenerationRun {
+  id: string;
+  userId: string;
+  projectId: string;
+  generator: string;
+  status: DeveloperGenerationRunStatus;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  currentStep?: string;
+  error?: string;
+}
+
+export interface DeveloperGenerationStep {
+  id: string;
+  runId: string;
+  userId: string;
+  projectId: string;
+  sequence: number;
+  name: string;
+  category: DeveloperGenerationStepCategory;
+  status: DeveloperGenerationStepStatus;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  reloadedProjectId?: string;
+  sourceId?: string;
+  filename?: string;
+  chatId?: string;
+  messageId?: string;
+  proposalId?: string;
+  historyEventId?: string;
+  snapshotId?: string;
+  nodeCountBefore?: number;
+  nodeCountAfter?: number;
+  edgeCountBefore?: number;
+  edgeCountAfter?: number;
+  derivedNodeIds?: string[];
+  summary?: string;
+  error?: string;
+}
+
 export interface StorageProvider {
   readonly kind: StorageMode;
   readonly capabilities: {
@@ -196,6 +253,12 @@ export interface StorageProvider {
   saveProjectOverviewAssessment(userId: string, record: ProjectOverviewAssessmentCacheRecord): Promise<void>;
   getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null>;
   saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void>;
+
+  listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]>;
+  getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null>;
+  saveDeveloperGenerationRun(userId: string, run: DeveloperGenerationRun): Promise<void>;
+  getDeveloperGenerationSteps(userId: string, runId: string): Promise<DeveloperGenerationStep[]>;
+  saveDeveloperGenerationStep(userId: string, step: DeveloperGenerationStep): Promise<void>;
 
   listProjectSnapshots(userId: string, projectId: string): Promise<ProjectSnapshotSummary[]>;
   getProjectSnapshot(userId: string, snapshotId: string): Promise<ProjectSnapshot | null>;

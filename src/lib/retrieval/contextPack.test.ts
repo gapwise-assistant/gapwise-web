@@ -6,6 +6,43 @@ import { createDurableMemory, shouldPromoteToDurableMemory } from '@/lib/memory/
 import { forgetMemory } from '@/lib/memory/store';
 
 describe('Context Pack retrieval and durable memory policy', () => {
+  it('does not expose a satisfied open action as an upcoming commitment', () => {
+    const project = createGoldenDemoProject();
+    const target = {
+      ...project.nodes.find((node) => node.type === 'DECISION')!,
+      id: 'resolved-outcome-for-context',
+      status: 'RESOLVED' as const,
+    };
+    const staleAction = {
+      id: 'stale-context-action',
+      type: 'NEXT_ACTION' as const,
+      text: 'Confirm the resolved operating model.',
+      status: 'OPEN' as const,
+      confidence: 0.9,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    };
+    project.nodes = [project.nodes.find((node) => node.type === 'GOAL')!, target, staleAction];
+    project.edges = [{
+      id: 'stale-context-satisfaction',
+      source: staleAction.id,
+      target: target.id,
+      type: 'satisfies',
+    }];
+
+    const pack = buildContextPack({
+      userId: 'context-user',
+      query: 'operating model',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+    });
+
+    expect(pack.upcomingCommitments.some((node) => node.id === staleAction.id)).toBe(false);
+  });
+
   it('retrieves relevant evidence and excludes irrelevant source flooding', () => {
     const project = createGoldenDemoProject();
     project.sources.push({

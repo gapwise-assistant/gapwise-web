@@ -75,6 +75,29 @@ describe('focus sequencing', () => {
     expect(isNodeBlocked(project, 'B')).toBe(false);
   });
 
+  it.each(['RESOLVED', 'DEPRECATED'] as const)('does not block a %s target from an old prerequisite edge', (status) => {
+    const project = graph(
+      [node('prerequisite'), node('B', 'DECISION', status)],
+      [{ source: 'prerequisite', target: 'B', type: 'blocks' }],
+    );
+
+    expect(getUnresolvedPrerequisites(project, 'B')).toEqual([]);
+    expect(isNodeBlocked(project, 'B')).toBe(false);
+  });
+
+  it('does not let a satisfied action remain an active prerequisite', () => {
+    const outcome = node('outcome', 'UNKNOWN', 'RESOLVED');
+    const action = node('action', 'NEXT_ACTION', 'OPEN');
+    const decision = node('decision', 'DECISION', 'OPEN');
+    const project = graph([outcome, action, decision], [
+      { source: 'action', target: 'outcome', type: 'satisfies' },
+      { source: 'action', target: 'decision', type: 'blocks' },
+    ]);
+
+    expect(isNodeBlocked(project, 'decision')).toBe(false);
+    expect(getUnresolvedPrerequisites(project, 'decision')).toEqual([]);
+  });
+
   it.each(['informs', 'affects'] as const)('does not treat %s as a blocking relationship', (type) => {
     const project = graph([node('A'), node('B', 'DECISION')], [{ source: 'A', target: 'B', type }]);
     expect(isNodeBlocked(project, 'B')).toBe(false);

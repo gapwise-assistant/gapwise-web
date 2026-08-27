@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateAttentionCandidates } from '@/lib/attention/candidates';
+import { selectTopAttentionItem } from '@/lib/prioritization';
 import { isNextActionSatisfied, resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import type { ClarityEdge, ClarityNode, NodeType, Project } from '@/types/clarity';
 
@@ -99,6 +100,28 @@ describe('NEXT_ACTION completion', () => {
     expect(isNextActionSatisfied(graph, action)).toBe(false);
   });
 
+  it.each(['informs', 'affects'] as const)('keeps an action open when a broadly related decision is resolved through %s', (type) => {
+    const decision = node('decision', 'DECISION', 'Choose the operating model.', 'RESOLVED');
+    const action = node('action', 'NEXT_ACTION', 'Run the operational rehearsal.', 'OPEN');
+    const graph = project([decision, action], [
+      { id: `edge-${type}`, source: action.id, target: decision.id, type },
+    ]);
+
+    expect(isNextActionSatisfied(graph, action)).toBe(false);
+    expect(resolveSatisfiedNextActions(graph, '2026-08-23T13:00:00.000Z')).toEqual([]);
+    expect(action.status).toBe('OPEN');
+  });
+
+  it('requires an explicitly valid satisfaction edge, not just a resolved target', () => {
+    const decision = node('decision', 'DECISION', 'Choose the operating model.', 'RESOLVED');
+    const action = node('action', 'NEXT_ACTION', 'Run the operational rehearsal.', 'OPEN');
+    const graph = project([decision, action], [
+      { id: 'edge-invalid', source: action.id, target: decision.id, type: 'depends_on' },
+    ]);
+
+    expect(isNextActionSatisfied(graph, action)).toBe(false);
+  });
+
   it('does not complete an action when a resolved prerequisite points to it', () => {
     const prerequisite = node('permit', 'UNKNOWN', 'Is the permit approved?', 'RESOLVED');
     const action = node('book', 'NEXT_ACTION', 'Book the venue.', 'OPEN');
@@ -128,5 +151,16 @@ describe('NEXT_ACTION completion', () => {
 
     expect(candidates.some((candidate) => candidate.action_node_id === action.id)).toBe(false);
     expect(candidates.some((candidate) => candidate.action_node_id === pricing.id)).toBe(true);
+  });
+
+  it('selects an unfinished action but skips its satisfied counterpart', () => {
+    const resolvedDecision = node('resolved-decision', 'DECISION', 'Use the first operating model.', 'RESOLVED');
+    const staleAction = node('stale-action', 'NEXT_ACTION', 'Confirm the first operating model.', 'OPEN');
+    const nextAction = node('next-action', 'NEXT_ACTION', 'Prepare the next project review.', 'OPEN');
+    const graph = project([resolvedDecision, staleAction, nextAction], [
+      { id: 'satisfies', source: staleAction.id, target: resolvedDecision.id, type: 'satisfies' },
+    ]);
+
+    expect(selectTopAttentionItem(graph)?.id).toBe(nextAction.id);
   });
 });

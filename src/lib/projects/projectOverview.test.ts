@@ -3,6 +3,38 @@ import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { buildCurrentPicture, buildNeedsAttention } from '@/lib/projects/projectOverview';
 
 describe('project current picture', () => {
+  it('does not summarize an open action whose intended outcome is already resolved', () => {
+    const project = createGoldenDemoProject();
+    const outcome = {
+      ...project.nodes.find((node) => node.type === 'DECISION')!,
+      id: 'resolved-summary-outcome',
+      status: 'RESOLVED' as const,
+    };
+    const staleAction = {
+      id: 'stale-summary-action',
+      type: 'NEXT_ACTION' as const,
+      text: 'Confirm the resolved summary outcome.',
+      status: 'OPEN' as const,
+      confidence: 0.9,
+      impact: 1,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    };
+    project.nodes = [project.nodes.find((node) => node.type === 'GOAL')!, outcome, staleAction];
+    project.edges = [{
+      id: 'summary-satisfaction',
+      source: staleAction.id,
+      target: outcome.id,
+      type: 'satisfies',
+    }];
+
+    const text = buildCurrentPicture(project, 4).map((item) => item.text).join(' ');
+
+    expect(text).not.toContain(staleAction.text);
+  });
+
   it('summarizes useful project state without exposing raw graph relationships', () => {
     const picture = buildCurrentPicture(createGoldenDemoProject());
     const text = picture.map((item) => item.text).join(' ');

@@ -20,6 +20,11 @@ interface DeleteContextSourceObjectInput {
   storage?: Storage;
 }
 
+export interface DeleteContextSourceObjectsForUserResult {
+  deleted: number;
+  failed: Array<{ storageUrl: string; error: string }>;
+}
+
 function assertPathPart(value: string, label: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -59,6 +64,17 @@ export function parseGsUrl(storageUrl: string): { bucket: string; objectName: st
     bucket: withoutScheme.slice(0, slashIndex),
     objectName: withoutScheme.slice(slashIndex + 1),
   };
+}
+
+function assertUserObjectName(objectName: string, userId: string): void {
+  const encodedUserId = encodeURIComponent(assertPathPart(userId, 'userId'));
+  const expectedPrefix = `users/${encodedUserId}/sources/`;
+  if (!objectName.startsWith(expectedPrefix)) {
+    throw new StorageError(
+      'Context asset object does not belong to the authenticated user.',
+      'PERMISSION_DENIED',
+    );
+  }
 }
 
 export async function uploadContextSourcePdf(input: UploadContextSourcePdfInput): Promise<{
@@ -111,4 +127,39 @@ export async function deleteContextSourceObject(input: DeleteContextSourceObject
       'UNAVAILABLE'
     );
   }
+}
+
+/**
+ * Deletes only the authenticated user's source objects. Invalid, foreign, or
+ * non-GCS URLs are reported individually so a reset can finish while making
+ * any cleanup problem explicit.
+ */
+export async function deleteContextSourceObjectsForUser(input: {
+  userId: string;
+  storageUrls: string[];
+  storage?: Storage;
+}): Promise<DeleteContextSourceObjectsForUserResult> {
+  assertExternalServicesAllowed('Google Cloud Storage');
+  const expectedBucket = getContextAssetsBucket();
+  const storage = input.storage ?? new Storage({ projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT });
+  const result: DeleteContextSourceObjectsForUserResult = { deleted: 0, failed: [] };
+
+  for (const storageUrl of input.storageUrls) {
+    try {
+      const { bucket, objectName } = parseGsUrl(storageUrl);
+      if (bucket !== expectedBucket) {
+        throw new StorageError('Context asset bucket does not match configured CLOUD_STORAGE_BUCKET.', 'VALIDATION_ERROR');
+      }
+      assertUserObjectName(objectName, input.userId);
+      await storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
+      result.deleted += 1;
+    } catch (error) {
+      result.failed.push({
+        storageUrl,
+        error: error instanceof Error ? error.message : 'Cloud Storage object deletion failed.',
+      });
+    }
+  }
+
+  return result;
 }

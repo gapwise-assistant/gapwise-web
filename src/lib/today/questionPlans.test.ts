@@ -5,8 +5,10 @@ import {
   hasUsefulSuggestedAnswer,
   localQuestionPresentation,
   localQuestionSuggestion,
+  normalizeQuestionPlanRequest,
   parseQuestionPresentations,
   parseQuestionSuggestions,
+  QUESTION_PLAN_ID_MAX_LENGTH,
   questionSuggestionRequestMessage,
 } from '@/lib/today/questionPlans';
 
@@ -28,6 +30,45 @@ const questions: TodayQuestion[] = [
 ];
 
 describe('Today question suggestions', () => {
+  it('normalizes request text without truncating canonical question IDs', () => {
+    const id = `question_${'x'.repeat(QUESTION_PLAN_ID_MAX_LENGTH - 'question_'.length)}`;
+    const normalized = normalizeQuestionPlanRequest({
+      scopeLabel: '  Japan\n trip  ',
+      questions: [{
+        id,
+        question: '  What\n is the budget?  ',
+        reason: '  It affects the decision. ',
+        provenance: '  Source note  ',
+        presentationContext: ['  First\ncontext  ', '   ', 'Second context'],
+      }],
+    });
+
+    expect(normalized.questions).toEqual([{
+      id,
+      question: 'What is the budget?',
+      reason: 'It affects the decision.',
+      provenance: 'Source note',
+      presentationContext: ['First context', 'Second context'],
+    }]);
+  });
+
+  it('bounds presentation context and keeps only the supported question count', () => {
+    const normalized = normalizeQuestionPlanRequest({
+      scopeLabel: 'Project',
+      questions: Array.from({ length: 5 }, (_, index) => ({
+        id: `question_${index}`,
+        question: `Question ${index}`,
+        reason: 'Reason',
+        provenance: 'Source',
+        presentationContext: Array.from({ length: 8 }, (_, contextIndex) => `${contextIndex} ${'x'.repeat(400)}`),
+      })),
+    });
+
+    expect(normalized.questions).toHaveLength(4);
+    expect(normalized.questions[0].presentationContext).toHaveLength(6);
+    expect(normalized.questions[0].presentationContext?.every((entry) => entry.length <= 300)).toBe(true);
+  });
+
   it('creates action-oriented deterministic presentation copy without changing the graph question', () => {
     const roleQuestion: TodayQuestion = {
       id: 'question_role',

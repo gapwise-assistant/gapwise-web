@@ -25,6 +25,7 @@ import { getVertexGenAIClient } from '@/lib/google/genai';
 import type { ClarityNode, Project } from '@/types/clarity';
 import type { AskRetrievedEvidence } from '@/types/ask';
 import type { DailyBrief } from '@/types/attention';
+import { boundedId } from '@/lib/ids/boundedId';
 
 export interface HarborGraphRagJourneyOptions {
   userId: string;
@@ -621,10 +622,10 @@ async function runAsk(
     throw new Error(`ask: ${error instanceof Error ? error.message : 'Ask agent failed.'}`);
   }
   if (result.sessionId) state.sessionId = result.sessionId;
-  const assistantMessageId = result.assistantMessageId ?? `harbor_assistant_${userMessageId}`;
-  const proposals = normalizeAskContextProposals(result.contextProposals ?? result.proposals).map((proposal, index) => ({
+  const assistantMessageId = result.assistantMessageId ?? boundedId('harbor_assistant', userMessageId);
+  const proposals = normalizeAskContextProposals(result.contextProposals ?? result.proposals).map((proposal) => ({
     ...proposal,
-    id: proposal.id ?? `proposal_${assistantMessageId}_${index}`,
+    id: proposal.id ?? boundedId('proposal', `${assistantMessageId}_${proposal.type}_${proposal.text}`),
     sourceMessageId: proposal.sourceMessageId ?? assistantMessageId,
   }));
   await storage.saveAskMessage(userId, {

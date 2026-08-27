@@ -20,11 +20,19 @@ import {
 } from '@/lib/overview/projectOverviewCache';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
+import { buildGraphHealthReport } from '@/lib/graph/decisionMapDebug';
 import type { AppScope } from '@/types/scope';
-import type { ClarityNode, Project, ProjectHistoryEvent } from '@/types/clarity';
+import type { ClarityNode, EdgeType, Project, ProjectHistoryEvent } from '@/types/clarity';
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
+import { boundedId } from '@/lib/ids/boundedId';
 import type { ProjectSnapshot, ProjectSnapshotTrigger } from '@/types/projectSnapshot';
+import {
+  attachDeveloperGenerationError,
+  recordDeveloperGenerationStep,
+  type DeveloperGenerationRecorder,
+  startDeveloperGenerationRun,
+} from '@/lib/observability/developerGeneration';
 
 export const HARBOR_HISTORY_DEMO_TITLE = 'Harbor Pilot — History Demo';
 export const HARBOR_HISTORY_DEMO_GOAL =
@@ -172,6 +180,7 @@ The 500-ticket scope, 12% resolution-time target, and $45,000 budget ceiling rem
 ];
 
 export interface HarborHistoryDemoResult {
+  generationRunId: string;
   project: Project;
   projects: Project[];
   activeProjectId: string;
@@ -192,6 +201,11 @@ export interface HarborHistoryDemoResult {
   addedProposalCount: number;
   dismissedProposalCount: number;
   pendingProposalCount: number;
+  proposalCounts: {
+    added: number;
+    dismissed: number;
+    pending: number;
+  };
   uniqueSnapshotEventCount: number;
   askResponseSnapshotCount: number;
   proposalAddedSnapshotCount: number;
@@ -201,6 +215,10 @@ export interface HarborHistoryDemoResult {
   snapshotsWithToday: number;
   downloadablePdfCount: number;
   finalOpenQuestions: Array<{ id: string; type: ClarityNode['type']; text: string }>;
+  graphHealth: ReturnType<typeof buildGraphHealthReport>;
+  relationshipCountsByType: Partial<Record<EdgeType, number>>;
+  pdfSourcesWithCompletionTrace: number;
+  askProposalSourcesWithCompletionTrace: number;
 }
 
 function pdfEscape(value: string): string {
@@ -302,7 +320,7 @@ function projectInput(title: string) {
 }
 
 function sourceIdFor(projectId: string, document: HarborHistoryDocument): string {
-  return `${projectId}:source:${document.slug}`;
+  return boundedId('source', `${projectId}_${document.slug}`);
 }
 
 function latestEvent(
@@ -326,22 +344,35 @@ async function snapshotForEvent(params: {
   proposalId?: string;
   label: string;
   summary?: string;
+  recorder?: DeveloperGenerationRecorder;
 }): Promise<ProjectSnapshot> {
-  await prepareAssessments(params.userId, params.project);
-  const snapshot = await createProjectSnapshot({
-    userId: params.userId,
-    projectId: params.project.id,
-    trigger: {
-      type: params.type,
+  await prepareAssessments(params.userId, params.project, params.recorder);
+  const snapshot = await recordDeveloperGenerationStep(
+    params.recorder,
+    {
+      name: 'History snapshot saved',
+      category: 'snapshot',
       historyEventId: params.event.id,
       ...(params.sourceId ? { sourceId: params.sourceId } : {}),
-      ...(params.nodeId ? { nodeId: params.nodeId } : {}),
-      ...(params.askMessageId ? { askMessageId: params.askMessageId } : {}),
+      ...(params.askMessageId ? { messageId: params.askMessageId } : {}),
       ...(params.proposalId ? { proposalId: params.proposalId } : {}),
+      summary: params.label,
     },
-    label: params.label,
-    summary: params.summary,
-  });
+    () => createProjectSnapshot({
+      userId: params.userId,
+      projectId: params.project.id,
+      trigger: {
+        type: params.type,
+        historyEventId: params.event.id,
+        ...(params.sourceId ? { sourceId: params.sourceId } : {}),
+        ...(params.nodeId ? { nodeId: params.nodeId } : {}),
+        ...(params.askMessageId ? { askMessageId: params.askMessageId } : {}),
+        ...(params.proposalId ? { proposalId: params.proposalId } : {}),
+      },
+      label: params.label,
+      summary: params.summary,
+    }),
+  );
   if (snapshot.trigger.type !== params.type) {
     throw new Error(`Snapshot for ${params.label} used trigger ${snapshot.trigger.type}, expected ${params.type}.`);
   }
@@ -392,7 +423,7 @@ async function uploadPdfIfConfigured(
   return uploaded.storageUrl;
 }
 
-async function prepareAssessments(userId: string, project: Project): Promise<void> {
+async function prepareAssessments(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<void> {
   const storage = getStorageProvider();
   const memories = await storage.getMemories(userId);
   const contextPack = await buildContextPackForUser({
@@ -404,11 +435,10 @@ async function prepareAssessments(userId: string, project: Project): Promise<voi
     scope: { type: 'project', projectId: project.id },
     includeBroadContext: true,
   });
-  let focus = await getCachedFocusAssessment(
-    userId,
-    project,
-    contextPack,
-    DEFAULT_USER_PROFILE,
+  let focus = await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Focus assessment obtained', category: 'assessment', summary: 'Loaded the current Focus assessment.' },
+    () => getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE),
   );
   if (!focus) {
     // A newly created project can contain only its GOAL, so the normal Focus
@@ -427,24 +457,26 @@ async function prepareAssessments(userId: string, project: Project): Promise<voi
     };
     const projectStateVersion = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
     const now = new Date().toISOString();
-    await storage.saveFocusAssessment(userId, {
-      id: focusAssessmentCacheId(project.id, projectStateVersion),
-      userId,
-      projectId: project.id,
-      projectStateVersion,
-      assessment: initialFocus,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await recordDeveloperGenerationStep(
+      recorder,
+      { name: 'Focus assessment obtained', category: 'assessment', summary: 'Saved the starting Focus assessment.' },
+      () => storage.saveFocusAssessment(userId, {
+        id: focusAssessmentCacheId(project.id, projectStateVersion),
+        userId,
+        projectId: project.id,
+        projectStateVersion,
+        assessment: initialFocus,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
     focus = initialFocus;
   }
   try {
-    await getProjectOverviewAssessmentWithMetadata(
-      userId,
-      project,
-      project.historyEvents ?? [],
-      focus,
-      contextPack,
+    await recordDeveloperGenerationStep(
+      recorder,
+      { name: 'Overview assessment obtained', category: 'assessment', summary: 'Loaded the current Overview assessment.' },
+      () => getProjectOverviewAssessmentWithMetadata(userId, project, project.historyEvents ?? [], focus, contextPack),
     );
   } catch {
     // A malformed model assessment must not prevent the historical Harbor
@@ -482,26 +514,28 @@ async function prepareAssessments(userId: string, project: Project): Promise<voi
       contextPack,
     );
     const now = new Date().toISOString();
-    await storage.saveProjectOverviewAssessment(userId, {
-      id: projectOverviewAssessmentCacheId(project.id, projectStateVersion),
-      userId,
-      projectId: project.id,
-      projectStateVersion,
-      assessment,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await recordDeveloperGenerationStep(
+      recorder,
+      { name: 'Overview assessment obtained', category: 'assessment', summary: 'Saved the grounded Overview assessment.' },
+      () => storage.saveProjectOverviewAssessment(userId, {
+        id: projectOverviewAssessmentCacheId(project.id, projectStateVersion),
+        userId,
+        projectId: project.id,
+        projectStateVersion,
+        assessment,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
   }
-  generateDailyBrief({
-    userId,
-    project,
-    memories,
-    contextPack,
-    force: false,
-  });
+  await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Today state obtained', category: 'assessment', summary: 'Generated the current Today brief.' },
+    () => generateDailyBrief({ userId, project, memories, contextPack, force: false }),
+  );
 }
 
-async function processDocument(userId: string, project: Project, document: HarborHistoryDocument): Promise<Project> {
+async function processDocument(userId: string, project: Project, document: HarborHistoryDocument, recorder?: DeveloperGenerationRecorder): Promise<Project> {
   const sourceId = sourceIdFor(project.id, document);
   const existing = project.sources.find((source) => source.id === sourceId);
   const existingEvent = latestEvent(project, 'context_added', (event) => event.sourceId === sourceId);
@@ -513,21 +547,41 @@ async function processDocument(userId: string, project: Project, document: Harbo
   }
 
   const bytes = pdfBytes(document);
-  const storageUrl = await uploadPdfIfConfigured(userId, project.id, document, bytes);
-  const processed = await processContextSource(project, {
-    sourceId,
-    filename: document.filename,
-    content: document.content,
-    type: 'pdf',
-    mimeType: 'application/pdf',
-    sizeBytes: bytes.length,
-    storageUrl,
-    origin: 'user',
-    hash: await hashText(`${document.filename}:${document.content}`),
-  }, DEFAULT_USER_PROFILE, {
-    forceReprocess: Boolean(existing),
-    captureProcessingLog: true,
-  });
+  const storageUrl = await recordDeveloperGenerationStep(
+    recorder,
+    {
+      name: 'Source uploaded',
+      category: 'source',
+      sourceId,
+      filename: document.filename,
+      summary: 'Uploaded the generated PDF to Cloud Storage.',
+    },
+    () => uploadPdfIfConfigured(userId, project.id, document, bytes),
+  );
+  const processed = await recordDeveloperGenerationStep(
+    recorder,
+    {
+      name: 'Source processed by Context Agent',
+      category: 'source',
+      sourceId,
+      filename: document.filename,
+      summary: 'Processed the PDF through the Context Agent.',
+    },
+    async () => processContextSource(project, {
+      sourceId,
+      filename: document.filename,
+      content: document.content,
+      type: 'pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: bytes.length,
+      storageUrl,
+      origin: 'user',
+      hash: await hashText(`${document.filename}:${document.content}`),
+    }, DEFAULT_USER_PROFILE, {
+      forceReprocess: Boolean(existing),
+      captureProcessingLog: true,
+    }),
+  );
   if (processed.error) throw new Error(processed.error);
 
   const refreshed = await refreshProjectGapRuntime({
@@ -546,7 +600,25 @@ async function processDocument(userId: string, project: Project, document: Harbo
   if (!event) {
     throw new Error(`Processing ${document.filename} did not create a meaningful context history event.`);
   }
-  await getStorageProvider().saveProject(userId, nextProject);
+  await recordDeveloperGenerationStep(
+    recorder,
+    {
+      name: 'Project saved',
+      category: 'storage',
+      summary: `Saved project state after ${document.filename}.`,
+    },
+    () => getStorageProvider().saveProject(userId, nextProject),
+  );
+  const reloadedProject = await recordDeveloperGenerationStep(
+    recorder,
+    {
+      name: 'Project reloaded',
+      category: 'storage',
+      summary: `Reloaded project state after ${document.filename}.`,
+    },
+    () => getStorageProvider().getProject(userId, project.id),
+  );
+  const persistedProject = reloadedProject ?? nextProject;
   for (const historyEvent of newEvents) {
     const type = snapshotTriggerTypeFor(historyEvent);
     if (!type) continue;
@@ -565,9 +637,10 @@ async function processDocument(userId: string, project: Project, document: Harbo
       summary: historyEvent.type === 'context_added'
         ? `Processed ${document.filename} through the Context Agent.`
         : historyEvent.summary,
+      recorder,
     });
   }
-  return nextProject;
+  return persistedProject;
 }
 
 function openTechnicalDecision(project: Project): ClarityNode | undefined {
@@ -608,46 +681,65 @@ function deletionQuestion(project: Project): ClarityNode | undefined {
   });
 }
 
-async function resolveTechnicalDecision(userId: string, project: Project): Promise<Project> {
+async function resolveTechnicalDecision(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
   const decision = openTechnicalDecision(project);
   if (!decision) {
     const existing = technicalDecision(project);
     if (existing?.status === 'RESOLVED') return project;
     throw new Error('The Harbor history demo could not find the open technical integration decision.');
   }
-  const updated = confirmDecision(project, {
-    decisionNodeId: decision.id,
-    customDecision: 'Use the nightly CSV integration for the pilot and defer the custom API until after the pilot.',
-    reason: 'The CSV path fits the pilot timeline and preserves the longer API integration for a later phase.',
-  });
-  await getStorageProvider().saveProject(userId, updated);
-  const event = latestEvent(updated, 'decision_resolved', (candidate) => candidate.primaryNodeId === decision.id);
+  const updated = await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Decision resolved', category: 'resolution', summary: 'Confirmed the technical integration decision.' },
+    () => confirmDecision(project, {
+      decisionNodeId: decision.id,
+      customDecision: 'Use the nightly CSV integration for the pilot and defer the custom API until after the pilot.',
+      reason: 'The CSV path fits the pilot timeline and preserves the longer API integration for a later phase.',
+    }),
+  );
+  await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Project saved', category: 'storage', summary: 'Saved the resolved technical decision.' },
+    () => getStorageProvider().saveProject(userId, updated),
+  );
+  const reloaded = await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Project reloaded', category: 'storage', summary: 'Reloaded the project after resolving the technical decision.' },
+    () => getStorageProvider().getProject(userId, project.id),
+  );
+  const persisted = reloaded ?? updated;
+  const event = latestEvent(persisted, 'decision_resolved', (candidate) => candidate.primaryNodeId === decision.id);
   if (!event) throw new Error('The technical decision was updated without a decision history event.');
   await snapshotForEvent({
     userId,
-    project: updated,
+    project: persisted,
     event,
     type: 'decision_confirmed',
     nodeId: decision.id,
     label: 'Technical integration decision confirmed',
-    summary: updated.nodes.find((node) => node.id === decision.id)?.decision_outcome,
+    summary: persisted.nodes.find((node) => node.id === decision.id)?.decision_outcome,
+    recorder,
   });
-  return updated;
+  return persisted;
 }
 
-async function resolveDeletionQuestion(userId: string, project: Project): Promise<Project> {
+async function resolveDeletionQuestion(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
   const question = openDeletionQuestion(project);
   if (!question) {
     const existing = deletionQuestion(project);
     if (existing?.status === 'RESOLVED') return project;
     throw new Error('The Harbor history demo could not find the open 30-day deletion question.');
   }
-  const result = await answerQuestion({
-    userId,
-    projectId: project.id,
-    nodeId: question.id,
-    answer: 'Engineering confirmed that Harbor pilot customer data can be automatically deleted within 30 days after the pilot.',
-  });
+  const result = await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Question resolved', category: 'resolution', summary: 'Recorded the confirmed 30-day deletion answer.' },
+    () => answerQuestion({
+      userId,
+      projectId: project.id,
+      nodeId: question.id,
+      answer: 'Engineering confirmed that Harbor pilot customer data can be automatically deleted within 30 days after the pilot.',
+    }),
+  );
   const updated = result.context;
   const event = latestEvent(updated, 'gap_resolved', (candidate) => candidate.primaryNodeId === question.id);
   if (!event) throw new Error('The deletion question was answered without a question history event.');
@@ -659,6 +751,7 @@ async function resolveDeletionQuestion(userId: string, project: Project): Promis
     nodeId: question.id,
     label: '30-day deletion question resolved',
     summary: 'Engineering confirmed the required deletion support.',
+    recorder,
   });
   return updated;
 }
@@ -682,19 +775,27 @@ function pricingDecision(project: Project): ClarityNode | undefined {
   });
 }
 
-async function resolvePricingDecision(userId: string, project: Project): Promise<Project> {
+async function resolvePricingDecision(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
   const decision = openPricingDecision(project);
   if (!decision) {
     const existing = pricingDecision(project);
     if (existing?.status === 'RESOLVED') return project;
     throw new Error('The Harbor history demo could not find the open pricing decision.');
   }
-  const updated = confirmDecision(project, {
-    decisionNodeId: decision.id,
-    customDecision: 'Approve the Harbor pilot price at $38,500.',
-    reason: 'The amount is below the $45,000 budget ceiling and covers the confirmed CSV scope and expected support effort.',
-  });
-  await getStorageProvider().saveProject(userId, updated);
+  const updated = await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Decision resolved', category: 'resolution', summary: 'Confirmed the final pilot pricing decision.' },
+    () => confirmDecision(project, {
+      decisionNodeId: decision.id,
+      customDecision: 'Approve the Harbor pilot price at $38,500.',
+      reason: 'The amount is below the $45,000 budget ceiling and covers the confirmed CSV scope and expected support effort.',
+    }),
+  );
+  await recordDeveloperGenerationStep(
+    recorder,
+    { name: 'Project saved', category: 'storage', summary: 'Saved the resolved pricing decision.' },
+    () => getStorageProvider().saveProject(userId, updated),
+  );
   const event = latestEvent(updated, 'decision_resolved', (candidate) => candidate.primaryNodeId === decision.id);
   if (!event) throw new Error('The pricing decision was updated without a decision history event.');
   await snapshotForEvent({
@@ -705,22 +806,21 @@ async function resolvePricingDecision(userId: string, project: Project): Promise
     nodeId: decision.id,
     label: 'Pilot pricing decision confirmed',
     summary: updated.nodes.find((node) => node.id === decision.id)?.decision_outcome,
+    recorder,
   });
   return updated;
 }
 
-function askRecordId(projectId: string, turn: string, role: 'user' | 'assistant'): string {
-  return `${projectId}:ask:${turn}:${role}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+export function askRecordId(projectId: string, turn: string, role: 'user' | 'assistant'): string {
+  return boundedId('ask', `${projectId}_${turn}_${role}`);
 }
 
-function proposalIdFor(assistantMessageId: string, index: number): string {
-  return `proposal_${assistantMessageId}_${index}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+export function proposalIdFor(assistantMessageId: string, proposal: HarborDemoProposalSpec): string {
+  return boundedId('proposal', `${assistantMessageId}_${proposal.type}_${proposal.text}`);
 }
 
-function proposalSourceIdFor(assistantMessageId: string, proposalId: string): string {
-  return `ask_proposal_${assistantMessageId}_${proposalId}`
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, 240);
+export function proposalSourceIdFor(assistantMessageId: string, proposalId: string): string {
+  return boundedId('ask_proposal', `${assistantMessageId}_${proposalId}`);
 }
 
 interface HarborDemoProposalSpec {
@@ -766,9 +866,9 @@ const HARBOR_DEMO_PROPOSALS: Record<string, readonly HarborDemoProposalSpec[]> =
 };
 
 function harborDemoProposals(turn: string, assistantMessageId: string): AskContextProposal[] {
-  return (HARBOR_DEMO_PROPOSALS[turn] ?? []).map((proposal, index) => ({
+  return (HARBOR_DEMO_PROPOSALS[turn] ?? []).map((proposal) => ({
     ...proposal,
-    id: proposalIdFor(assistantMessageId, index),
+    id: proposalIdFor(assistantMessageId, proposal),
     status: 'OPEN',
     sourceMessageId: assistantMessageId,
     confirmationStatus: 'pending',
@@ -803,13 +903,18 @@ async function runHarborAskTurn(params: {
   chat: AskChatSession;
   turn: string;
   message: string;
+  recorder?: DeveloperGenerationRecorder;
 }): Promise<HarborAskTurn> {
   const storage = getStorageProvider();
   const now = new Date().toISOString();
   const userMessageId = askRecordId(params.project.id, params.turn, 'user');
   const assistantMessageId = askRecordId(params.project.id, params.turn, 'assistant');
-  await storage.saveAskChat(params.userId, params.chat);
-  await storage.saveAskMessage(params.userId, {
+  await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Ask user message persisted', category: 'ask', chatId: params.chat.id, messageId: userMessageId, summary: 'Persisted the Ask chat and user message.' },
+    async () => {
+      await storage.saveAskChat(params.userId, params.chat);
+      await storage.saveAskMessage(params.userId, {
     id: userMessageId,
     chatId: params.chat.id,
     userId: params.userId,
@@ -817,20 +922,33 @@ async function runHarborAskTurn(params: {
     role: 'user',
     text: params.message,
     sources: [],
-    createdAt: now,
-  });
-  const context = await persistAskConversationContext({
+        createdAt: now,
+      });
+    },
+  );
+  const context = await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Ask context processed', category: 'ask', chatId: params.chat.id, messageId: userMessageId, summary: 'Processed the Ask message through the Context Agent.' },
+    () => persistAskConversationContext({
     userId: params.userId,
     chatId: params.chat.id,
     messageId: userMessageId,
     text: params.message,
     projectId: params.project.id,
-    captureProcessingLog: true,
-  });
-  const projectAfterContext = await storage.getProject(params.userId, params.project.id);
+      captureProcessingLog: true,
+    }),
+  );
+  const projectAfterContext = await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Project reloaded', category: 'storage', summary: 'Reloaded project state after Ask context processing.' },
+    () => storage.getProject(params.userId, params.project.id),
+  );
   if (!projectAfterContext) throw new Error('The Harbor Ask turn lost its project after context ingestion.');
 
-  const liveResponse = await askGapswise({
+  const liveResponse = await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Partner response completed', category: 'ask', chatId: params.chat.id, messageId: assistantMessageId, summary: 'Completed the Partner Agent response.' },
+    () => askGapswise({
     userId: params.userId,
     message: params.message,
     projectId: params.project.id,
@@ -838,8 +956,9 @@ async function runHarborAskTurn(params: {
     ...(params.chat.adkSessionId ? { sessionId: params.chat.adkSessionId } : {}),
     excludeMessageId: userMessageId,
     excludeSourceId: context.sourceId,
-    openQuestions: context.openQuestions,
-  });
+      openQuestions: context.openQuestions,
+    }),
+  );
   // The answer and execution details are always from the live Partner Agent.
   // The fixture controls only which proposal cards the historical journey
   // displays, so the demo does not depend on a model spontaneously returning
@@ -850,7 +969,10 @@ async function runHarborAskTurn(params: {
     contextProposals: proposals,
     proposals,
   } satisfies AskResult;
-  await storage.saveAskMessage(params.userId, {
+  await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Ask assistant message persisted', category: 'ask', chatId: params.chat.id, messageId: assistantMessageId, summary: 'Persisted the Partner Agent response.' },
+    () => storage.saveAskMessage(params.userId, {
     id: assistantMessageId,
     chatId: params.chat.id,
     userId: params.userId,
@@ -867,14 +989,19 @@ async function runHarborAskTurn(params: {
     contextProposals: proposals,
     proposals,
     ...(response.searchSuggestions ? { searchSuggestions: response.searchSuggestions } : {}),
-    ...(response.execution ? { execution: response.execution } : {}),
-  });
+      ...(response.execution ? { execution: response.execution } : {}),
+    }),
+  );
   const chat = {
     ...params.chat,
     ...(response.sessionId ? { adkSessionId: response.sessionId } : {}),
     updatedAt: new Date().toISOString(),
   } satisfies AskChatSession;
-  await storage.saveAskChat(params.userId, chat);
+  await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Ask chat updated', category: 'ask', chatId: chat.id, summary: 'Updated the Ask chat session.' },
+    () => storage.saveAskChat(params.userId, chat),
+  );
   let projectForTurn = projectAfterContext;
   let userEvent = (projectAfterContext.historyEvents ?? []).find((event) => event.id === context.historyEventId)
     ?? latestEvent(projectAfterContext, 'context_added', (event) => event.sourceId === context.sourceId);
@@ -883,7 +1010,7 @@ async function runHarborAskTurn(params: {
     // Keep their conversational transition in the project timeline so the
     // corresponding snapshot still has an exact immutable trigger event.
     userEvent = {
-      id: `${params.project.id}:history:ask:${params.turn}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240),
+      id: boundedId('history', `${params.project.id}:ask:${params.turn}`),
       projectId: params.project.id,
       createdAt: new Date().toISOString(),
       type: 'context_changed',
@@ -895,7 +1022,11 @@ async function runHarborAskTurn(params: {
       historyEvents: [...(projectAfterContext.historyEvents ?? []), userEvent],
       updated_at: new Date().toISOString(),
     };
-    await storage.saveProject(params.userId, projectForTurn);
+    await recordDeveloperGenerationStep(
+      params.recorder,
+      { name: 'Project saved', category: 'storage', summary: 'Saved the Ask conversation history event.' },
+      () => storage.saveProject(params.userId, projectForTurn),
+    );
   }
   await snapshotForEvent({
     userId: params.userId,
@@ -905,6 +1036,7 @@ async function runHarborAskTurn(params: {
     askMessageId: assistantMessageId,
     label: `Ask response · ${params.turn}`,
     summary: response.answer.slice(0, 240),
+    recorder: params.recorder,
   });
   return {
     project: projectForTurn,
@@ -935,9 +1067,7 @@ async function proposalTransitionEvent(
   proposal: AskContextProposal,
 ): Promise<ProjectHistoryEvent> {
   const proposalId = proposal.id ?? 'proposal';
-  const proposalSuffix = proposalId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-32);
-  const eventId = `${project.id}:history:ask_proposal_${action}:${await hashText(`${messageId}:${proposalId}`)}:${proposalSuffix}`
-    .replace(/[^a-zA-Z0-9_-]/g, '_');
+  const eventId = boundedId('history', `${project.id}:ask_proposal:${action}:${messageId}:${proposalId}`);
   const existing = project.historyEvents?.find((event) => event.id === eventId);
   if (existing) return existing;
 
@@ -981,6 +1111,7 @@ async function transitionHarborProposal(params: {
   turn: HarborAskTurn;
   proposal: AskContextProposal;
   action: 'add' | 'dismiss';
+  recorder?: DeveloperGenerationRecorder;
 }): Promise<Project> {
   const storage = getStorageProvider();
   const messages = await storage.getAskMessages(params.userId);
@@ -1001,17 +1132,44 @@ async function transitionHarborProposal(params: {
       candidate.id === proposalId ? nextProposal : candidate
     ),
   } satisfies AskChatMessage;
-  await storage.saveAskMessage(params.userId, nextMessage);
+  await recordDeveloperGenerationStep(
+    params.recorder,
+    {
+      name: params.action === 'add' ? 'Proposal added' : 'Proposal dismissed',
+      category: 'proposal',
+      chatId: message.chatId,
+      messageId: message.id,
+      proposalId,
+      summary: `${params.action === 'add' ? 'Added' : 'Dismissed'} the Ask proposal.`,
+    },
+    () => storage.saveAskMessage(params.userId, nextMessage),
+  );
 
-  let project = await storage.getProject(params.userId, params.turn.project.id) ?? params.turn.project;
+  let project = await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Project reloaded', category: 'storage', summary: 'Reloaded project state before applying the proposal transition.' },
+    () => storage.getProject(params.userId, params.turn.project.id),
+  ) ?? params.turn.project;
   if (params.action === 'add') {
     try {
-      project = await persistAskProposal({
-        userId: params.userId,
-        projectId: project.id,
-        assistantMessageId: message.id,
-        proposal: nextProposal,
-      });
+      project = await recordDeveloperGenerationStep(
+        params.recorder,
+        {
+          name: 'Proposal source processed',
+          category: 'proposal',
+          chatId: message.chatId,
+          messageId: message.id,
+          proposalId,
+          sourceId: proposalSourceIdFor(message.id, proposalId),
+          summary: 'Persisted and processed the proposal as project context.',
+        },
+        () => persistAskProposal({
+          userId: params.userId,
+          projectId: project.id,
+          assistantMessageId: message.id,
+          proposal: nextProposal,
+        }),
+      );
     } catch (error) {
       const pending: AskContextProposal = { ...nextProposal, confirmationStatus: 'pending' };
       await storage.saveAskMessage(params.userId, {
@@ -1042,11 +1200,16 @@ async function transitionHarborProposal(params: {
       sourceId: proposalSourceId,
       label: 'Ask proposal context processed',
       summary: proposalContextEvent.summary,
+      recorder: params.recorder,
     });
   }
   const transition = await appendProposalTransitionEvent(project, params.action, message.id, nextProposal);
   project = transition.project;
-  await storage.saveProject(params.userId, project);
+  await recordDeveloperGenerationStep(
+    params.recorder,
+    { name: 'Project saved', category: 'storage', summary: 'Saved the proposal transition.' },
+    () => storage.saveProject(params.userId, project),
+  );
   await snapshotForEvent({
     userId: params.userId,
     project,
@@ -1056,6 +1219,7 @@ async function transitionHarborProposal(params: {
     proposalId,
     label: params.action === 'add' ? 'Ask proposal added' : 'Ask proposal dismissed',
     summary: nextProposal.text,
+    recorder: params.recorder,
   });
   return project;
 }
@@ -1092,9 +1256,10 @@ async function askProposalTransition(
   pattern: RegExp,
   action: 'add' | 'dismiss',
   description: string,
+  recorder?: DeveloperGenerationRecorder,
 ): Promise<Project> {
   const proposal = proposalMatching(turn, pattern, description);
-  return transitionHarborProposal({ userId, turn, proposal, action });
+  return transitionHarborProposal({ userId, turn, proposal, action, recorder });
 }
 
 export async function createHarborHistoryDemoForUser(params: {
@@ -1102,28 +1267,47 @@ export async function createHarborHistoryDemoForUser(params: {
   fresh?: boolean;
 }): Promise<HarborHistoryDemoResult> {
   const storage = getStorageProvider();
-  const requestedTitle = `${HARBOR_HISTORY_DEMO_TITLE} · ${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  let project = createProjectFromInput(projectInput(requestedTitle));
+  const createdAt = new Date().toISOString();
+  let project = createProjectFromInput(projectInput(HARBOR_HISTORY_DEMO_TITLE), createdAt);
   const created = true;
   const pdfs: HarborHistoryDemoResult['pdfs'] = [];
+  const recorder = await startDeveloperGenerationRun({
+    userId: params.userId,
+    projectId: project.id,
+    generator: 'Harbor history demo',
+  });
 
-  if (created) {
-    await storage.saveProject(params.userId, project);
-    const event = latestEvent(project, 'project_started');
-    if (!event) throw new Error('The Harbor history demo project has no project-started event.');
-    await snapshotForEvent({
-      userId: params.userId,
-      project,
-      event,
-      type: 'project_created',
-      label: 'Project created',
-      summary: 'The Harbor pilot history demo project was created with its launch goal.',
-    });
-  }
+  try {
+    await recorder.step(
+      { name: 'Generation started', category: 'project', summary: 'Started a fresh Harbor history generation.' },
+      () => project,
+    );
+    await recorder.step(
+      { name: 'Project created in memory', category: 'project', summary: 'Created the Harbor project before persistence.' },
+      () => project,
+    );
 
-  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[0]);
+    if (created) {
+      await recorder.step(
+        { name: 'Initial project saved', category: 'storage', summary: 'Saved the new Harbor project.' },
+        () => storage.saveProject(params.userId, project),
+      );
+      const event = latestEvent(project, 'project_started');
+      if (!event) throw new Error('The Harbor history demo project has no project-started event.');
+      await snapshotForEvent({
+        userId: params.userId,
+        project,
+        event,
+        type: 'project_created',
+        label: 'Project created',
+        summary: 'The Harbor pilot history demo project was created with its launch goal.',
+        recorder,
+      });
+    }
+
+  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[0], recorder);
   const planningChat: AskChatSession = {
-    id: `${project.id}:chat:planning`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240),
+    id: boundedId('chat', `${project.id}:planning`),
     userId: params.userId,
     scopeType: 'project',
     projectId: project.id,
@@ -1137,6 +1321,7 @@ export async function createHarborHistoryDemoForUser(params: {
     chat: planningChat,
     turn: 'planning',
     message: 'Based on what we know so far, what should I clarify before committing to the November launch?',
+    recorder,
   });
   project = await askProposalTransition(
     params.userId,
@@ -1144,6 +1329,7 @@ export async function createHarborHistoryDemoForUser(params: {
     /security|procurement|purchase order|approval/i,
     'add',
     'security and procurement',
+    recorder,
   );
   project = await askProposalTransition(
     params.userId,
@@ -1151,15 +1337,17 @@ export async function createHarborHistoryDemoForUser(params: {
     /500|1[,.]?000|expand/i,
     'dismiss',
     'premature pilot expansion',
+    recorder,
   );
 
-  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[1]);
+  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[1], recorder);
   const secondAsk = await runHarborAskTurn({
     userId: params.userId,
     project,
     chat: firstAsk.chat,
     turn: 'security-impact',
     message: 'If engineering cannot meet the 30-day deletion requirement, what parts of the project would be affected?',
+    recorder,
   });
   project = await askProposalTransition(
     params.userId,
@@ -1167,6 +1355,7 @@ export async function createHarborHistoryDemoForUser(params: {
     /30.?day|deletion|engineering/i,
     'add',
     'deletion-support action',
+    recorder,
   );
   project = await askProposalTransition(
     params.userId,
@@ -1174,16 +1363,18 @@ export async function createHarborHistoryDemoForUser(params: {
     /exception|temporary approval|approved.*exception/i,
     'dismiss',
     'unsupported deletion exception',
+    recorder,
   );
 
-  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[2]);
-  project = await resolveTechnicalDecision(params.userId, project);
+  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[2], recorder);
+  project = await resolveTechnicalDecision(params.userId, project, recorder);
   const procurementAsk = await runHarborAskTurn({
     userId: params.userId,
     project,
     chat: secondAsk.chat,
     turn: 'procurement',
     message: 'What do I still need before Harbor procurement can issue the purchase order?',
+    recorder,
   });
   project = await askProposalTransition(
     params.userId,
@@ -1191,6 +1382,7 @@ export async function createHarborHistoryDemoForUser(params: {
     /price|pricing|commercial/i,
     'add',
     'final pricing',
+    recorder,
   );
   project = await askProposalTransition(
     params.userId,
@@ -1198,6 +1390,7 @@ export async function createHarborHistoryDemoForUser(params: {
     /penetration|security package|security report/i,
     'add',
     'refreshed penetration test',
+    recorder,
   );
   project = await askProposalTransition(
     params.userId,
@@ -1205,12 +1398,13 @@ export async function createHarborHistoryDemoForUser(params: {
     /CSV|integration/i,
     'dismiss',
     'redundant integration reconsideration',
+    recorder,
   );
 
-  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[3]);
-  project = await resolveDeletionQuestion(params.userId, project);
-  project = await resolvePricingDecision(params.userId, project);
-  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[4]);
+  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[3], recorder);
+  project = await resolveDeletionQuestion(params.userId, project, recorder);
+  project = await resolvePricingDecision(params.userId, project, recorder);
+  project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[4], recorder);
 
   HARBOR_HISTORY_DOCUMENTS.forEach((document) => {
     const source = project.sources.find((candidate) => candidate.id === sourceIdFor(project.id, document));
@@ -1301,10 +1495,31 @@ export async function createHarborHistoryDemoForUser(params: {
   const finalOpenQuestions = project.nodes
     .filter((node) => node.status === 'OPEN' && ['UNKNOWN', 'ASSUMPTION', 'DECISION', 'RISK'].includes(node.type))
     .map((node) => ({ id: node.id, type: node.type, text: node.text }));
+  const graphHealth = buildGraphHealthReport(project);
+  const relationshipCountsByType = project.edges.reduce<Partial<Record<EdgeType, number>>>((counts, edge) => {
+    counts[edge.type] = (counts[edge.type] ?? 0) + 1;
+    return counts;
+  }, {});
+  const hasRelationshipCompletionTrace = (source: Project['sources'][number]): boolean =>
+    Boolean(source.processing_log?.stages.some((stage) => stage.name === 'Relationship completion'));
+  const pdfSourcesWithCompletionTrace = project.sources.filter((source) =>
+    source.type === 'pdf' && hasRelationshipCompletionTrace(source)
+  ).length;
+  const askProposalSourcesWithCompletionTrace = project.sources.filter((source) =>
+    source.id.startsWith('ask_proposal_') && hasRelationshipCompletionTrace(source)
+  ).length;
   const projects = await storage.listProjects(params.userId);
   const scope: AppScope = { type: 'project', projectId: project.id };
-  await storage.setAppScope(params.userId, scope);
-  return {
+  await recorder.step(
+    { name: 'Final project validation', category: 'validation', summary: 'Validated the completed Harbor history project and its snapshots.' },
+    () => undefined,
+  );
+  await recorder.step(
+    { name: 'Active project/scope selected', category: 'project', summary: 'Selected the generated Harbor project as the active scope.' },
+    () => storage.setAppScope(params.userId, scope),
+  );
+  const result: HarborHistoryDemoResult = {
+    generationRunId: recorder.run.id,
     project,
     projects,
     activeProjectId: project.id,
@@ -1325,6 +1540,11 @@ export async function createHarborHistoryDemoForUser(params: {
     addedProposalCount,
     dismissedProposalCount,
     pendingProposalCount,
+    proposalCounts: {
+      added: addedProposalCount,
+      dismissed: dismissedProposalCount,
+      pending: pendingProposalCount,
+    },
     uniqueSnapshotEventCount,
     askResponseSnapshotCount,
     proposalAddedSnapshotCount,
@@ -1334,5 +1554,23 @@ export async function createHarborHistoryDemoForUser(params: {
     snapshotsWithToday: snapshotRecords.filter((snapshot) => Boolean(snapshot.assessments.today)).length,
     downloadablePdfCount,
     finalOpenQuestions,
+    graphHealth,
+    relationshipCountsByType,
+    pdfSourcesWithCompletionTrace,
+    askProposalSourcesWithCompletionTrace,
   };
+  await recorder.step(
+    { name: 'Generation completed', category: 'validation', summary: 'Completed the Harbor history generation.' },
+    () => undefined,
+  );
+  await recorder.complete();
+  return result;
+  } catch (error) {
+    try {
+      await recorder.fail(error);
+    } catch {
+      // Preserve the generation error if diagnostic persistence is unavailable.
+    }
+    throw attachDeveloperGenerationError(error, recorder);
+  }
 }

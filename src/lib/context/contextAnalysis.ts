@@ -14,9 +14,7 @@ import {
   PrecomputedSourceNode,
 } from '@/lib/context/ingestion';
 import { projectForReasoning } from '@/lib/context/sourceState';
-import {
-  canonicalOpenQuestions,
-} from '@/lib/questions/canonical';
+import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
@@ -490,119 +488,6 @@ function analysisOperations(analysis: ContextAnalysis): ProjectPatchOperation[] 
   });
 }
 
-function compactNode(node: ClarityNode): Record<string, unknown> {
-  return {
-    id: node.id,
-    type: node.type,
-    text: node.text,
-    status: node.status,
-    confidence: node.confidence,
-    impact: node.impact,
-    canonical_node_id: node.canonical_node_id,
-    canonical_question_id: node.canonical_question_id,
-    why_it_matters: node.why_it_matters?.slice(0, 2) ?? [],
-  };
-}
-
-function projectSnapshot(project: Project, query = ''): string {
-  const structuralTypes = new Set<ClarityNode['type']>([
-    'GOAL',
-    'UNKNOWN',
-    'ASSUMPTION',
-    'DECISION',
-    'CONSTRAINT',
-    'RISK',
-    'NEXT_ACTION',
-  ]);
-  const contextualTypes = new Set<ClarityNode['type']>([
-    'KNOWN',
-    'EVIDENCE',
-    'PREFERENCE',
-  ]);
-  const candidateTypes = new Set([
-    ...structuralTypes,
-    ...contextualTypes,
-  ]);
-  const queryTokens = meaningfulTokens(query);
-  const relevanceFor = (node: ClarityNode): number => {
-    if (!queryTokens.size) return node.impact * node.confidence;
-    const nodeTokens = meaningfulTokens(`${node.text} ${node.why_it_matters?.join(' ') ?? ''}`);
-    return [...nodeTokens].filter((token) => queryTokens.has(token)).length;
-  };
-  const validNodes = project.nodes
-    .filter((node) => node.status !== 'DEPRECATED' && candidateTypes.has(node.type));
-  const rankedStructural = validNodes
-    .filter((node) => structuralTypes.has(node.type))
-    .sort((left, right) =>
-      relevanceFor(right) - relevanceFor(left)
-      || (right.impact * right.confidence) - (left.impact * left.confidence)
-      || right.updated_at.localeCompare(left.updated_at)
-    );
-  const rankedContextual = validNodes
-    .filter((node) => contextualTypes.has(node.type))
-    .sort((left, right) =>
-      relevanceFor(right) - relevanceFor(left)
-      || (right.impact * right.confidence) - (left.impact * left.confidence)
-      || right.updated_at.localeCompare(left.updated_at)
-    );
-  const selectedNodes: ClarityNode[] = [];
-  const addSelected = (node: ClarityNode | undefined): void => {
-    if (!node || selectedNodes.some((candidate) => candidate.id === node.id)) return;
-    selectedNodes.push(node);
-  };
-  // Keep structural gaps and decisions represented, then add relevant facts,
-  // evidence, and preferences. The final cap keeps the model input bounded
-  // without systematically excluding context that explains a later decision.
-  rankedStructural.slice(0, 10).forEach(addSelected);
-  rankedStructural
-    .filter((node) => node.status === 'OPEN')
-    .slice(0, 8)
-    .forEach(addSelected);
-  rankedStructural
-    .filter((node) => node.type === 'GOAL' || node.type === 'DECISION')
-    .slice(0, 5)
-    .forEach(addSelected);
-  rankedContextual.slice(0, 8).forEach(addSelected);
-
-  const selectedNodeIds = new Set(selectedNodes.map((node) => node.id));
-  project.edges
-    .filter((edge) => selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target))
-    .map((edge) => project.nodes.find((node) => node.id === (selectedNodeIds.has(edge.source) ? edge.target : edge.source)))
-    .filter((node): node is ClarityNode => node !== undefined && node.status !== 'DEPRECATED' && candidateTypes.has(node.type))
-    .sort((left, right) => relevanceFor(right) - relevanceFor(left) || (right.impact * right.confidence) - (left.impact * left.confidence))
-    .forEach(addSelected);
-
-  const importantGraphNodes = selectedNodes.slice(0, 24);
-  const importantNodes = importantGraphNodes.map(compactNode);
-  const importantNodeIds = new Set(importantGraphNodes.map((node) => node.id));
-  const edges = project.edges
-    .filter((edge) => importantNodeIds.has(edge.source) && importantNodeIds.has(edge.target))
-    .slice(0, 24)
-    .map((edge) => ({
-      source: edge.source,
-      target: edge.target,
-      type: edge.type,
-      confidence: edge.confidence ?? null,
-    }));
-  const unresolvedGaps = project.nodes
-    .filter((node) => node.type === 'UNKNOWN' && node.status === 'OPEN')
-    .slice(0, 8)
-    .map(compactNode);
-  const canonicalQuestions = canonicalOpenQuestions(project)
-    .slice(0, 12)
-    .map((node) => ({ id: node.id, text: node.text, status: node.status, type: node.type }));
-
-  return JSON.stringify({
-    project_id: project.id,
-    project_goal: project.goal,
-    deadline: project.deadline ?? null,
-    important_nodes: importantNodes,
-    unresolved_gaps: unresolvedGaps,
-    canonical_questions: canonicalQuestions,
-    important_edges: edges,
-  });
-}
-
 function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
   return [
     "You are Gapwise's canonical project-state interpreter.",
@@ -635,7 +520,7 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
       'Treat the current user message as first-class context. Operations must represent only clear project facts, uncertainties, preferences, choices, constraints, and commitments stated by the user. Reasoning-only content must use NO_CHANGE and must not become canonical project state.',
       'For every operation, include grounding: SOURCE_ASSERTED when the user directly states, reports, confirms, rejects, or commits to the operation; use AI_DERIVED when the operation is inferred from a hypothetical, analytical, comparative, or advice-seeking part of the message. Only SOURCE_ASSERTED operations will be persisted from an Ask message.',
     ] : []),
-    `Current compact project state, relevance-ranked for this source: ${projectSnapshot(project, input.content)}`,
+    `Current compact project state, relevance-ranked for this source: ${serializeProcessingProjectSnapshot(project, input.content)}`,
   ].join('\n');
 }
 
@@ -836,18 +721,6 @@ function analysisRelationshipsToPrecomputedRelationships(analysis: ContextAnalys
     }));
 }
 
-// Used only to keep the model input bounded and relevant. This does not
-// classify, merge, or discard extracted project propositions.
-function meaningfulTokens(value: string): Set<string> {
-  const ignored = new Set(['what', 'where', 'when', 'which', 'who', 'how', 'why', 'does', 'could', 'would', 'should', 'are', 'the', 'and', 'for', 'from', 'with', 'this', 'that', 'about', 'into', 'your', 'you', 'can', 'will', 'have', 'need', 'know']);
-  return new Set(
-    value.toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .split(' ')
-      .filter((token) => token.length >= 4 && !ignored.has(token))
-  );
-}
-
 function appendProcessingStage(
   log: ContextProcessingLog | undefined,
   stage: Omit<ContextProcessingLogStage, 'started_at' | 'duration_ms'> & { started_at?: string; duration_ms?: number },
@@ -887,7 +760,7 @@ function createProcessingLog(project: Project, input: IngestSourceInput, hash: s
       content: input.content,
       storage_url: input.storageUrl,
       hash,
-      project_snapshot: projectSnapshot(project),
+      project_snapshot: serializeProcessingProjectSnapshot(project),
     },
     stages: [],
   };

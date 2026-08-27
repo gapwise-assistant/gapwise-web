@@ -1,5 +1,6 @@
 import type { ClarityNode, Project } from '@/types/clarity';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 export interface CurrentPictureItem {
   id: string;
@@ -178,7 +179,10 @@ export function buildCurrentPicture(project: Project, limit = 3): CurrentPicture
     .filter((node) => node.status === 'OPEN' && node.type === 'RISK')
     .sort(sortByPriority);
   const decisionsAndChanges = activeNodes
-    .filter((node) => ['DECISION', 'NEXT_ACTION'].includes(node.type))
+    .filter((node) =>
+      ['DECISION', 'NEXT_ACTION'].includes(node.type)
+      && !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(reasoningProject, node))
+    )
     .sort((a, b) => nodePriority(b) - nodePriority(a) || b.updated_at.localeCompare(a.updated_at));
 
   // Lead with one item from each briefing category, then fill any extra slots

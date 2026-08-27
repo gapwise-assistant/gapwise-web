@@ -59,4 +59,24 @@ describe('POST /api/dev/harbor-history', () => {
     expect(response.status).toBe(201);
     expect(createHarborHistoryDemoForUser).toHaveBeenCalledWith({ userId: 'harbor-user', fresh: true });
   });
+
+  it('returns generation identifiers when a generation fails', async () => {
+    vi.mocked(requireFirestoreStorage).mockReturnValue({
+      getAppScope: vi.fn().mockResolvedValue({ type: 'everything' }),
+    } as never);
+    const error = Object.assign(new Error('Save project to Firestore failed.'), {
+      generationRunId: 'generation-1',
+      projectId: 'project-1',
+    });
+    vi.mocked(createHarborHistoryDemoForUser).mockRejectedValue(error);
+
+    const response = await POST(request({ userId: 'harbor-user', fresh: true }));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Save project to Firestore failed.',
+      generationRunId: 'generation-1',
+      projectId: 'project-1',
+    });
+  });
 });

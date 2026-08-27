@@ -13,7 +13,7 @@ import { AnswerQuestionModal, AnswerQuestionTarget } from '@/components/AnswerQu
 import { TracePanel } from '@/components/dev/TracePanel';
 import { Project, UserMemoryProfile, CandidateGap } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
-import type { AskTarget } from '@/types/ask';
+import type { AskTarget, PendingAskHandoff } from '@/types/ask';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
 import { processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
@@ -41,6 +41,8 @@ import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
 import { DemoLoadingState } from '@/components/DemoLoadingState';
+import { CleanupLocalUserDataModal } from '@/components/CleanupLocalUserDataModal';
+import type { LocalCleanupPreview } from '@/lib/demo/cleanupLocalUserData';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
@@ -48,6 +50,7 @@ import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 import { buildDecisionWorkspace, decisionQuestionForDisplay, findDecisionForNode } from '@/lib/decisions/workspace';
 import { calculateGapPriority } from '@/lib/prioritization';
 import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 type AppTab = AppDestination;
 
@@ -332,6 +335,58 @@ async function createHarborHistoryDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function createRiversideHistoryDemoViaAPI(userId: string): Promise<{
+  project: Project;
+  projects: Project[];
+  activeProjectId: string;
+  scope: AppScope;
+}> {
+  const res = await authFetch('/api/dev/riverside-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, fresh: true }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The Riverside history demo could not be created.');
+  }
+  return (await res.json()) as {
+    project: Project;
+    projects: Project[];
+    activeProjectId: string;
+    scope: AppScope;
+  };
+}
+
+async function loadCleanupPreviewViaAPI(): Promise<LocalCleanupPreview> {
+  const res = await authFetch('/api/dev/cleanup-local-user');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The local data cleanup preview could not be loaded.');
+  }
+  const data = await res.json() as { preview: LocalCleanupPreview };
+  return data.preview;
+}
+
+async function cleanupLocalUserDataViaAPI(): Promise<{
+  deleted: LocalCleanupPreview & { cloudDeletionFailures: Array<{ storageUrl: string; error: string }> };
+  partialFailures: Array<{ stage: string; error: string }>;
+}> {
+  const res = await authFetch('/api/dev/cleanup-local-user', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: 'DELETE MY LOCAL DATA' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && res.status !== 207) {
+    throw new Error(data.error ?? 'Local data cleanup failed.');
+  }
+  return data as {
+    deleted: LocalCleanupPreview & { cloudDeletionFailures: Array<{ storageUrl: string; error: string }> };
+    partialFailures: Array<{ stage: string; error: string }>;
+  };
+}
+
 interface ScopePersistenceResult {
   scope?: AppScope;
   activeProjectId?: string;
@@ -435,7 +490,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [askInitialPrompt, setAskInitialPrompt] = useState('');
-  const [askNewChatPrompt, setAskNewChatPrompt] = useState<{ id: string; text: string; target?: AskTarget } | null>(null);
+  const [askNewChatPrompt, setAskNewChatPrompt] = useState<PendingAskHandoff | null>(null);
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isLoadingDemo, setIsLoadingDemo] = useState(false);
   const [isLoadingCareerDemo, setIsLoadingCareerDemo] = useState(false);
@@ -448,6 +503,12 @@ export default function Home() {
   const [isLoadingHarborMiddle, setIsLoadingHarborMiddle] = useState(false);
   const [isLoadingHarborLate, setIsLoadingHarborLate] = useState(false);
   const [isLoadingHarborHistoryDemo, setIsLoadingHarborHistoryDemo] = useState(false);
+  const [isLoadingRiversideHistoryDemo, setIsLoadingRiversideHistoryDemo] = useState(false);
+  const [isCleanupLocalDataOpen, setIsCleanupLocalDataOpen] = useState(false);
+  const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
+  const [isCleaningUpLocalData, setIsCleaningUpLocalData] = useState(false);
+  const [cleanupPreview, setCleanupPreview] = useState<LocalCleanupPreview | null>(null);
+  const [cleanupError, setCleanupError] = useState('');
   const [isLocalhostDeveloper, setIsLocalhostDeveloper] = useState(false);
   const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
@@ -486,9 +547,13 @@ export default function Home() {
                   ? 'Harbor Hotels · Middle'
                   : isLoadingHarborLate
                     ? 'Harbor Hotels · Late'
-              : isLoadingDemo
-                ? 'demo'
-                : null;
+              : isLoadingHarborHistoryDemo
+                ? 'Harbor history demo'
+                : isLoadingRiversideHistoryDemo
+                  ? 'Riverside history demo'
+                  : isLoadingDemo
+                        ? 'demo'
+                        : null;
   const openContext = useCallback((entry: ContextEntry = { tab: 'recent' }) => {
     setContextEntry(entry);
     setActiveTab('scope');
@@ -565,30 +630,63 @@ export default function Home() {
     }
   }, [userId]);
 
-  const handleSelectProject = useCallback(async (projectId: string) => {
+  const reloadProjectListFromFirestore = useCallback(async (preferredProjectId?: string) => {
+    const loaded = await loadProjectsFromAPI(userId);
+    const nextProjects = loaded.projects;
+    const preferredProject = preferredProjectId
+      ? nextProjects.find((item) => item.id === preferredProjectId)
+      : undefined;
+    if (preferredProjectId && !preferredProject) {
+      throw new Error('The newly created project was not returned by persistent storage.');
+    }
+    const nextScope = preferredProject
+      ? { type: 'project' as const, projectId: preferredProject.id }
+      : resolveScope(loaded.scope, nextProjects);
+    const nextProject = preferredProject
+      ?? (nextScope.type === 'project'
+        ? nextProjects.find((item) => item.id === nextScope.projectId)
+        : undefined)
+      ?? nextProjects.find((item) => item.id === loaded.activeProjectId && item.status !== 'archived')
+      ?? nextProjects.find((item) => item.status !== 'archived')
+      ?? nextProjects[0]
+      ?? emptyGeneralContext();
+
+    setProjects(nextProjects);
+    setProject(nextProject);
+    setScope(nextScope);
+    setProjectFocusKey((current) => current + 1);
+    return { ...loaded, scope: nextScope, project: nextProject };
+  }, [userId]);
+
+  const handleSelectProject = useCallback(async (projectId: string): Promise<{ success: boolean }> => {
     const selected = projects.find((item) => item.id === projectId);
-    if (!selected) return;
+    if (!selected) {
+      setStorageMessage('The requested project could not be found.');
+      return { success: false };
+    }
     const nextScope: AppScope = { type: 'project', projectId: selected.id };
     const persisted = await persistScopeToAPI(userId, nextScope);
     if (!persisted?.scope || persisted.scope.type !== 'project') {
       setStorageMessage('Project selection could not be saved to persistent storage.');
-      return;
+      return { success: false };
     }
     if (persisted.projects) setProjects(persisted.projects);
     setProject(persisted.project ?? selected);
     setScope(persisted.scope);
     setStorageMessage('');
+    return { success: true };
   }, [projects, userId]);
 
-  const handleSelectEverything = useCallback(async () => {
+  const handleSelectEverything = useCallback(async (): Promise<{ success: boolean }> => {
     const persisted = await persistScopeToAPI(userId, EVERYTHING_SCOPE);
     if (!persisted?.scope || persisted.scope.type !== 'everything') {
       setStorageMessage('Everything selection could not be saved to persistent storage.');
-      return;
+      return { success: false };
     }
     if (persisted.projects) setProjects(persisted.projects);
     setScope(persisted.scope);
     setStorageMessage('');
+    return { success: true };
   }, [userId]);
 
   const openResolvedGaps = useCallback(() => {
@@ -894,18 +992,89 @@ export default function Home() {
   const handleCreateHarborHistoryDemo = useCallback(async () => {
     setIsLoadingHarborHistoryDemo(true);
     setDemoLoadError('');
+    setActiveTab('scope');
     try {
       const result = await createHarborHistoryDemoViaAPI(userId);
-      setProjects(result.projects);
-      setProject(result.project);
-      setScope(result.scope);
-      setProjectFocusKey((current) => current + 1);
-      setActiveTab('scope');
+      await reloadProjectListFromFirestore(result.project.id);
       setStorageMessage('');
     } catch (caught) {
+      try {
+        await reloadProjectListFromFirestore();
+      } catch {
+        // Keep the creation failure visible even if the recovery reload also fails.
+      }
       setDemoLoadError(caught instanceof Error ? caught.message : 'The Harbor history demo could not be created.');
     } finally {
       setIsLoadingHarborHistoryDemo(false);
+    }
+  }, [reloadProjectListFromFirestore, userId]);
+
+  const handleCreateRiversideHistoryDemo = useCallback(async () => {
+    setIsLoadingRiversideHistoryDemo(true);
+    setDemoLoadError('');
+    setActiveTab('scope');
+    try {
+      const result = await createRiversideHistoryDemoViaAPI(userId);
+      await reloadProjectListFromFirestore(result.project.id);
+      setStorageMessage('');
+    } catch (caught) {
+      try {
+        await reloadProjectListFromFirestore();
+      } catch {
+        // Keep the creation failure visible even if the recovery reload also fails.
+      }
+      setDemoLoadError(caught instanceof Error ? caught.message : 'The Riverside history demo could not be created.');
+    } finally {
+      setIsLoadingRiversideHistoryDemo(false);
+    }
+  }, [reloadProjectListFromFirestore, userId]);
+
+  const handleOpenCleanupLocalData = useCallback(() => {
+    setIsCleanupLocalDataOpen(true);
+    setCleanupError('');
+    setCleanupPreview(null);
+    setIsLoadingCleanupPreview(true);
+    void loadCleanupPreviewViaAPI()
+      .then(setCleanupPreview)
+      .catch((caught) => setCleanupError(caught instanceof Error ? caught.message : 'The local data cleanup preview could not be loaded.'))
+      .finally(() => setIsLoadingCleanupPreview(false));
+  }, []);
+
+  const handleCleanupLocalData = useCallback(async () => {
+    setIsCleaningUpLocalData(true);
+    setCleanupError('');
+    try {
+      const result = await cleanupLocalUserDataViaAPI();
+      const loaded = await loadProjectsFromAPI(userId);
+      const loadedGeneralContext = await loadGeneralContextFromAPI(userId);
+      clearDemoBrowserState(userId);
+      setProjects(loaded.projects);
+      setProject(emptyGeneralContext());
+      setGeneralContext(loadedGeneralContext);
+      setScope(EVERYTHING_SCOPE);
+      setMemories([]);
+      setFeedbackEvents([]);
+      setContextEntry(null);
+      setReasoningPathRequest(null);
+      setDecisionTarget(null);
+      setAnswerTarget(null);
+      setIdontKnowGap(null);
+      setIdontKnowProjectId(null);
+      setAskInitialPrompt('');
+      setAskNewChatPrompt(null);
+      setProjectFocusKey((current) => current + 1);
+      setActiveTab('today');
+      setIsCleanupLocalDataOpen(false);
+      setDemoLoadError('');
+      if (result.partialFailures.length > 0) {
+        setStorageMessage(`Your local Gapwise data was deleted, but some cleanup steps need attention: ${result.partialFailures.map((failure) => failure.error).join(' ')}`);
+      } else {
+        setStorageMessage('Your local Gapwise data was deleted. You can now create a fresh Harbor or Riverside demo.');
+      }
+    } catch (caught) {
+      setCleanupError(caught instanceof Error ? caught.message : 'Local data cleanup failed.');
+    } finally {
+      setIsCleaningUpLocalData(false);
     }
   }, [userId]);
 
@@ -1154,12 +1323,28 @@ export default function Home() {
     }
   }, [generalContext, projects, updateProject, userId]);
 
-  const openChatWithPrompt = useCallback((prompt: string, target?: AskTarget) => {
+  const openChatWithPrompt = useCallback(async (prompt: string, target: AskTarget, ownerProjectId: string): Promise<boolean> => {
     setAnswerTarget(null);
     setAskInitialPrompt('');
-    setAskNewChatPrompt({ id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, text: prompt, ...(target ? { target } : {}) });
+    const isGeneralContext = ownerProjectId === GENERAL_CONTEXT_ID;
+    const handoff: PendingAskHandoff = {
+      id: `help_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      scopeType: isGeneralContext ? 'general' : 'project',
+      ...(!isGeneralContext ? { projectId: ownerProjectId } : {}),
+      prompt,
+      target,
+    };
+    setAskNewChatPrompt(handoff);
+    const selection = isGeneralContext
+      ? await handleSelectEverything()
+      : await handleSelectProject(ownerProjectId);
+    if (!selection.success) {
+      setAskNewChatPrompt(null);
+      return false;
+    }
     setActiveTab('ask');
-  }, []);
+    return true;
+  }, [handleSelectEverything, handleSelectProject]);
 
   const openDontKnowHelp = useCallback(() => {
     if (!idontKnowGap) return;
@@ -1172,11 +1357,10 @@ export default function Home() {
       ? `Help me think through this project decision: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoffs clearly, identify what information is missing, and suggest one practical next step without making the decision for me.`
       : `Help me figure out this unresolved question: “${idontKnowGap.question}” Use the project context and relevant sources, explain the tradeoff clearly, and suggest one practical next step without answering on my behalf.`;
     const target: AskTarget = { type: isDecision ? 'decision' : 'question', id: idontKnowGap.node_id, text: idontKnowGap.question };
-    if (idontKnowProjectId && idontKnowProjectId !== GENERAL_CONTEXT_ID) handleSelectProject(idontKnowProjectId);
     setIdontKnowGap(null);
     setIdontKnowProjectId(null);
-    openChatWithPrompt(prompt, target);
-  }, [generalContext, handleSelectProject, idontKnowGap, idontKnowProjectId, openChatWithPrompt, project, projects]);
+    void openChatWithPrompt(prompt, target, idontKnowProjectId ?? GENERAL_CONTEXT_ID);
+  }, [generalContext, idontKnowGap, idontKnowProjectId, openChatWithPrompt, project, projects]);
 
   const submitQuestionAnswer = useCallback(async (answer: string) => {
     if (!answerTarget) return;
@@ -1303,7 +1487,9 @@ export default function Home() {
     );
   }
 
-  if (!demoMode && projects.length === 0) {
+  // Keep the localhost developer menu available after a cleanup leaves the
+  // account empty. Non-local users retain the dedicated onboarding surface.
+  if (!demoMode && projects.length === 0 && !isLocalhostDeveloper) {
     return (
       <>
         <NewUserOnboarding
@@ -1355,26 +1541,12 @@ export default function Home() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onResetDemo={handleResetDemo}
-        onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
-        isLoadingCareerDemo={isLoadingCareerDemo}
-        onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
-        isLoadingHackathonDemo={isLoadingHackathonDemo}
-        onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
-        isLoadingKintaGenDemo={isLoadingKintaGenDemo}
-        onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
-        isLoadingBakeryDemo={isLoadingBakeryDemo}
-        onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
-        isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
-        onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
-        isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
-        onLoadHarborEarly={handleLoadHarborEarly}
-        isLoadingHarborEarly={isLoadingHarborEarly}
-        onLoadHarborMiddle={handleLoadHarborMiddle}
-        isLoadingHarborMiddle={isLoadingHarborMiddle}
-        onLoadHarborLate={handleLoadHarborLate}
-        isLoadingHarborLate={isLoadingHarborLate}
         onCreateHarborHistoryDemo={isLocalhostDeveloper ? handleCreateHarborHistoryDemo : undefined}
         isLoadingHarborHistoryDemo={isLoadingHarborHistoryDemo}
+        onCreateRiversideHistoryDemo={isLocalhostDeveloper ? handleCreateRiversideHistoryDemo : undefined}
+        isLoadingRiversideHistoryDemo={isLoadingRiversideHistoryDemo}
+        onCleanupLocalData={isLocalhostDeveloper ? handleOpenCleanupLocalData : undefined}
+        isCleaningUpLocalData={isCleaningUpLocalData}
         onSelectProject={handleSelectProject}
         onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
@@ -1392,6 +1564,13 @@ export default function Home() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
             <div className="rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-xs text-amber-200">
               {storageMessage}
+            </div>
+          </div>
+        )}
+        {demoLoadError && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+            <div role="alert" className="rounded-xl border border-rose-800 bg-rose-950/40 px-4 py-3 text-xs text-rose-200">
+              {demoLoadError}
             </div>
           </div>
         )}
@@ -1459,7 +1638,7 @@ export default function Home() {
             key={`${scope.type === 'project' ? scope.projectId : 'everything'}-${projectFocusKey}`}
             userId={userId}
             scope={scope}
-            scopeLabel={scope.type === 'project' ? project.title : 'Everything'}
+            scopeLabel={scope.type === 'project' ? projectTitlePresentation(project.title).title : 'Everything'}
             initialPrompt={askInitialPrompt}
             autoSendInitialPrompt
             onInitialPromptSent={() => setAskInitialPrompt('')}
@@ -1567,9 +1746,9 @@ export default function Home() {
           onClose={() => setDecisionTarget(null)}
           onConfirm={saveDecision}
           onStartChat={(prompt, target) => {
-            if (decisionProject.id !== GENERAL_CONTEXT_ID) handleSelectProject(decisionProject.id);
-            setDecisionTarget(null);
-            openChatWithPrompt(prompt, target);
+            void openChatWithPrompt(prompt, target, decisionProject.id).then((opened) => {
+              if (opened) setDecisionTarget(null);
+            });
           }}
           onNavigateToSource={(sourceId) => {
             openContext({ sourceId, tab: 'recent' });
@@ -1586,6 +1765,19 @@ export default function Home() {
             await handleCreateProject(input);
           }}
           onClose={() => setIsNewProjectOpen(false)}
+        />
+      )}
+      {isCleanupLocalDataOpen && (
+        <CleanupLocalUserDataModal
+          preview={cleanupPreview}
+          previewError={cleanupError}
+          isLoadingPreview={isLoadingCleanupPreview}
+          isRunning={isCleaningUpLocalData}
+          error={cleanupError}
+          onConfirm={() => { void handleCleanupLocalData(); }}
+          onClose={() => {
+            if (!isCleaningUpLocalData) setIsCleanupLocalDataOpen(false);
+          }}
         />
       )}
     </div>

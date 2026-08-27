@@ -26,6 +26,8 @@ import { listTraces } from '@/lib/observability/trace';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
+import { boundedId } from '@/lib/ids/boundedId';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 import {
   PROJECT_SNAPSHOT_MAX_BYTES,
   isProjectSnapshotV2,
@@ -79,11 +81,15 @@ function proposalConfirmationStatus(proposal: AskContextProposal): 'pending' | '
   return 'pending';
 }
 
+function proposalIdentity(messageId: string, proposal: AskContextProposal): string {
+  return proposal.id ?? boundedId('proposal', `${messageId}_${proposal.type}_${proposal.text}`);
+}
+
 function proposalStates(messages: AskChatMessage[]): ProjectSnapshotV2['proposalStates'] {
   return messages.flatMap((message) =>
     (message.contextProposals ?? message.proposals ?? [])
-      .map((proposal, index) => ({
-        proposalId: proposal.id ?? `${message.id}:proposal:${index}`,
+      .map((proposal) => ({
+        proposalId: proposalIdentity(message.id, proposal),
         messageId: message.id,
         confirmationStatus: proposalConfirmationStatus(proposal),
       })),
@@ -144,7 +150,7 @@ function traceIdsForProject(userId: string, project: Project): string[] {
 }
 
 function idFor(prefix: string, value: string, projectId: string): string {
-  return `${prefix}_${projectId}_${value}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+  return boundedId(prefix, `${projectId}_${value}`);
 }
 
 function nextProjectTitle(baseTitle: string, projects: Project[]): string {
@@ -310,19 +316,19 @@ function remapProject(
     branch: {
       sourceProjectId: source.id,
       sourceSnapshotId: sourceSnapshot.id,
-      sourceProjectTitle: source.title,
+      sourceProjectTitle: projectTitlePresentation(source.title).title,
       branchedAt: now,
       snapshotCreatedAt: sourceSnapshot.createdAt,
       ...(requestId ? { requestId } : {}),
     },
   };
   const branchEvent: ProjectHistoryEvent = {
-    id: `${projectId}:history:project_branched:${now}`,
+    id: boundedId('history', `${projectId}:project_branched:${now}`),
     projectId,
     createdAt: now,
     type: 'project_branched',
-    title: `Created from ${source.title}`,
-    summary: `Created from the historical moment on ${new Date(sourceSnapshot.createdAt).toLocaleString()}.`,
+    title: `Created from ${projectTitlePresentation(source.title).title}`,
+    summary: 'Created from a historical moment in the source project.',
   };
   branched.historyEvents = [...(branched.historyEvents ?? []), branchEvent];
   return { project: branched, maps: { projectIds, nodeIds, edgeIds, sourceIds, historyIds } };
@@ -344,8 +350,10 @@ function remapAsk(
   const chatIds = new Map(ask.chats.map((chat) => [chat.id, idFor('chat', chat.id, project.id)]));
   const messageIds = new Map(ask.messages.map((message) => [message.id, idFor('message', message.id, project.id)]));
   const proposalIds = new Map(ask.messages.flatMap((message) => (message.contextProposals ?? message.proposals ?? [])
-    .filter((proposal): proposal is AskContextProposal & { id: string } => Boolean(proposal.id))
-    .map((proposal) => [proposal.id, idFor('proposal', proposal.id, project.id)])));
+    .map((proposal) => {
+      const originalId = proposalIdentity(message.id, proposal);
+      return [originalId, idFor('proposal', originalId, project.id)] as const;
+    })));
   const researchIds = new Map(ask.research.map((item) => [item.id, idFor('research', item.id, project.id)]));
   const chats = ask.chats.map((chat) => ({
     ...clone(chat),
@@ -357,7 +365,8 @@ function remapAsk(
   const messages = ask.messages.map((message) => {
     const proposals = (message.contextProposals ?? message.proposals ?? []).map((proposal) => ({
       ...clone(proposal),
-      id: proposal.id ? proposalIds.get(proposal.id) ?? proposal.id : undefined,
+      id: proposalIds.get(proposalIdentity(message.id, proposal))
+        ?? idFor('proposal', proposalIdentity(message.id, proposal), project.id),
       sourceMessageId: proposal.sourceMessageId ? messageIds.get(proposal.sourceMessageId) ?? proposal.sourceMessageId : undefined,
     }));
     return {
@@ -384,6 +393,34 @@ function remapAsk(
     sources: item.sources.map((source) => remapAskSource(source, maps.nodeIds, maps.sourceIds)),
   }));
   return { chats, messages, research };
+}
+
+function assertUniqueRemappedIds(label: string, ids: string[]): void {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) {
+      throw new StorageError(`Cannot create project branch: remapped ${label} IDs are not unique.`, 'VALIDATION_ERROR');
+    }
+    seen.add(id);
+  }
+}
+
+function assertBranchRemappingIsUnambiguous(project: Project, ask: MaterializedProjectSnapshot['ask']): void {
+  assertUniqueRemappedIds('project', [project.id]);
+  assertUniqueRemappedIds('node', project.nodes.map((node) => node.id));
+  assertUniqueRemappedIds('edge', project.edges.map((edge) => edge.id));
+  assertUniqueRemappedIds('source', project.sources.map((source) => source.id));
+  assertUniqueRemappedIds('history-event', (project.historyEvents ?? []).map((event) => event.id));
+  assertUniqueRemappedIds('chat', ask.chats.map((chat) => chat.id));
+  assertUniqueRemappedIds('message', ask.messages.map((message) => message.id));
+  assertUniqueRemappedIds('research', ask.research.map((item) => item.id));
+  assertUniqueRemappedIds('proposal', ask.messages.flatMap((message) =>
+    (message.contextProposals ?? message.proposals ?? []).map((proposal) => {
+      if (!proposal.id) {
+        throw new StorageError('Cannot create project branch: a proposal is missing its remapped ID.', 'VALIDATION_ERROR');
+      }
+      return proposal.id;
+    })));
 }
 
 async function persistedAssessments(userId: string, project: Project): Promise<ProjectSnapshotV2['assessments']> {
@@ -495,8 +532,8 @@ export async function materializeProjectSnapshot(params: {
       missingReferences.push({ type: 'message', id });
       return [];
     }
-    const apply = (proposal: AskContextProposal, index: number): AskContextProposal => {
-      const proposalId = proposal.id ?? `${message.id}:proposal:${index}`;
+    const apply = (proposal: AskContextProposal): AskContextProposal => {
+      const proposalId = proposalIdentity(message.id, proposal);
       return proposalStatus.has(proposalId)
         ? { ...proposal, confirmationStatus: proposalStatus.get(proposalId) }
       : { ...proposal };
@@ -628,12 +665,13 @@ export async function branchProjectFromSnapshot(params: {
     if (existingBranch) return { project: existingBranch, sourceSnapshot: snapshot };
   }
   const title = nextProjectTitle(params.requestedTitle?.trim() || materialized.project.title, projects);
-  const identity = params.clientRequestId
-    ? await hashText(`${snapshot.id}|${params.clientRequestId}`)
-    : `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const branchId = `project_${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'branch'}_${identity.slice(0, 24)}`;
+  const branchId = boundedId('project', `${snapshot.id}\u0000${title}`);
+  if (projects.some((project) => project.id === branchId)) {
+    throw new StorageError('Cannot create project branch: generated project ID is not unique.', 'VALIDATION_ERROR');
+  }
   const remapped = remapProject(materialized.project, branchId, title, snapshot, params.clientRequestId);
   const ask = remapAsk(materialized.ask, remapped.project, remapped.maps);
+  assertBranchRemappingIsUnambiguous(remapped.project, ask);
   await storage.saveProject(params.userId, remapped.project);
   for (const chat of ask.chats) await storage.saveAskChat(params.userId, chat);
   for (const message of ask.messages) await storage.saveAskMessage(params.userId, message);

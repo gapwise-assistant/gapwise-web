@@ -51,6 +51,21 @@ function source(id: string, content: string, derivedNodeIds: string[]): Project[
 }
 
 describe('project reasoning retrieval', () => {
+  it('does not retrieve a satisfied open action as current project reasoning', () => {
+    const outcome = node('outcome', 'DECISION', 'Use the selected operating model.', [], 'RESOLVED');
+    const staleAction = node('action', 'NEXT_ACTION', 'Confirm the selected operating model.');
+    const result = retrieveProjectReasoningContext({
+      project: project(
+        [outcome, staleAction],
+        [{ id: 'action-satisfies-outcome', source: staleAction.id, target: outcome.id, type: 'satisfies' }],
+      ),
+      query: 'selected operating model',
+      mode: 'reasoning',
+    });
+
+    expect([...result.seedNodes, ...result.expandedNodes].some((item) => item.id === staleAction.id)).toBe(false);
+  });
+
   it('selects a factual seed and its supporting source without expanding unrelated graph state', () => {
     const fact = node('fact', 'KNOWN', 'The supplier delivers the package on Friday.', ['source-fact'], 'RESOLVED');
     const unrelated = node('unrelated', 'KNOWN', 'The team prefers afternoon meetings.', ['source-unrelated'], 'RESOLVED');

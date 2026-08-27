@@ -1,7 +1,8 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ProjectHistory, snapshotForHistoryEvent } from '@/components/ProjectHistory';
+import { HistoryEventCard, ProjectHistory, snapshotForHistoryEvent } from '@/components/ProjectHistory';
+import { ProjectSnapshotModal } from '@/components/ProjectSnapshotModal';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import type { ProjectHistoryEvent } from '@/types/clarity';
 import type { ProjectSnapshotSummary } from '@/types/projectSnapshot';
@@ -60,10 +61,118 @@ describe('ProjectHistory', () => {
     const html = renderToStaticMarkup(<ProjectHistory project={project} />);
 
     expect(html.indexOf('Planning context added')).toBeLessThan(html.indexOf('Decision made'));
-    expect(html).toContain('Show details');
+    expect(html).not.toContain('Expand');
+    expect(html).not.toContain('Collapse');
+    expect(html).toContain('Show details for Planning context added');
+    expect(html).toContain('2 things learned · 1 meaningful change');
     expect(html).toContain('dateTime="2026-08-22T12:00:00.000Z"');
     expect(html).toContain('dateTime="2026-08-23T12:00:00.000Z"');
     expect(html).toContain('NOW');
+  });
+
+  it('keeps the quiet overflow action in a stable top-right slot', () => {
+    const project = createProjectFromInput({ name: 'Actions', goal: 'Keep actions readable.' });
+    const eventWithDetails: ProjectHistoryEvent = {
+      ...event('event-actions'),
+      changes: [{ kind: 'learned', text: 'The schedule is confirmed.' }],
+    };
+    const html = renderToStaticMarkup(
+      <HistoryEventCard
+        project={project}
+        event={eventWithDetails}
+        expanded={false}
+        onToggle={() => undefined}
+        snapshot={summary('snapshot-actions', 'event-actions')}
+        onViewSnapshot={() => undefined}
+      />,
+    );
+    const groupStart = html.indexOf('aria-label="History event actions"');
+    const groupEnd = html.indexOf('</div>', groupStart);
+    const actions = html.slice(groupStart, groupEnd);
+
+    expect(groupStart).toBeGreaterThan(-1);
+    expect(actions).toContain('aria-haspopup="menu"');
+    expect(actions).not.toContain('Open project at this moment');
+    expect(actions).not.toContain('Create a new project from here');
+    expect(actions).toContain('h-8');
+    expect(actions).toContain('focus-visible:ring-2');
+  });
+
+  it('uses the summary row for details and keeps cards without details quiet', () => {
+    const project = createProjectFromInput({ name: 'Single action', goal: 'Keep one action usable.' });
+    const detailsOnly = renderToStaticMarkup(
+      <HistoryEventCard
+        project={project}
+        event={{ ...event('event-details-only'), changes: [{ kind: 'learned', text: 'A detail.' }] }}
+        expanded
+        onToggle={() => undefined}
+      />,
+    );
+    const noDetails = renderToStaticMarkup(
+      <HistoryEventCard
+        project={project}
+        event={event('event-no-details')}
+        expanded={false}
+        onToggle={() => undefined}
+      />,
+    );
+
+    expect(detailsOnly).toContain('aria-label="Hide details for Question resolved"');
+    expect(detailsOnly).toContain('See what changed');
+    expect(detailsOnly).toContain('aria-expanded="true"');
+    expect(detailsOnly).toContain('Question resolved');
+    expect(noDetails).not.toContain('aria-expanded');
+    expect(noDetails).not.toContain('See what changed');
+  });
+
+  it('reserves a quiet disabled action slot while snapshot availability loads', () => {
+    const html = renderToStaticMarkup(
+      <HistoryEventCard
+        project={createProjectFromInput({ name: 'Loading', goal: 'Keep loading stable.' })}
+        event={event('event-loading')}
+        expanded={false}
+        onToggle={() => undefined}
+        snapshotsLoading
+      />,
+    );
+
+    expect(html).toContain('aria-label="Historical actions are loading"');
+    expect(html).toContain('disabled=""');
+    expect(html).not.toContain('animate-spin');
+  });
+
+  it('opens the historical modal shell with skeleton content before materialization', () => {
+    const html = renderToStaticMarkup(
+      <ProjectSnapshotModal
+        snapshot={null}
+        summary={summary('snapshot-loading', 'event-loading')}
+        isLoading
+        onClose={() => undefined}
+        onBranch={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('Project at this moment');
+    expect(html).toContain('Loading historical project state');
+    expect(html).toContain('Create a new project from here');
+    expect(html).toContain('disabled=""');
+  });
+
+  it('shows retry inside the snapshot modal when materialization fails', () => {
+    const html = renderToStaticMarkup(
+      <ProjectSnapshotModal
+        snapshot={null}
+        summary={summary('snapshot-error', 'event-error')}
+        error="Historical state unavailable."
+        onRetry={() => undefined}
+        onClose={() => undefined}
+        onBranch={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('Historical state unavailable.');
+    expect(html).toContain('Retry');
   });
 });
 

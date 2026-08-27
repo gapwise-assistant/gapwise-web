@@ -6,6 +6,7 @@ import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { normalizeAskContextProposals, type AskContextProposal } from '@/types/ask';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { boundedId } from '@/lib/ids/boundedId';
 
 export const runtime = 'nodejs';
 
@@ -23,9 +24,7 @@ function proposalHistoryEventId(
   assistantMessageId: string,
   proposalId: string,
 ): string | undefined {
-  const sourceId = `ask_proposal_${assistantMessageId}_${proposalId}`
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, 240);
+  const sourceId = boundedId('ask_proposal', `${assistantMessageId}_${proposalId}`);
   return [...(project?.historyEvents ?? [])]
     .reverse()
     .find((event) => event.sourceId === sourceId)?.id;

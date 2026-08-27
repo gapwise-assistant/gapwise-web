@@ -4,6 +4,7 @@ import { todayQuestionFromNode, TodayQuestion } from '@/lib/today/sections';
 import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 export type TodayItemType = 'QUESTION' | 'ACTION' | 'DECISION' | 'REMINDER';
 
@@ -144,6 +145,10 @@ export function buildTodayFeed(
 
   recommendations.forEach((recommendation) => {
     const itemType = todayItemType(recommendation, reasoningProject);
+    const explicitAction = recommendation.action_node_id
+      ? reasoningProject.nodes.find((node) => node.id === recommendation.action_node_id)
+      : undefined;
+    if (explicitAction?.type === 'NEXT_ACTION' && isNextActionSatisfied(reasoningProject, explicitAction)) return;
     // A risk node is retained in the graph and retrieval context, but it is
     // not a standalone Today action. Its actionable UNKNOWN (if any) is what
     // the user should resolve.

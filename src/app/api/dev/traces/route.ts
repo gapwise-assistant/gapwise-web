@@ -5,6 +5,7 @@ import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelPolicy } from '@/lib/agents/modelPolicy';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { isLocalhostRequest } from '@/lib/runtime/localhost';
+import { getStorageProvider } from '@/lib/storage';
 import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';
 import {
   buildDecisionMapActivityFingerprintFromDebug,
@@ -27,6 +28,15 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   try {
     const userId = await requireAuthenticatedUserId(request, url.searchParams.get('userId') ?? undefined);
+    const projectId = url.searchParams.get('projectId')?.trim() || undefined;
+    const storage = getStorageProvider();
+    const generationRuns = await storage.listDeveloperGenerationRuns(userId, projectId);
+    const generationTimelines = await Promise.all(
+      generationRuns.slice(0, 10).map(async (run) => ({
+        run,
+        steps: await storage.getDeveloperGenerationSteps(userId, run.id),
+      })),
+    );
     const execution = isDemoMode() ? 'not_used' : 'would_use';
     const agentPolicy = Object.values(getAgentModelPolicy()).map((config) => ({
       agentName: `${config.role[0].toUpperCase()}${config.role.slice(1)} Agent`,
@@ -35,7 +45,7 @@ export async function GET(request: Request) {
       maxOutputTokens: config.maxOutputTokens,
       execution,
     }));
-    return NextResponse.json({ traces: listTraces(userId), agentPolicy });
+    return NextResponse.json({ traces: listTraces(userId), agentPolicy, generationRuns: generationTimelines });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
   }

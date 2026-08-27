@@ -4,6 +4,7 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react';
 import { Archive, X } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 interface ProjectSettingsPanelProps {
   project: Project;
@@ -20,7 +21,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   mode = 'inline',
   onClose,
 }) => {
-  const [name, setName] = useState(project.title);
+  const [name, setName] = useState(projectTitlePresentation(project.title).title);
   const [goal, setGoal] = useState(project.goal);
   const [description, setDescription] = useState(project.one_sentence_context ?? '');
   const [deadline, setDeadline] = useState(project.deadline ?? '');
@@ -30,7 +31,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   useDismissibleModal(onClose ?? (() => undefined), modalRef, mode === 'modal');
 
   useEffect(() => {
-    setName(project.title);
+    setName(projectTitlePresentation(project.title).title);
     setGoal(project.goal);
     setDescription(project.one_sentence_context ?? '');
     setDeadline(project.deadline ?? '');
@@ -151,7 +152,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
     <section className="space-y-4">
       <div>
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">PROJECT SETTINGS</p>
-        <h2 className="mt-2 text-xl font-extrabold text-slate-100">{project.title}</h2>
+        <h2 className="mt-2 text-xl font-extrabold text-slate-100">{projectTitlePresentation(project.title).title}</h2>
         <p className="mt-1 text-sm text-slate-400">Update the project details Gapwise uses in this workspace.</p>
       </div>
 

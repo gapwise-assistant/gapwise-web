@@ -9,6 +9,8 @@ import { AppScope } from '@/types/scope';
 import { contextTargetForScope, GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { formatDateOnly, formatDateTime } from '@/lib/datetime/displayDateTime';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 interface ContextInboxProps {
   project: Project;
@@ -75,8 +77,7 @@ function formatBytes(value: number | undefined): string | null {
 
 function formatDate(value: string | undefined): string | null {
   if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 
 function formatProcessingLog(value: unknown): string {
@@ -156,7 +157,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
 
   const sourceScopeLabel = (sourceId: string): string => {
     const owner = visibleProjects.find((item) => item.sources.some((source) => source.id === sourceId));
-    return owner?.id === GENERAL_CONTEXT_ID ? 'General' : owner?.title ?? project.title;
+    return owner?.id === GENERAL_CONTEXT_ID ? 'General' : projectTitlePresentation(owner?.title ?? project.title).title;
   };
 
   const recentSources = useMemo(
@@ -296,7 +297,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           <div className="min-w-0">
             <h3 className="truncate text-sm font-bold text-slate-100">{src.filename}</h3>
             <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              {src.type} · {new Date(src.extracted_at).toLocaleDateString()} · {sourceScopeLabel(src.id)}
+              {src.type} · {formatDateOnly(src.extracted_at)} · {sourceScopeLabel(src.id)}
             </p>
           </div>
         </div>
@@ -567,7 +568,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             >
               <option value={GENERAL_CONTEXT_ID}>General / no project</option>
               {projects.filter((item) => item.status !== 'archived').map((item) => (
-                <option key={item.id} value={item.id}>{item.title}</option>
+                <option key={item.id} value={item.id}>{projectTitlePresentation(item.title).title}</option>
               ))}
             </select>
           </label>
@@ -692,7 +693,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           Information and sources Gapwise can use.
           </p>
           <p className="mt-2 text-xs font-semibold text-cyan-300">
-            {scope.type === 'project' ? `Focused on: ${project.title}` : 'Focused on: Everything'}
+            {scope.type === 'project' ? `Focused on: ${projectTitlePresentation(project.title).title}` : 'Focused on: Everything'}
           </p>
         </div>
         <button

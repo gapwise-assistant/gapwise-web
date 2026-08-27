@@ -1,4 +1,14 @@
 import type { TodayQuestion } from '@/lib/today/sections';
+import { BOUNDED_ID_MAX_LENGTH } from '@/lib/ids/boundedId';
+
+export const QUESTION_PLAN_MAX_QUESTIONS = 4;
+export const QUESTION_PLAN_MAX_CONTEXT_ENTRIES = 6;
+export const QUESTION_PLAN_ID_MAX_LENGTH = BOUNDED_ID_MAX_LENGTH + 40;
+export const QUESTION_PLAN_SCOPE_LABEL_MAX_LENGTH = 120;
+export const QUESTION_PLAN_QUESTION_MAX_LENGTH = 300;
+export const QUESTION_PLAN_REASON_MAX_LENGTH = 500;
+export const QUESTION_PLAN_PROVENANCE_MAX_LENGTH = 500;
+export const QUESTION_PLAN_CONTEXT_MAX_LENGTH = 300;
 
 export interface TodayQuestionSuggestion {
   questionId: string;
@@ -20,6 +30,57 @@ export interface TodayQuestionSuggestionInput {
   reason: string;
   provenance: string;
   presentationContext?: string[];
+}
+
+export interface QuestionPlanRequestInput {
+  userId?: string;
+  projectId?: string;
+  scopeLabel: string;
+  questions: TodayQuestionSuggestionInput[];
+}
+
+export interface NormalizedQuestionPlanRequest {
+  userId?: string;
+  projectId?: string;
+  scopeLabel: string;
+  questions: TodayQuestionSuggestionInput[];
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function boundedText(value: string, maxLength: number): string {
+  return normalizeWhitespace(value).slice(0, maxLength).trim();
+}
+
+/**
+ * Keeps the client and endpoint on the same bounded request contract. IDs are
+ * intentionally never shortened: they are canonical lookup keys.
+ */
+export function normalizeQuestionPlanRequest(
+  input: QuestionPlanRequestInput,
+): NormalizedQuestionPlanRequest {
+  return {
+    ...(input.userId ? { userId: normalizeWhitespace(input.userId) } : {}),
+    ...(input.projectId ? { projectId: normalizeWhitespace(input.projectId) } : {}),
+    scopeLabel: boundedText(input.scopeLabel, QUESTION_PLAN_SCOPE_LABEL_MAX_LENGTH),
+    questions: input.questions
+      .slice(0, QUESTION_PLAN_MAX_QUESTIONS)
+      .map((question) => {
+        const presentationContext = (question.presentationContext ?? [])
+          .map((entry) => boundedText(entry, QUESTION_PLAN_CONTEXT_MAX_LENGTH))
+          .filter(Boolean)
+          .slice(0, QUESTION_PLAN_MAX_CONTEXT_ENTRIES);
+        return {
+          id: question.id,
+          question: boundedText(question.question, QUESTION_PLAN_QUESTION_MAX_LENGTH),
+          reason: boundedText(question.reason, QUESTION_PLAN_REASON_MAX_LENGTH),
+          provenance: boundedText(question.provenance, QUESTION_PLAN_PROVENANCE_MAX_LENGTH),
+          ...(presentationContext.length ? { presentationContext } : {}),
+        };
+      }),
+  };
 }
 
 function cleanText(value: unknown): string | null {
@@ -197,7 +258,8 @@ export function questionSuggestionRequestMessage(
   scopeLabel: string,
   questions: TodayQuestionSuggestionInput[]
 ): string {
-  const questionList = questions
+  const normalized = normalizeQuestionPlanRequest({ scopeLabel, questions });
+  const questionList = normalized.questions
     .map((question) => `${question.id}: ${question.question} (${question.reason}; ${question.provenance}${question.presentationContext?.length ? `; context: ${question.presentationContext.join(' | ')}` : ''})`)
     .join(' | ');
   return [

@@ -4,6 +4,11 @@ import { recordTrace } from '@/lib/observability/trace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { GET, POST } from './route';
 
+const storage = {
+  listDeveloperGenerationRuns: vi.fn(async () => [{ id: 'generation-1', projectId: 'project-1', userId: 'trace-user', generator: 'Test', status: 'completed', startedAt: '2026-08-27T10:00:00.000Z' }]),
+  getDeveloperGenerationSteps: vi.fn(async () => []),
+};
+
 vi.mock('@/lib/observability/trace', () => ({
   latestDecisionMapActivity: vi.fn(),
   listTraces: vi.fn(),
@@ -15,6 +20,10 @@ vi.mock('@/lib/auth/server', () => ({
   requireAuthenticatedUserId: vi.fn(),
 }));
 
+vi.mock('@/lib/storage', () => ({
+  getStorageProvider: () => storage,
+}));
+
 function request(body: unknown): NextRequest {
   return new NextRequest('http://localhost/api/dev/traces', {
     method: 'POST',
@@ -24,10 +33,12 @@ function request(body: unknown): NextRequest {
 }
 
 describe('POST /api/dev/traces', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(requireAuthenticatedUserId).mockResolvedValue('trace-user');
+  });
 
   it('records a structured client-rendered Decision Map debug trace for the authenticated user', async () => {
-    vi.mocked(requireAuthenticatedUserId).mockResolvedValue('trace-user');
     vi.mocked(recordTrace).mockReturnValue({ id: 'trace_decision_map' } as ReturnType<typeof recordTrace>);
 
     const response = await POST(request({
@@ -75,5 +86,16 @@ describe('POST /api/dev/traces', () => {
 
     expect(response.status).toBe(404);
     expect(requireAuthenticatedUserId).not.toHaveBeenCalled();
+  });
+
+  it('loads persisted generation timelines for the requested project', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/dev/traces?userId=trace-user&projectId=project-1'));
+
+    expect(response.status).toBe(200);
+    expect(storage.listDeveloperGenerationRuns).toHaveBeenCalledWith('trace-user', 'project-1');
+    expect(storage.getDeveloperGenerationSteps).toHaveBeenCalledWith('trace-user', 'generation-1');
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      generationRuns: [{ run: expect.objectContaining({ id: 'generation-1' }), steps: [] }],
+    }));
   });
 });

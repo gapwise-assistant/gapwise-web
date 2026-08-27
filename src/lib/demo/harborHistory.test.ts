@@ -5,6 +5,8 @@ import type { AskContextProposal } from '@/types/ask';
 const mocks = vi.hoisted(() => ({
   storage: null as any,
   snapshots: [] as any[],
+  generationRuns: [] as any[],
+  generationSteps: [] as any[],
   askCalls: 0,
   uploadContextSourcePdf: vi.fn(),
   processContextSource: vi.fn(),
@@ -42,7 +44,7 @@ vi.mock('@/lib/retrieval/contextPackServer', () => ({ buildContextPackForUser: m
 vi.mock('@/lib/attention/generateBrief', () => ({ generateDailyBrief: mocks.generateDailyBrief }));
 
 import { createProjectFromInput } from '@/lib/projects/createProject';
-import { createHarborHistoryDemoForUser } from '@/lib/demo/harborHistory';
+import { createHarborHistoryDemoForUser, proposalIdFor, proposalSourceIdFor } from '@/lib/demo/harborHistory';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -100,6 +102,8 @@ describe('Harbor history demo journey', () => {
     let project: Project | null = null;
     const messages: any[] = [];
     const chats: any[] = [];
+    mocks.generationRuns = [];
+    mocks.generationSteps = [];
     mocks.storage = {
       getMemories: vi.fn(async () => []),
       getProject: vi.fn(async () => clone(project)),
@@ -124,6 +128,19 @@ describe('Harbor history demo journey', () => {
         trigger: snapshot.trigger,
       }))),
       getProjectSnapshot: vi.fn(async (_userId: string, id: string) => clone(mocks.snapshots.find((snapshot) => snapshot.id === id) ?? null)),
+      listDeveloperGenerationRuns: vi.fn(async (_userId: string, projectId?: string) => clone(mocks.generationRuns.filter((run) => !projectId || run.projectId === projectId))),
+      getDeveloperGenerationRun: vi.fn(async (_userId: string, id: string) => clone(mocks.generationRuns.find((run) => run.id === id) ?? null)),
+      saveDeveloperGenerationRun: vi.fn(async (_userId: string, run: any) => {
+        const index = mocks.generationRuns.findIndex((candidate) => candidate.id === run.id);
+        if (index >= 0) mocks.generationRuns[index] = clone(run);
+        else mocks.generationRuns.push(clone(run));
+      }),
+      getDeveloperGenerationSteps: vi.fn(async (_userId: string, runId: string) => clone(mocks.generationSteps.filter((step) => step.runId === runId))),
+      saveDeveloperGenerationStep: vi.fn(async (_userId: string, step: any) => {
+        const index = mocks.generationSteps.findIndex((candidate) => candidate.id === step.id);
+        if (index >= 0) mocks.generationSteps[index] = clone(step);
+        else mocks.generationSteps.push(clone(step));
+      }),
       setAppScope: vi.fn(async () => undefined),
     };
 
@@ -183,7 +200,7 @@ describe('Harbor history demo journey', () => {
       if (!project) throw new Error('missing test project');
       const next = clone(project);
       const proposalId = selected.id;
-      const sourceId = `ask_proposal_${assistantMessageId}_${proposalId}`;
+      const sourceId = proposalSourceIdFor(assistantMessageId, proposalId);
       next.historyEvents = [...(next.historyEvents ?? []), historyEvent(next, `event:${proposalId}`, 'context_added', sourceId)];
       project = next;
       return next;
@@ -258,6 +275,19 @@ describe('Harbor history demo journey', () => {
     expect(result.addedProposalCount).toBe(4);
     expect(result.dismissedProposalCount).toBe(3);
     expect(result.pendingProposalCount).toBe(0);
+    expect(result.graphHealth).toMatchObject({
+      nodeCount: expect.any(Number),
+      edgeCount: expect.any(Number),
+      isolatedNodeCount: expect.any(Number),
+      isolatedActionableNodeIds: expect.any(Array),
+      staleOpenActionIds: expect.any(Array),
+      overlappingCanonicalNodeIds: expect.any(Array),
+      openWorkflowNodeCount: expect.any(Number),
+      connectedOpenWorkflowNodeCount: expect.any(Number),
+    });
+    expect(result.relationshipCountsByType).toEqual(expect.any(Object));
+    expect(result.pdfSourcesWithCompletionTrace).toEqual(expect.any(Number));
+    expect(result.askProposalSourcesWithCompletionTrace).toEqual(expect.any(Number));
     expect(result.uniqueSnapshotEventCount).toBe(result.snapshotCount);
     expect(result.askResponseSnapshotCount).toBe(3);
     expect(result.proposalAddedSnapshotCount).toBe(4);
@@ -271,6 +301,11 @@ describe('Harbor history demo journey', () => {
     expect(result.project.nodes.find((candidate) => candidate.id === 'pricing')?.status).toBe('RESOLVED');
     expect(result.project.nodes.find((candidate) => candidate.id === 'deletion')?.status).toBe('RESOLVED');
     expect(result.project.nodes.find((candidate) => candidate.id === 'rehearsal')?.status).toBe('OPEN');
+    expect(mocks.generationRuns).toHaveLength(1);
+    expect(mocks.generationRuns[0]).toMatchObject({ projectId: result.project.id, status: 'completed' });
+    expect(mocks.generationSteps.length).toBeGreaterThan(0);
+    expect(mocks.generationSteps.every((step) => step.projectId === result.project.id)).toBe(true);
+    expect(mocks.generationSteps.map((step) => step.sequence)).toEqual([...mocks.generationSteps].sort((left, right) => left.sequence - right.sequence).map((step) => step.sequence));
 
     expect(mocks.persistAskProposal).toHaveBeenCalledTimes(4);
     expect(mocks.persistAskProposal.mock.calls.map(([input]) => input.proposal.text)).toEqual([
@@ -328,5 +363,15 @@ describe('Harbor history demo journey', () => {
     );
     expect(proposalEvents.every((event) => !askEventIds.has(event.id))).toBe(true);
     expect(mocks.storage.getProjectSnapshot).toHaveBeenCalledTimes(result.snapshotCount);
+  });
+
+  it('keeps proposals distinct for a long assistant-message ID', () => {
+    const assistantMessageId = `assistant-${'x'.repeat(300)}`;
+    const first = proposalIdFor(assistantMessageId, { type: 'RISK', text: 'The pilot may be delayed.' });
+    const second = proposalIdFor(assistantMessageId, { type: 'ASSUMPTION', text: 'The pilot will use the current schedule.' });
+
+    expect(first).not.toBe(second);
+    expect(first.length).toBeLessThanOrEqual(240);
+    expect(second.length).toBeLessThanOrEqual(240);
   });
 });

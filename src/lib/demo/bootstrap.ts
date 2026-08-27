@@ -46,6 +46,7 @@ import {
   northstarPilotProjectInput,
 } from '@/lib/demo/northstarPilot';
 import { getStorageProvider } from '@/lib/storage';
+import { boundedId } from '@/lib/ids/boundedId';
 import { attachHistoryFocus } from '@/lib/history/projectHistory';
 import { AppScope } from '@/types/scope';
 import { Project, ProjectHistoryFocus } from '@/types/clarity';
@@ -698,7 +699,7 @@ async function replayHarborSource(userId: string, project: Project, source: (typ
 }
 
 function harborAssistantMessageId(userMessageId: string): string {
-  return `ask_assistant_${userMessageId}`;
+  return boundedId('ask_assistant', userMessageId);
 }
 
 function harborUserMessageId(turn: number): string {
@@ -758,9 +759,9 @@ async function runHarborAsk(params: {
   });
   const contextProposals = normalizeAskContextProposals(
     result.contextProposals?.length ? result.contextProposals : result.proposals,
-  ).map((proposal, index) => ({
+  ).map((proposal) => ({
     ...proposal,
-    id: proposal.id ?? `proposal_${assistantMessageId}_${index}`,
+    id: proposal.id ?? boundedId('proposal', `${assistantMessageId}_${proposal.type}_${proposal.text}`),
     sourceMessageId: proposal.sourceMessageId ?? assistantMessageId,
   }));
 

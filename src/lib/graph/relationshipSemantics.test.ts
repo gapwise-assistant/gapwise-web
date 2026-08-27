@@ -8,6 +8,7 @@ import {
   removeSupersededRelationships,
   writeSemanticEdge,
 } from '@/lib/graph/relationshipSemantics';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 
 function node(id: string, type: ClarityNode['type'], text: string, status: ClarityNode['status']): ClarityNode {
   return {
@@ -35,6 +36,31 @@ describe('relationship semantics', () => {
     expect(relationshipRoleCompatible(pending, decision, 'resolves')).toBe(false);
     expect(relationshipRoleCompatible(result, decision, 'resolves')).toBe(true);
     expect(relationshipRoleCompatible(action, decision, 'satisfies')).toBe(true);
+  });
+
+  it('does not let pending evidence resolve an outcome just because it is stored as resolved', () => {
+    const pending = node('pending', 'EVIDENCE', 'I have not tested the corrected configuration yet.', 'RESOLVED');
+    const question = node('question', 'UNKNOWN', 'Did the corrected configuration work?', 'OPEN');
+
+    expect(relationshipRoleCompatible(pending, question, 'resolves')).toBe(false);
+    expect(allowedRelationshipTypes(pending, question)).not.toContain('resolves');
+  });
+
+  it('does not let a preference resolve a decision', () => {
+    const preference = node('preference', 'PREFERENCE', 'I would rather keep the first option.', 'RESOLVED');
+    preference.created_by = 'user';
+    const decision = node('decision', 'DECISION', 'Choose between the available options.', 'OPEN');
+
+    expect(relationshipRoleCompatible(preference, decision, 'resolves')).toBe(false);
+  });
+
+  it('offers future satisfaction only for an unresolved outcome', () => {
+    const action = node('action', 'NEXT_ACTION', 'Confirm the selected option.', 'OPEN');
+    const openDecision = node('open-decision', 'DECISION', 'Choose the selected option.', 'OPEN');
+    const resolvedDecision = node('resolved-decision', 'DECISION', 'Choose the selected option.', 'RESOLVED');
+
+    expect(completionAllowedRelationshipTypes(action, openDecision)).toContain('satisfies');
+    expect(completionAllowedRelationshipTypes(action, resolvedDecision)).not.toContain('satisfies');
   });
 
   it('allows a completed decision outcome to resolve an existing factual gap', () => {
@@ -230,5 +256,26 @@ describe('relationship semantics', () => {
       confidence: 0.95,
     })).toBeDefined();
     expect(question.status).toBe('RESOLVED');
+  });
+
+  it('closes only the action explicitly satisfied by a newly resolved outcome', () => {
+    const evidence = node('evidence', 'EVIDENCE', 'The review confirmed the configuration is valid.', 'RESOLVED');
+    const question = node('question', 'UNKNOWN', 'Is the configuration valid?', 'OPEN');
+    const action = node('action', 'NEXT_ACTION', 'Obtain confirmation of the configuration.', 'OPEN');
+    const project = {
+      nodes: [evidence, question, action],
+      edges: [{ id: 'satisfies', source: action.id, target: question.id, type: 'satisfies' as const }],
+    } as unknown as Project;
+
+    writeSemanticEdge(project, {
+      source: evidence.id,
+      target: question.id,
+      type: 'resolves',
+      confidence: 0.95,
+    });
+
+    expect(question.status).toBe('RESOLVED');
+    expect(resolveSatisfiedNextActions(project, '2026-08-23T13:00:00.000Z')).toEqual([action.id]);
+    expect(action.status).toBe('RESOLVED');
   });
 });

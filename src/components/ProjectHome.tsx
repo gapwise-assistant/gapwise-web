@@ -8,6 +8,8 @@ import { processUserAnswer } from '@/lib/gemini';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { EvidenceDrawer } from '@/components/EvidenceDrawer';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { formatDateTime } from '@/lib/datetime/displayDateTime';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 interface ProjectHomeProps {
   project: Project;
@@ -97,7 +99,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
           <div className="space-y-2 max-w-2xl">
             <div className="flex items-center space-x-3">
               <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-100 tracking-tight">
-                {project.title}
+                {projectTitlePresentation(project.title).title}
               </h1>
               <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/80">
                 Active Project
@@ -288,7 +290,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
                   <div className="flex justify-between text-slate-400">
                     <span className="font-semibold text-cyan-300">Q: {item.question}</span>
                     <span className="text-[10px] text-slate-500">
-                      {new Date(item.timestamp).toLocaleTimeString()}
+                      {formatDateTime(item.timestamp)}
                     </span>
                   </div>
                   <p className="text-slate-200 font-medium">A: {item.answer}</p>

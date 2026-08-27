@@ -1,13 +1,15 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
-import { ChevronDown, ExternalLink, GitBranch } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, GitBranch, MoreHorizontal } from 'lucide-react';
 import type { ClarityNode, HistoryNodeSnapshot, Project, ProjectHistoryChange, ProjectHistoryEvent, ProjectHistoryFocus } from '@/types/clarity';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import { historyCurrentFocus } from '@/lib/history/projectHistory';
 import { authFetch } from '@/lib/auth/client';
 import type { MaterializedProjectSnapshot, ProjectSnapshotSummary } from '@/types/projectSnapshot';
 import { ProjectSnapshotModal } from '@/components/ProjectSnapshotModal';
+import { boundedId } from '@/lib/ids/boundedId';
+import { formatDateHeading, formatDateTime } from '@/lib/datetime/displayDateTime';
 
 interface ProjectHistoryProps {
   project: Project;
@@ -40,7 +42,7 @@ export function snapshotForHistoryEvent(
 }
 
 export function historyBranchRequestId(snapshotId: string): string {
-  return `history-branch:${snapshotId.slice(-96)}`;
+  return boundedId('history-branch', snapshotId, 180);
 }
 
 const CHANGE_LABELS: Record<ProjectHistoryChange['kind'], string> = {
@@ -51,26 +53,6 @@ const CHANGE_LABELS: Record<ProjectHistoryChange['kind'], string> = {
   invalidated: 'Invalidated',
   updated: 'Updated',
 };
-
-function dateLabel(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
-}
-
-function timestampLabel(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-}
 
 function displayOnlyProjectStartedEvent(project: Project): ProjectHistoryEvent {
   return {
@@ -93,7 +75,17 @@ function sourceName(project: Project, sourceId?: string): string | undefined {
 }
 
 function eventHasDetails(event: ProjectHistoryEvent): boolean {
-  return Boolean(event.changes?.length || event.affectedNodes?.length || event.affectedNodeIds?.length || event.sourceId || event.focusBefore || event.focusAfter);
+  // Only structured changes, affected nodes, or focus transitions create a
+  // disclosure row; a source link alone is already available in the menu.
+  return Boolean(event.changes?.length || event.affectedNodes?.length || event.affectedNodeIds?.length || event.focusBefore || event.focusAfter);
+}
+
+function compactSummary(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function snapshotForChange(project: Project, change: ProjectHistoryChange): HistoryNodeSnapshot {
@@ -128,15 +120,132 @@ function ChangeRow({ project, change }: { project: Project; change: ProjectHisto
   );
 }
 
-function HistoryEventCard({
+interface HistoryActionsMenuProps {
+  hasSnapshot?: boolean;
+  hasSource?: boolean;
+  snapshotsLoading?: boolean;
+  onOpenSnapshot?: () => void;
+  onOpenSource?: () => void;
+}
+
+/** The compact action menu keeps inspection and branching actions together. */
+export function HistoryActionsMenu({
+  hasSnapshot = false,
+  hasSource = false,
+  snapshotsLoading = false,
+  onOpenSnapshot,
+  onOpenSource,
+}: HistoryActionsMenuProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const items = [
+    ...(hasSnapshot && onOpenSnapshot
+      ? [{ label: 'Open project at this moment', onSelect: onOpenSnapshot }]
+      : []),
+    ...(hasSource && onOpenSource ? [{ label: 'Open source', onSelect: onOpenSource }] : []),
+  ];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+        return;
+      }
+      if (!items.length) return;
+      const currentIndex = menuItemRefs.current.findIndex((item) => item === document.activeElement);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        const nextIndex = currentIndex < 0
+          ? (direction === 1 ? 0 : items.length - 1)
+          : (currentIndex + direction + items.length) % items.length;
+        menuItemRefs.current[nextIndex]?.focus();
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        menuItemRefs.current[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    const frame = window.requestAnimationFrame(() => menuItemRefs.current[0]?.focus());
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [items.length, open]);
+
+  if (!items.length && !snapshotsLoading) return null;
+  const loadingWithoutAction = snapshotsLoading && items.length === 0;
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={loadingWithoutAction ? 'Historical actions are loading' : 'History event actions'}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={loadingWithoutAction}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-400 hover:border-cyan-700 hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-wait disabled:opacity-80"
+      >
+        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          aria-label="History event actions menu"
+          className="absolute right-0 top-full z-30 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-2xl"
+        >
+          {items.map((item, index) => (
+            <button
+              key={item.label}
+              ref={(element) => { menuItemRefs.current[index] = element; }}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                item.onSelect();
+              }}
+              className="flex w-full items-center rounded-md px-3 py-2 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 focus-visible:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function HistoryEventCard({
   project,
   event,
   expanded,
   onToggle,
   onNavigateToSource,
   snapshot,
+  snapshotsLoading,
   onViewSnapshot,
-  snapshotLoading,
 }: {
   project: Project;
   event: ProjectHistoryEvent;
@@ -144,8 +253,8 @@ function HistoryEventCard({
   onToggle: () => void;
   onNavigateToSource?: (sourceId: string) => void;
   snapshot?: ProjectSnapshotSummary;
+  snapshotsLoading?: boolean;
   onViewSnapshot?: () => void;
-  snapshotLoading?: boolean;
 }) {
   const source = sourceName(project, event.sourceId);
   const affectedNodes: HistoryNodeSnapshot[] = event.affectedNodes?.length
@@ -157,41 +266,51 @@ function HistoryEventCard({
   const changes = event.type === 'decision_resolved'
     ? (event.changes ?? []).filter((change) => change.nodeId !== event.primaryNodeId)
     : event.changes ?? [];
+  const hasDetails = eventHasDetails(event);
+  const hasSnapshotAction = Boolean(snapshot && onViewSnapshot);
+  const hasSourceAction = Boolean(source && event.sourceId && onNavigateToSource);
+  const hasHistoryActions = hasSnapshotAction || hasSourceAction || snapshotsLoading;
+  const disclosureLabel = expanded
+    ? `Hide details for ${event.title}`
+    : `Show details for ${event.title}`;
 
   return (
     <article className={`relative rounded-xl border bg-slate-900/80 p-4 sm:p-5 ${event.type === 'project_started' ? 'border-emerald-800/80' : 'border-slate-800'}`}>
       <span className={`absolute -left-[1.56rem] top-5 h-3 w-3 rounded-full border-2 bg-slate-950 ${event.type === 'project_started' ? 'border-emerald-400' : 'border-cyan-400'}`} aria-hidden="true" />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
           {event.type === 'project_started' && <span className="mb-1 inline-flex rounded-full border border-emerald-700/80 bg-emerald-950/50 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-emerald-300">Project start</span>}
           <h3 className="text-sm font-extrabold text-slate-100">{event.title}</h3>
-          <time dateTime={event.createdAt} className="mt-1 block text-xs font-medium text-slate-500">{timestampLabel(event.createdAt)}</time>
+          <time dateTime={event.createdAt} className="mt-1 block text-xs font-medium text-slate-500">{formatDateTime(event.createdAt)}</time>
           {source && <p className="mt-1 text-xs font-semibold text-cyan-300">{source}</p>}
         </div>
-        {eventHasDetails(event) && (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
-          >
-            {expanded ? 'Hide details' : 'Show details'}
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
-          </button>
-        )}
-        {snapshot && (
-          <button
-            type="button"
-            onClick={onViewSnapshot}
-            disabled={snapshotLoading}
-            className="inline-flex shrink-0 items-center rounded-md border border-cyan-800/80 bg-cyan-950/30 px-2.5 py-1.5 text-xs font-bold text-cyan-200 hover:border-cyan-500 hover:bg-cyan-900/40"
-          >
-            {snapshotLoading ? 'Loading…' : 'View this moment'}
-          </button>
-        )}
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center self-start sm:ml-4" aria-label="History event actions">
+          {hasHistoryActions ? (
+            <HistoryActionsMenu
+              hasSnapshot={hasSnapshotAction}
+              hasSource={hasSourceAction}
+              snapshotsLoading={snapshotsLoading}
+              onOpenSnapshot={onViewSnapshot}
+              onOpenSource={event.sourceId ? () => onNavigateToSource?.(event.sourceId!) : undefined}
+            />
+          ) : <span className="block h-8 w-8" aria-hidden="true" />}
+        </div>
       </div>
 
-      {event.summary && <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-300">{event.summary}</p>}
+      {hasDetails ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={disclosureLabel}
+          className="mt-2 flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs leading-relaxed text-slate-500 transition-colors hover:bg-slate-800/60 hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+        >
+          <span className="min-w-0">{event.summary ? compactSummary(event.summary) : 'See what changed'}</span>
+          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+        </button>
+      ) : event.summary ? (
+        <p className="mt-2 text-xs leading-relaxed text-slate-500">{compactSummary(event.summary)}</p>
+      ) : null}
 
       {expanded && (
         <div className="mt-4 space-y-4 border-t border-slate-800 pt-4">
@@ -231,11 +350,6 @@ function HistoryEventCard({
             </section>
           )}
 
-          {source && onNavigateToSource && event.sourceId && (
-            <button type="button" onClick={() => onNavigateToSource(event.sourceId!)} className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-300 hover:text-cyan-100">
-              Open source <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
-          )}
         </div>
       )}
     </article>
@@ -255,10 +369,17 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [sharedFocus, setSharedFocus] = useState<ProjectHistoryFocus | null | undefined>(undefined);
   const [snapshots, setSnapshots] = useState<ProjectSnapshotSummary[]>([]);
+  const [snapshotsProjectId, setSnapshotsProjectId] = useState<string | null>(null);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(true);
   const [selectedSnapshot, setSelectedSnapshot] = useState<MaterializedProjectSnapshot | null>(null);
+  const [selectedSnapshotSummary, setSelectedSnapshotSummary] = useState<ProjectSnapshotSummary | null>(null);
   const [snapshotError, setSnapshotError] = useState('');
-  const [loadingSnapshotId, setLoadingSnapshotId] = useState<string | null>(null);
+  const [snapshotIndexError, setSnapshotIndexError] = useState('');
+  const [snapshotLoadingId, setSnapshotLoadingId] = useState<string | null>(null);
   const [branchingSnapshotId, setBranchingSnapshotId] = useState<string | null>(null);
+  const activeProjectIdRef = useRef(project.id);
+  const snapshotRequestIdRef = useRef(0);
+  const snapshotControllerRef = useRef<AbortController | null>(null);
   const events = useMemo(
     () => {
       const persisted = [...(project.historyEvents ?? [])];
@@ -295,12 +416,28 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
   }, [project.id, project.updated_at, userId]);
 
   React.useEffect(() => {
+    activeProjectIdRef.current = project.id;
+    setSelectedSnapshot(null);
+    setSelectedSnapshotSummary(null);
+    setSnapshotError('');
+    snapshotRequestIdRef.current += 1;
+    snapshotControllerRef.current?.abort();
+    snapshotControllerRef.current = null;
+    setSnapshotLoadingId(null);
+    setBranchingSnapshotId(null);
+    setSnapshotsProjectId(null);
+    setSnapshotsLoading(true);
+    setSnapshots([]);
+    setSnapshotIndexError('');
     if (!userId) {
       setSnapshots([]);
+      setSnapshotsProjectId(project.id);
+      setSnapshotsLoading(false);
       return;
     }
     const controller = new AbortController();
     setSnapshotError('');
+    let active = true;
     authFetch(`/api/projects/${encodeURIComponent(project.id)}/snapshots?userId=${encodeURIComponent(userId)}`, {
       signal: controller.signal,
     })
@@ -308,38 +445,82 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         if (!response.ok) throw new Error('Project history snapshots unavailable');
         return response.json() as Promise<{ snapshots?: ProjectSnapshotSummary[] }>;
       })
-      .then((body) => setSnapshots(Array.isArray(body.snapshots) ? body.snapshots : []))
+      .then((body) => {
+        if (!active) return;
+        setSnapshots(Array.isArray(body.snapshots) ? body.snapshots : []);
+        setSnapshotsProjectId(project.id);
+        setSnapshotsLoading(false);
+      })
       .catch((error) => {
+        if (!active) return;
         if (error instanceof DOMException && error.name === 'AbortError') return;
         setSnapshots([]);
-        setSnapshotError('Historical snapshots are temporarily unavailable.');
+        setSnapshotsProjectId(project.id);
+        setSnapshotsLoading(false);
+        setSnapshotIndexError('Historical project actions are temporarily unavailable.');
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+      controller.abort();
+      setSnapshotsLoading(false);
+    };
   }, [project.id, userId]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedSnapshot(null);
+      if (event.key === 'Escape') closeSnapshot();
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, []);
 
-  const openSnapshot = async (summary: ProjectSnapshotSummary) => {
+  const loadSnapshot = async (summary: ProjectSnapshotSummary) => {
     if (!userId) return;
-    setLoadingSnapshotId(summary.id);
+    const requestId = snapshotRequestIdRef.current + 1;
+    snapshotRequestIdRef.current = requestId;
+    snapshotControllerRef.current?.abort();
+    const controller = new AbortController();
+    snapshotControllerRef.current = controller;
+    const requestedProjectId = project.id;
+    setSelectedSnapshot(null);
     setSnapshotError('');
+    setSnapshotLoadingId(summary.id);
     try {
-      const response = await authFetch(`/api/projects/${encodeURIComponent(project.id)}/snapshots/${encodeURIComponent(summary.id)}?userId=${encodeURIComponent(userId)}`);
+      const response = await authFetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/snapshots/${encodeURIComponent(summary.id)}?userId=${encodeURIComponent(userId)}`, {
+        signal: controller.signal,
+      });
       const body = await response.json().catch(() => ({})) as MaterializedProjectSnapshot & { error?: string };
       if (!response.ok || !body.project || !body.snapshot) throw new Error(body.error ?? 'This historical moment is temporarily unavailable.');
+      if (snapshotRequestIdRef.current !== requestId || activeProjectIdRef.current !== requestedProjectId) return;
       setSelectedSnapshot(body);
     } catch (error) {
+      if (controller.signal.aborted || snapshotRequestIdRef.current !== requestId || activeProjectIdRef.current !== requestedProjectId) return;
       setSnapshotError(error instanceof Error ? error.message : 'This historical moment is temporarily unavailable.');
     } finally {
-      setLoadingSnapshotId(null);
+      if (snapshotRequestIdRef.current === requestId) {
+        setSnapshotLoadingId(null);
+        snapshotControllerRef.current = null;
+      }
     }
+  };
+
+  const openSnapshot = (summary: ProjectSnapshotSummary) => {
+    if (!userId || snapshotLoadingId === summary.id) return;
+    setSelectedSnapshotSummary(summary);
+    setSelectedSnapshot(null);
+    setSnapshotError('');
+    void loadSnapshot(summary);
+  };
+
+  const closeSnapshot = () => {
+    snapshotRequestIdRef.current += 1;
+    snapshotControllerRef.current?.abort();
+    snapshotControllerRef.current = null;
+    setSnapshotLoadingId(null);
+    setSelectedSnapshot(null);
+    setSelectedSnapshotSummary(null);
+    setSnapshotError('');
   };
 
   const branchSelectedSnapshot = async () => {
@@ -355,7 +536,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
       });
       const body = await response.json().catch(() => ({})) as { project?: Project; error?: string };
       if (!response.ok || !body.project) throw new Error(body.error ?? 'The project could not be created from this moment.');
-      setSelectedSnapshot(null);
+      closeSnapshot();
       onProjectBranched?.(body.project);
     } catch (error) {
       setSnapshotError(error instanceof Error ? error.message : 'The project could not be created from this moment.');
@@ -367,6 +548,10 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
   const currentFocus = sharedFocus !== undefined
     ? sharedFocus ?? undefined
     : historyCurrentFocus(project);
+  const projectSnapshotsLoading = snapshotsLoading || snapshotsProjectId !== project.id;
+  const visibleSnapshots = snapshotsProjectId === project.id ? snapshots : [];
+  const visibleSelectedSnapshotSummary = selectedSnapshotSummary?.projectId === project.id ? selectedSnapshotSummary : null;
+  const visibleSelectedSnapshot = selectedSnapshot?.project.id === project.id ? selectedSnapshot : null;
 
   if (events.length === 0) {
     return (
@@ -385,16 +570,28 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">PROJECT HISTORY</p>
         <h2 className="mt-2 text-xl font-extrabold text-slate-100">How this project got here</h2>
         <p className="mt-1 text-sm text-slate-400">Meaningful changes in the project understanding, decisions, and priorities.</p>
+        {projectSnapshotsLoading && (
+          <div className="mt-3" role="status" aria-label="Loading historical actions">
+            <div className="h-px w-full animate-pulse bg-slate-700/80" />
+            <span className="sr-only">Loading historical actions</span>
+          </div>
+        )}
+        {snapshotIndexError && (
+          <p role="status" className="mt-3 text-xs leading-relaxed text-amber-300">
+            Historical project actions are temporarily unavailable.<br />
+            The timeline details are still available.
+          </p>
+        )}
       </div>
 
       <div className="relative ml-4 space-y-4 border-l border-slate-800 pl-6">
         {events.map((event, index) => {
           const previous = events[index - 1];
-          const showDate = !previous || dateLabel(previous.createdAt) !== dateLabel(event.createdAt);
-          const snapshot = snapshotForHistoryEvent(event, snapshots);
+          const showDate = !previous || formatDateHeading(previous.createdAt) !== formatDateHeading(event.createdAt);
+          const snapshot = snapshotForHistoryEvent(event, visibleSnapshots);
           return (
             <React.Fragment key={event.id}>
-              {showDate && <p className="-ml-6 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">{dateLabel(event.createdAt)}</p>}
+              {showDate && <p className="-ml-6 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">{formatDateHeading(event.createdAt)}</p>}
               <HistoryEventCard
                 project={project}
                 event={event}
@@ -402,7 +599,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
                 onToggle={() => setExpandedEvents((current) => ({ ...current, [event.id]: !current[event.id] }))}
                 onNavigateToSource={onNavigateToSource}
                 snapshot={snapshot}
-                snapshotLoading={snapshot?.id === loadingSnapshotId}
+                snapshotsLoading={projectSnapshotsLoading}
                 onViewSnapshot={() => snapshot && void openSnapshot(snapshot)}
               />
             </React.Fragment>
@@ -410,19 +607,20 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         })}
       </div>
 
-      {snapshotError && !selectedSnapshot && <p role="status" className="text-xs text-amber-300">{snapshotError}</p>}
-
       <div className="rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-4 sm:p-5">
         <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-300">NOW</p>
         <p className="mt-2 text-sm font-bold leading-relaxed text-slate-100">{currentFocus?.title ?? 'No current focus is recorded yet.'}</p>
       </div>
 
-      {selectedSnapshot && (
+      {visibleSelectedSnapshotSummary && (
         <ProjectSnapshotModal
-          snapshot={selectedSnapshot}
-          isBranching={branchingSnapshotId === selectedSnapshot.snapshot.id}
+          snapshot={visibleSelectedSnapshot}
+          summary={visibleSelectedSnapshotSummary}
+          isLoading={snapshotLoadingId === visibleSelectedSnapshotSummary.id && !visibleSelectedSnapshot}
+          isBranching={branchingSnapshotId === visibleSelectedSnapshotSummary.id}
           error={snapshotError}
-          onClose={() => setSelectedSnapshot(null)}
+          onRetry={visibleSelectedSnapshot ? undefined : () => void loadSnapshot(visibleSelectedSnapshotSummary)}
+          onClose={closeSnapshot}
           onBranch={branchSelectedSnapshot}
         />
       )}

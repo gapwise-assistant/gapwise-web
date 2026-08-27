@@ -87,6 +87,35 @@ describe('Today primary feed', () => {
     expect(feed).toEqual([]);
   });
 
+  it('does not put a satisfied action back into the Today feed', () => {
+    const project = createGoldenDemoProject();
+    const outcome = {
+      ...project.nodes.find((node) => node.type === 'DECISION')!,
+      id: 'today-resolved-outcome',
+      status: 'RESOLVED' as const,
+    };
+    const action = {
+      id: 'today-stale-action',
+      type: 'NEXT_ACTION' as const,
+      text: 'Confirm the resolved choice.',
+      status: 'OPEN' as const,
+      confidence: 0.9,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'agent' as const,
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    };
+    project.nodes = [project.nodes.find((node) => node.type === 'GOAL')!, outcome, action];
+    project.edges = [{ id: 'today-satisfaction', source: action.id, target: outcome.id, type: 'satisfies' }];
+    const recommendation = {
+      ...candidate(project, 'rec_stale_action', [action.id], 'opportunity'),
+      action_node_id: action.id,
+    };
+
+    expect(buildTodayFeed([recommendation], [], project)).toEqual([]);
+  });
+
   it('turns graph reasons into short natural question context', () => {
     const project = createGoldenDemoProject();
     const questionNode = project.nodes.find((node) => node.id === 'unknown_target_user')!;

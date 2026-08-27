@@ -1,4 +1,5 @@
 import type { ClarityNode, ClarityEdge, Project } from '@/types/clarity';
+import { formatDateOnly } from '@/lib/datetime/displayDateTime';
 
 const IMPACT_TYPES = new Set<ClarityNode['type']>(['GOAL', 'DECISION', 'NEXT_ACTION', 'CONSTRAINT', 'RISK']);
 
@@ -113,10 +114,7 @@ function quote(value: string): string {
 }
 
 function dateLabel(deadline: string): string {
-  const parsed = new Date(`${deadline}T12:00:00`);
-  return Number.isNaN(parsed.getTime())
-    ? deadline
-    : parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDateOnly(`${deadline}T12:00:00`);
 }
 
 function genericWhy(value: string): boolean {

@@ -1,4 +1,5 @@
 import type { ClarityNode, Project } from '@/types/clarity';
+import { relationshipRoleCompatible } from '@/lib/graph/relationshipSemantics';
 
 function resolvedOutcome(node: ClarityNode | undefined): boolean {
   return Boolean(node && node.status === 'RESOLVED');
@@ -16,15 +17,13 @@ export function isNextActionSatisfied(project: Project, node: ClarityNode): bool
   const nodesById = new Map(project.nodes.map((candidate) => [candidate.id, candidate]));
 
   return project.edges.some((edge) => {
-    if (edge.source === node.id && edge.type === 'satisfies') {
-      const target = nodesById.get(edge.target);
-      return Boolean(
-        target
-        && (target.type === 'UNKNOWN' || target.type === 'ASSUMPTION' || target.type === 'DECISION')
-        && resolvedOutcome(target),
-      );
-    }
-    return false;
+    if (edge.source !== node.id || edge.type !== 'satisfies') return false;
+    const target = nodesById.get(edge.target);
+    return Boolean(
+      target
+      && relationshipRoleCompatible(node, target, 'satisfies')
+      && resolvedOutcome(target),
+    );
   });
 }
 

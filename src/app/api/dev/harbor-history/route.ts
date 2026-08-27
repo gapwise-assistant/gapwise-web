@@ -35,8 +35,11 @@ export async function POST(request: NextRequest) {
     if (error instanceof StorageError && error.code === 'UNAUTHENTICATED') {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }
+    const diagnostic = error as Error & { generationRunId?: string; projectId?: string };
     return NextResponse.json({
       error: error instanceof Error ? error.message : 'The Harbor history demo could not be created.',
+      ...(diagnostic.generationRunId ? { generationRunId: diagnostic.generationRunId } : {}),
+      ...(diagnostic.projectId ? { projectId: diagnostic.projectId } : {}),
     }, { status: 500 });
   }
 }

@@ -6,12 +6,19 @@ import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
 import type { AskContextProposal } from '@/types/ask';
 import { canonicalQuestionGroups, canonicalOpenQuestions } from '@/lib/questions/canonical';
-import { changedProjectNodeIds, completeProjectRelationships } from '@/lib/graph/relationshipCompletion';
+import {
+  changedProjectNodeIds,
+  completeProjectRelationships,
+  type RelationshipCompletionTrace,
+} from '@/lib/graph/relationshipCompletion';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
+import type { ContextProcessingLog } from '@/types/clarity';
+import { boundedId } from '@/lib/ids/boundedId';
+import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
 
-function askSourceId(chatId: string, messageId: string): string {
-  return `ask_${chatId}_${messageId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
+export function askSourceId(chatId: string, messageId: string): string {
+  return boundedId('ask', `${chatId}_${messageId}`);
 }
 
 function askSourceFilename(chatId: string, messageId: string): string {
@@ -32,10 +39,12 @@ async function saveTarget(userId: string, project: Project, isGeneral: boolean):
   else await saveProject(userId, project);
 }
 
-function proposalSourceId(assistantMessageId: string, proposalId: string): string {
-  return `ask_proposal_${assistantMessageId}_${proposalId}`
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, 240);
+export function proposalSourceId(assistantMessageId: string, proposalId: string): string {
+  return boundedId('ask_proposal', `${assistantMessageId}_${proposalId}`);
+}
+
+function proposalId(assistantMessageId: string, proposal: AskContextProposal): string {
+  return proposal.id ?? boundedId('proposal', `${assistantMessageId}_${proposal.type}_${proposal.text}`);
 }
 
 /**
@@ -51,7 +60,7 @@ export async function persistAskProposal(params: {
   proposal: AskContextProposal;
 }): Promise<Project> {
   const target = await loadTarget(params.userId, params.projectId);
-  const sourceId = proposalSourceId(params.assistantMessageId, params.proposal.id ?? 'proposal');
+  const sourceId = proposalSourceId(params.assistantMessageId, proposalId(params.assistantMessageId, params.proposal));
   const now = new Date().toISOString();
   const proposalContext = [params.proposal.text, params.proposal.reasoning]
     .filter((value): value is string => Boolean(value?.trim()))
@@ -77,18 +86,68 @@ export async function persistAskProposal(params: {
     }],
     deferHistory: true,
   }, DEFAULT_USER_PROFILE);
-  const completion = await completeProjectRelationships({
-    projectBefore: target.project,
-    projectAfter: ingested,
-    changedNodeIds: changedProjectNodeIds(target.project, ingested),
-    source: {
-      id: sourceId,
+  const relationshipStartedAt = new Date();
+  const changedNodeIds = changedProjectNodeIds(target.project, ingested);
+  let relationshipProject = ingested;
+  let relationshipTrace: RelationshipCompletionTrace = {
+    candidatePairs: [],
+    classifications: [],
+    acceptedRelationships: [],
+    rejectedRelationships: [],
+  };
+  try {
+    const completion = await completeProjectRelationships({
+      projectBefore: target.project,
+      projectAfter: ingested,
+      changedNodeIds,
+      source: {
+        id: sourceId,
+        filename: `Ask proposal ${params.assistantMessageId}.txt`,
+        content: proposalContext,
+      },
+    });
+    relationshipProject = completion.project;
+    relationshipTrace = completion.trace;
+  } catch (error) {
+    relationshipTrace = {
+      ...relationshipTrace,
+      error: error instanceof Error ? error.message : 'Relationship completion unavailable.',
+    };
+  }
+
+  const completedAt = new Date();
+  const relationshipLog: ContextProcessingLog = {
+    version: 1,
+    status: relationshipTrace.error ? 'failed' : 'completed',
+    started_at: relationshipStartedAt.toISOString(),
+    completed_at: completedAt.toISOString(),
+    duration_ms: Math.max(0, completedAt.getTime() - relationshipStartedAt.getTime()),
+    input: {
+      source_id: sourceId,
       filename: `Ask proposal ${params.assistantMessageId}.txt`,
-      content: proposalContext,
+      type: 'note',
+      content: params.proposal.text,
+      project_snapshot: serializeProcessingProjectSnapshot(target.project),
     },
-  });
-  const completedActionIds = resolveSatisfiedNextActions(completion.project);
-  let updated = appendContextAddedHistory(target.project, completion.project, {
+    stages: [{
+      name: 'Relationship completion',
+      status: relationshipTrace.error ? 'failed' : 'completed',
+      started_at: relationshipStartedAt.toISOString(),
+      duration_ms: Math.max(0, completedAt.getTime() - relationshipStartedAt.getTime()),
+      input: {
+        changed_node_ids: changedNodeIds,
+        changedNodeIds,
+      },
+      output: relationshipTrace,
+      ...(relationshipTrace.error ? { error: relationshipTrace.error } : {}),
+    }],
+    ...(relationshipTrace.error ? { error: relationshipTrace.error } : {}),
+  };
+  const sourceWithLog = relationshipProject.sources.find((source) => source.id === sourceId);
+  if (sourceWithLog) sourceWithLog.processing_log = relationshipLog;
+
+  const completedActionIds = resolveSatisfiedNextActions(relationshipProject);
+  let updated = appendContextAddedHistory(target.project, relationshipProject, {
     sourceId,
     filename: `Ask proposal ${params.assistantMessageId}.txt`,
     createdAt: now,

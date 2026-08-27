@@ -21,6 +21,8 @@ import { projectForReasoning } from '@/lib/context/sourceState';
 import { canonicalOpenQuestions } from '@/lib/questions/canonical';
 import { decisionQuestionForDisplay } from '@/lib/decisions/workspace';
 import type { GapStatusFilter } from '@/components/ProjectQuestionsList';
+import { formatDateOnly } from '@/lib/datetime/displayDateTime';
+import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 interface ScopeDestinationProps {
   userId: string;
@@ -65,10 +67,7 @@ function dismissNode(project: Project, nodeId: string): Project {
 
 function formatDeadline(deadline?: string): string | null {
   if (!deadline) return null;
-  const date = new Date(`${deadline}T12:00:00`);
-  return Number.isNaN(date.getTime())
-    ? deadline
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDateOnly(`${deadline}T12:00:00`);
 }
 
 export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
@@ -168,7 +167,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   const renameProject = (projectId: string) => {
     const target = projectById(projectId);
     if (!target) return;
-    const nextName = window.prompt('Rename project', target.title)?.trim();
+    const nextName = window.prompt('Rename project', projectTitlePresentation(target.title).title)?.trim();
     if (!nextName || nextName === target.title) {
       setOpenProjectMenuId(null);
       return;
@@ -233,7 +232,10 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-extrabold uppercase tracking-wide text-slate-100">{summary.name}</h3>
+          <h3 className="truncate text-sm font-extrabold uppercase tracking-wide text-slate-100" title={`Created ${summary.createdTooltip}`}>
+            {summary.name}
+            <span className="ml-1 font-semibold normal-case tracking-normal text-slate-500">· {summary.createdLabel}</span>
+          </h3>
           <p className="mt-2 line-clamp-2 text-sm font-semibold text-slate-300">{summary.primaryGoal}</p>
         </div>
         <div className="relative flex-shrink-0">
@@ -320,7 +322,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
               <article key={node.id} className="space-y-3 rounded-xl border border-slate-800 bg-slate-900 p-4">
                 <h3 className="text-sm font-bold text-slate-100">{questionDisplayText(node)}</h3>
                 {relatedProject && (
-                  <p className="text-xs font-semibold text-cyan-300">Related to: {relatedProject.title}</p>
+                  <p className="text-xs font-semibold text-cyan-300">Related to: {projectTitlePresentation(relatedProject.title).title}</p>
                 )}
                 <p className="text-xs text-slate-400">{node.why_it_matters?.[0] ?? 'This remains unresolved in your context.'}</p>
                 <div className="flex flex-wrap gap-2">
@@ -478,12 +480,12 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           <div>
             <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">WORKSPACE</p>
             <div className="relative mt-2 flex items-center gap-2">
-              <h1 className="text-2xl font-extrabold text-slate-100">{project.title}</h1>
+              <h1 className="text-2xl font-extrabold text-slate-100">{projectTitlePresentation(project.title).title}</h1>
               <button
                 type="button"
                 onClick={() => setOpenProjectMenuId(openProjectMenuId === project.id ? null : project.id)}
                 className="min-h-11 min-w-11 rounded-lg p-2 text-slate-500 hover:bg-slate-900 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
-                aria-label={`Project actions for ${project.title}`}
+                aria-label={`Project actions for ${projectTitlePresentation(project.title).title}`}
                 aria-expanded={openProjectMenuId === project.id}
               >
                 <MoreHorizontal className="h-5 w-5" />

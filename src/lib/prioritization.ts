@@ -2,6 +2,7 @@ import type { CandidateGap, ClarityNode, Project, UserMemoryProfile } from '@/ty
 import { calculateDecisionValue, type DecisionValueOptions } from '@/lib/decisionValue';
 import { createDeterministicGapGuidance } from '@/lib/agents/gapGuidance';
 import { projectForReasoning } from '@/lib/context/sourceState';
+import { isNextActionSatisfied } from '@/lib/actions/completion';
 
 /**
  * Ranks one unresolved gap by the expected downstream value of resolving it.
@@ -70,7 +71,10 @@ export function selectTopAttentionItem(
 ): ClarityNode | null {
   const candidates = project.nodes.filter((node) =>
     node.status === 'OPEN' &&
-    (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION' || node.type === 'DECISION')
+    (node.type === 'UNKNOWN'
+      || node.type === 'ASSUMPTION'
+      || node.type === 'DECISION'
+      || (node.type === 'NEXT_ACTION' && !isNextActionSatisfied(project, node)))
   );
 
   if (candidates.length === 0) return null;
