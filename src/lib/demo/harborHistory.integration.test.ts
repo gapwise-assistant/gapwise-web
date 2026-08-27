@@ -277,8 +277,11 @@ describe('Harbor history demo integration', () => {
     expect(askMoment.project.historyEvents?.some((event) => event.type === 'ask_proposal_dismissed')).toBe(false);
     expect(dismissalMoment.project.historyEvents?.some((event) => event.type === 'ask_proposal_dismissed')).toBe(true);
     expect(dismissalMoment.project.nodes.some((node) =>
-      node.text === 'Confirm whether Harbor requires security approval before procurement can issue the purchase order.'
+      node.text === 'Confirm whether engineering can enforce 30-day customer-data deletion.'
     )).toBe(true);
+    expect(dismissalMoment.project.nodes.some((node) =>
+      node.text === 'Record that Harbor approved a temporary exception to the deletion policy.'
+    )).toBe(false);
     expect(dismissalMoment.project.nodes.some((node) =>
       node.text === 'Expand the pilot from 500 to 1,000 tickets.'
     )).toBe(false);

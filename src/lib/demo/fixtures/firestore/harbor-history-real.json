@@ -1,0 +1,544 @@
+{
+  "fixtureVersion": 1,
+  "generator": "HarborHelp — Community Food Rescue",
+  "originalStatus": "available_without_generation_run",
+  "originalFailure": null,
+  "original": {
+    "userId": "M5A2k5mBCFSf2yWqzyNfA9YMK1x2",
+    "projectId": "hackathon_harborhelp_demo",
+    "title": "HarborHelp — Community Food Rescue"
+  },
+  "userId": "fixture-user",
+  "projectId": "fixture-project-hackathon-harborhelp-demo",
+  "collections": {
+    "contexts": [
+      {
+        "id": "fixture-project-hackathon-harborhelp-demo",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "title": "HarborHelp — Community Food Rescue",
+        "goal": "Build and validate a volunteer coordination tool that moves surplus food to nearby shelters within ten days.",
+        "deadline": "2026-08-26",
+        "one_sentence_context": "A ten-day hackathon build for matching same-day surplus food with shelters, volunteers, and safe pickup windows.",
+        "clarity_score": 21,
+        "active_question": {
+          "node_id": "harborhelp_pilot_contact",
+          "question": "Which local shelter coordinator can test the claim and pickup flow before judging?",
+          "uncertainty": 0.75,
+          "downstream_impact": 0.8,
+          "dependency_count": 2,
+          "urgency": 0.85,
+          "answerability": 0.8,
+          "user_relevance": 0.9,
+          "interruption_cost": 0.05,
+          "priority": 0.73,
+          "reasons": [
+            "Blocks primary project goal execution",
+            "High downstream impact on feature scope & architecture",
+            "Currently unverified — low supporting evidence"
+          ],
+          "blocked_decision_ids": []
+        },
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "harborhelp_account_assumption",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "ASSUMPTION",
+        "text": "Shelters will accept a one-off claim link instead of creating an account",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.45,
+        "importance": 0.65,
+        "sourceIds": [
+          "hackathon_partner_interviews"
+        ],
+        "why_it_matters": [
+          "This determines whether the first pilot can stay low friction."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_core_workflow",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "KNOWN",
+        "text": "The demo must show a restaurant post, shelter claim, volunteer pickup, and confirmed delivery",
+        "status": "RESOLVED",
+        "scope": "project",
+        "confidence": 0.95,
+        "importance": 0.9,
+        "sourceIds": [
+          "hackathon_brief"
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_delivery_plan",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "DECISION",
+        "text": "Use manual matching for the first demo and defer automatic matching until after user validation",
+        "status": "RESOLVED",
+        "scope": "project",
+        "confidence": 0.8,
+        "importance": 0.8,
+        "sourceIds": [
+          "hackathon_prototype_notes",
+          "hackathon_team_notes"
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_expiry_risk",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "RISK",
+        "text": "Food may expire before a shelter confirms a pickup if the deadline and alerts are unclear",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.65,
+        "importance": 0.9,
+        "sourceIds": [
+          "hackathon_brief",
+          "hackathon_prototype_notes"
+        ],
+        "why_it_matters": [
+          "A missed pickup undermines the safety and usefulness of the rescue workflow."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_expiry_test",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "UNKNOWN",
+        "text": "What expiry window and reminder timing should HarborHelp use for a same-day donation?",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.3,
+        "importance": 0.82,
+        "priority": 0.8,
+        "sourceIds": [
+          "hackathon_prototype_notes",
+          "hackathon_brief"
+        ],
+        "why_it_matters": [
+          "The team cannot demonstrate a safe handoff without a credible timing rule."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_goal",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "GOAL",
+        "text": "Build and validate a volunteer coordination tool for same-day food rescue",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 1,
+        "importance": 1,
+        "sourceIds": [
+          "hackathon_brief"
+        ],
+        "why_it_matters": [
+          "Defines the user value the hackathon demo must prove."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_pilot_contact",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "UNKNOWN",
+        "text": "Which local shelter coordinator can test the claim and pickup flow before judging?",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.25,
+        "importance": 0.8,
+        "priority": 0.78,
+        "sourceIds": [
+          "hackathon_partner_interviews"
+        ],
+        "why_it_matters": [
+          "A real user test is required to validate the workflow before the presentation."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_scope_decision",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "DECISION",
+        "text": "Prioritize one complete rescue workflow over a broad marketplace and polished landing page",
+        "status": "RESOLVED",
+        "scope": "project",
+        "confidence": 0.9,
+        "importance": 0.95,
+        "sourceIds": [
+          "hackathon_judging_rubric",
+          "hackathon_team_notes"
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_shelter_needs",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "KNOWN",
+        "text": "Shelter coordinators need quantity, allergens, pickup deadline, and driver confirmation before claiming food",
+        "status": "RESOLVED",
+        "scope": "project",
+        "confidence": 0.8,
+        "importance": 0.85,
+        "sourceIds": [
+          "hackathon_partner_interviews"
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_sms_question",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "UNKNOWN",
+        "text": "Can the first demo use a shareable notification link instead of live SMS?",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.35,
+        "importance": 0.7,
+        "priority": 0.62,
+        "sourceIds": [
+          "hackathon_prototype_notes"
+        ],
+        "why_it_matters": [
+          "Choosing a simpler notification path protects the ten-day delivery plan."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_sms_risk",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "RISK",
+        "text": "The demo may depend on SMS notifications that are not implemented yet",
+        "status": "OPEN",
+        "scope": "project",
+        "confidence": 0.7,
+        "importance": 0.75,
+        "sourceIds": [
+          "hackathon_prototype_notes"
+        ],
+        "why_it_matters": [
+          "A notification gap could make the volunteer handoff feel incomplete."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_team_constraint",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "createdBy": "agent",
+        "type": "CONSTRAINT",
+        "text": "Three people have ten focused build days before the hackathon presentation",
+        "status": "RESOLVED",
+        "scope": "project",
+        "confidence": 0.95,
+        "importance": 0.95,
+        "sourceIds": [
+          "hackathon_team_notes"
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "edges": [
+      {
+        "id": "harborhelp_edge_account_pilot",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_account_assumption",
+        "target": "harborhelp_pilot_contact",
+        "type": "informs",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_delivery_plan",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_delivery_plan",
+        "target": "harborhelp_sms_question",
+        "type": "supports",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_expiry_goal",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_expiry_risk",
+        "target": "harborhelp_goal",
+        "type": "blocks",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_expiry_question",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_expiry_test",
+        "target": "harborhelp_expiry_risk",
+        "type": "informs",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_flow_goal",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_core_workflow",
+        "target": "harborhelp_goal",
+        "type": "supports",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_goal_scope",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_scope_decision",
+        "target": "harborhelp_goal",
+        "type": "supports",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_pilot_goal",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_pilot_contact",
+        "target": "harborhelp_goal",
+        "type": "depends_on",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_shelter_flow",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_shelter_needs",
+        "target": "harborhelp_core_workflow",
+        "type": "informs",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_sms_question",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_sms_question",
+        "target": "harborhelp_sms_risk",
+        "type": "informs",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_sms_scope",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_sms_risk",
+        "target": "harborhelp_scope_decision",
+        "type": "blocks",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "harborhelp_edge_time_scope",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "source": "harborhelp_team_constraint",
+        "target": "harborhelp_scope_decision",
+        "type": "blocks",
+        "scope": "project",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "sources": [
+      {
+        "id": "hackathon_brief",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "filename": "harborhelp-hackathon-brief.pdf",
+        "type": "pdf",
+        "content": "",
+        "extracted_at": "2026-01-01T00:00:00.000Z",
+        "derived_node_ids": [
+          "harborhelp_goal",
+          "harborhelp_core_workflow",
+          "harborhelp_expiry_risk"
+        ],
+        "processing_status": "completed",
+        "mime_type": "application/pdf",
+        "origin": "user",
+        "extraction_summary": "The judging story is a same-day food rescue from restaurant post to shelter delivery.",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "hackathon_judging_rubric",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "filename": "judging-rubric.pdf",
+        "type": "pdf",
+        "content": "",
+        "extracted_at": "2026-01-01T00:00:00.000Z",
+        "derived_node_ids": [
+          "harborhelp_judging_bar",
+          "harborhelp_scope_decision"
+        ],
+        "processing_status": "completed",
+        "mime_type": "application/pdf",
+        "origin": "user",
+        "extraction_summary": "A working end-to-end rescue flow and user evidence matter more than surface polish.",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "hackathon_partner_interviews",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "filename": "shelter-interviews.txt",
+        "type": "text",
+        "content": "",
+        "extracted_at": "2026-01-01T00:00:00.000Z",
+        "derived_node_ids": [
+          "harborhelp_shelter_needs",
+          "harborhelp_account_assumption",
+          "harborhelp_pilot_contact"
+        ],
+        "processing_status": "completed",
+        "origin": "user",
+        "extraction_summary": "Shelters prioritize food safety and a low-friction claim flow over a full account system.",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "hackathon_prototype_notes",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "filename": "prototype-notes.txt",
+        "type": "text",
+        "content": "",
+        "extracted_at": "2026-01-01T00:00:00.000Z",
+        "derived_node_ids": [
+          "harborhelp_prototype_state",
+          "harborhelp_sms_risk",
+          "harborhelp_expiry_test"
+        ],
+        "processing_status": "completed",
+        "origin": "user",
+        "extraction_summary": "The core screens exist, but matching, notifications, and expiry behavior are still unvalidated.",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "hackathon_team_notes",
+        "userId": "fixture-user",
+        "projectId": "fixture-project-hackathon-harborhelp-demo",
+        "filename": "team-notes.md",
+        "type": "note",
+        "content": "",
+        "extracted_at": "2026-01-01T00:00:00.000Z",
+        "derived_node_ids": [
+          "harborhelp_team_constraint",
+          "harborhelp_delivery_plan"
+        ],
+        "processing_status": "completed",
+        "origin": "user",
+        "extraction_summary": "Three people have ten days, so the first release needs one narrow workflow.",
+        "status": "ACTIVE",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "conversations": []
+  },
+  "ask": {
+    "chats": [],
+    "messages": [],
+    "research": []
+  },
+  "snapshots": [],
+  "developerGeneration": {
+    "runs": [],
+    "steps": []
+  },
+  "manifest": {
+    "fixtureVersion": 1,
+    "generator": "HarborHelp — Community Food Rescue",
+    "originalStatus": "available_without_generation_run",
+    "originalFailure": null,
+    "counts": {
+      "nodes": 12,
+      "edges": 11,
+      "sources": 5,
+      "historyEvents": 0,
+      "chats": 0,
+      "messages": 0,
+      "snapshots": 0
+    }
+  }
+}

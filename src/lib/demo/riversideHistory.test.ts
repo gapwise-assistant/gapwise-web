@@ -104,7 +104,29 @@ describe('Riverside history demo generator', () => {
       next.sources = [...next.sources, { id: input.sourceId, filename: input.filename, type: 'pdf', content: input.content, extracted_at: new Date().toISOString(), derived_node_ids: [], processing_status: 'completed', storage_url: input.storageUrl, processing_log: { version: 1, status: 'completed', started_at: new Date().toISOString(), completed_at: new Date().toISOString(), duration_ms: 1, input: { source_id: input.sourceId, filename: input.filename, type: 'pdf', content: input.content }, stages: [{ name: 'Relationship completion', status: 'completed', started_at: new Date().toISOString(), duration_ms: 1, input: {}, output: {} }] } as any }];
       const filename = input.filename.toLowerCase();
       if (filename.includes('meal cost')) next.nodes.push(node(next, 'riverside-pricing', 'DECISION', 'Set the initial Riverside meal price.'));
-      if (filename.includes('kitchen')) next.nodes.push(node(next, 'riverside-driver', 'UNKNOWN', 'Will volunteer delivery coverage be available for every Wednesday route?'));
+      if (filename.includes('kitchen')) {
+        // Model the same transition with a mixture of node types: the
+        // canonical outcome is already resolved, while supporting action/risk
+        // context remains open. The generator must use the recorded anchor,
+        // not search for a particular UNKNOWN type or phrase.
+        next.nodes.push({
+          ...node(next, 'riverside-driver', 'DECISION', 'Delivery coverage arrangement for every Wednesday route.'),
+          status: 'RESOLVED' as const,
+          decision_outcome: 'Primary and backup volunteer drivers are confirmed.',
+        });
+        next.nodes.push({
+          ...node(next, 'riverside-driver-action', 'UNKNOWN', 'Confirm backup delivery coverage.'),
+          type: 'NEXT_ACTION' as const,
+        });
+        next.nodes.push({
+          ...node(next, 'riverside-driver-risk', 'UNKNOWN', 'Volunteer cancellations may leave routes uncovered.'),
+          type: 'RISK' as const,
+        });
+        next.historyEvents = [...(next.historyEvents ?? []), {
+          ...event(next, 'delivery-resolved', 'decision_resolved'),
+          primaryNodeId: 'riverside-driver',
+        }];
+      }
       if (filename.includes('final readiness')) next.nodes.push(node(next, 'riverside-rehearsal', 'UNKNOWN', 'Has the complete packing-and-delivery rehearsal been completed?'));
       next.historyEvents = [...(next.historyEvents ?? []), event(next, `event:${input.sourceId}`, 'context_added', input.sourceId)];
       return { project: next, skipped: false };

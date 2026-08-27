@@ -24,6 +24,8 @@ export interface DeveloperGenerationStepMetadata {
   edgeCountBefore?: number;
   edgeCountAfter?: number;
   derivedNodeIds?: string[];
+  journeyAnchor?: string;
+  candidateNodeIds?: string[];
   summary?: string;
 }
 

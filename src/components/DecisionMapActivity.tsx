@@ -86,6 +86,8 @@ function GenerationDetails({ timeline }: { timeline: GenerationTimeline }) {
               {(step.nodeCountBefore !== undefined || step.nodeCountAfter !== undefined) && <p>Nodes: {step.nodeCountBefore ?? '—'} → {step.nodeCountAfter ?? '—'}</p>}
               {(step.edgeCountBefore !== undefined || step.edgeCountAfter !== undefined) && <p>Edges: {step.edgeCountBefore ?? '—'} → {step.edgeCountAfter ?? '—'}</p>}
               {step.derivedNodeIds && step.derivedNodeIds.length > 0 && <p>Derived nodes: {step.derivedNodeIds.join(', ')}</p>}
+              {step.journeyAnchor && <p>Journey anchor: {step.journeyAnchor}</p>}
+              {step.candidateNodeIds && step.candidateNodeIds.length > 0 && <p>Anchor candidates: {step.candidateNodeIds.join(', ')}</p>}
               {step.summary && <p className="text-slate-400">{step.summary}</p>}
               {step.error && <p className="text-rose-300">{step.error}</p>}
             </div>

@@ -2,6 +2,7 @@ import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { answerQuestion } from '@/lib/questions/answerQuestion';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { processContextSource } from '@/lib/context/contextAnalysis';
 import { hashText } from '@/lib/context/ingestion';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
@@ -26,6 +27,17 @@ import type { ClarityNode, EdgeType, Project, ProjectHistoryEvent } from '@/type
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
 import { boundedId } from '@/lib/ids/boundedId';
+import {
+  createJourneyAnchorBook,
+  hasJourneyActionCompletionHistory,
+  hasJourneyOutcomeHistory,
+  inspectJourneyAnchor,
+  journeyAnchorHasOutcome,
+  journeyAnchorDiagnostics,
+  recordControlledJourneyAnchor,
+  recordJourneyActionCompletionHistory,
+  type JourneyAnchorBook,
+} from '@/lib/demo/journeyAnchors';
 import type { ProjectSnapshot, ProjectSnapshotTrigger } from '@/types/projectSnapshot';
 import {
   attachDeveloperGenerationError,
@@ -535,7 +547,12 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
   );
 }
 
-async function processDocument(userId: string, project: Project, document: HarborHistoryDocument, recorder?: DeveloperGenerationRecorder): Promise<Project> {
+async function processDocument(
+  userId: string,
+  project: Project,
+  document: HarborHistoryDocument,
+  recorder?: DeveloperGenerationRecorder,
+): Promise<Project> {
   const sourceId = sourceIdFor(project.id, document);
   const existing = project.sources.find((source) => source.id === sourceId);
   const existingEvent = latestEvent(project, 'context_added', (event) => event.sourceId === sourceId);
@@ -643,172 +660,240 @@ async function processDocument(userId: string, project: Project, document: Harbo
   return persistedProject;
 }
 
-function openTechnicalDecision(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return node.type === 'DECISION'
-      && node.status === 'OPEN'
-      && text.includes('integration')
-      && (text.includes('technical') || text.includes('pilot') || text.includes('scope'));
-  });
-}
-
-function technicalDecision(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return node.type === 'DECISION'
-      && text.includes('integration')
-      && (text.includes('technical') || text.includes('pilot') || text.includes('scope'));
-  });
-}
-
-function openDeletionQuestion(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-      && node.status === 'OPEN'
-      && text.includes('30')
-      && (text.includes('delet') || text.includes('data'));
-  });
-}
-
-function deletionQuestion(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
-      && text.includes('30')
-      && (text.includes('delet') || text.includes('data'));
-  });
-}
-
-async function resolveTechnicalDecision(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
-  const decision = openTechnicalDecision(project);
-  if (!decision) {
-    const existing = technicalDecision(project);
-    if (existing?.status === 'RESOLVED') return project;
-    throw new Error('The Harbor history demo could not find the open technical integration decision.');
+async function resolveAnchoredTransition(params: {
+  userId: string;
+  project: Project;
+  anchors: JourneyAnchorBook;
+  anchorKey: string;
+  recorder?: DeveloperGenerationRecorder;
+  decisionOutcome: string;
+  decisionReason: string;
+  answer: string;
+  decisionLabel: string;
+  questionLabel: string;
+  summary: string;
+}): Promise<Project> {
+  const inspection = inspectJourneyAnchor(params.anchors, params.anchorKey, params.project);
+  const candidateNodeIds = inspection.anchor?.candidateNodeIds ?? [];
+  if (!inspection.node) {
+    return recordDeveloperGenerationStep(
+      params.recorder,
+      {
+        name: `${params.anchorKey} transition located`,
+        category: 'resolution',
+        journeyAnchor: params.anchorKey,
+        candidateNodeIds,
+        summary: `Located the recorded canonical node for the ${params.anchorKey} transition.`,
+      },
+      () => { throw new Error(journeyAnchorDiagnostics(inspection)); },
+    );
   }
-  const updated = await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Decision resolved', category: 'resolution', summary: 'Confirmed the technical integration decision.' },
-    () => confirmDecision(project, {
-      decisionNodeId: decision.id,
-      customDecision: 'Use the nightly CSV integration for the pilot and defer the custom API until after the pilot.',
-      reason: 'The CSV path fits the pilot timeline and preserves the longer API integration for a later phase.',
-    }),
-  );
-  await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Project saved', category: 'storage', summary: 'Saved the resolved technical decision.' },
-    () => getStorageProvider().saveProject(userId, updated),
-  );
-  const reloaded = await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Project reloaded', category: 'storage', summary: 'Reloaded the project after resolving the technical decision.' },
-    () => getStorageProvider().getProject(userId, project.id),
-  );
-  const persisted = reloaded ?? updated;
-  const event = latestEvent(persisted, 'decision_resolved', (candidate) => candidate.primaryNodeId === decision.id);
-  if (!event) throw new Error('The technical decision was updated without a decision history event.');
-  await snapshotForEvent({
-    userId,
-    project: persisted,
-    event,
-    type: 'decision_confirmed',
-    nodeId: decision.id,
-    label: 'Technical integration decision confirmed',
-    summary: persisted.nodes.find((node) => node.id === decision.id)?.decision_outcome,
-    recorder,
-  });
-  return persisted;
-}
+  // A completed decision/question is already done. An action with a
+  // satisfied outcome still needs the shared action-completion workflow so a
+  // missing action_completed event can be repaired without guessing from its
+  // wording.
+  if (
+    journeyAnchorHasOutcome(inspection)
+    && inspection.node?.type !== 'NEXT_ACTION'
+  ) return params.project;
+  if (
+    journeyAnchorHasOutcome(inspection)
+    && inspection.node?.type === 'NEXT_ACTION'
+    && inspection.node.status === 'RESOLVED'
+    && hasJourneyActionCompletionHistory(params.project, inspection.node.id)
+  ) return params.project;
 
-async function resolveDeletionQuestion(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
-  const question = openDeletionQuestion(project);
-  if (!question) {
-    const existing = deletionQuestion(project);
-    if (existing?.status === 'RESOLVED') return project;
-    throw new Error('The Harbor history demo could not find the open 30-day deletion question.');
+  if (inspection.node.type === 'NEXT_ACTION') {
+    const action = inspection.node;
+    const outcomeNodeId = inspection.anchor?.outcomeNodeId;
+    const target = outcomeNodeId
+      ? params.project.nodes.find((node) => node.id === outcomeNodeId)
+      : undefined;
+
+    if (action.status === 'OPEN' && !target) {
+      throw new Error(`The ${params.anchorKey} action has no explicit satisfies target. ${journeyAnchorDiagnostics(inspection)}`);
+    }
+    if (target && target.status === 'OPEN') {
+      if (target.type === 'DECISION') {
+        const updated = await recordDeveloperGenerationStep(
+          params.recorder,
+          {
+            name: `${params.anchorKey} outcome resolved`,
+            category: 'resolution',
+            journeyAnchor: params.anchorKey,
+            candidateNodeIds,
+            summary: params.summary,
+          },
+          () => confirmDecision(params.project, {
+            decisionNodeId: target.id,
+            customDecision: params.decisionOutcome,
+            reason: params.decisionReason,
+          }),
+        );
+        params.project = updated;
+      } else if (target.type === 'UNKNOWN' || target.type === 'ASSUMPTION') {
+        const result = await recordDeveloperGenerationStep(
+          params.recorder,
+          {
+            name: `${params.anchorKey} outcome resolved`,
+            category: 'resolution',
+            journeyAnchor: params.anchorKey,
+            candidateNodeIds,
+            summary: params.summary,
+          },
+          () => answerQuestion({
+            userId: params.userId,
+            projectId: params.project.id,
+            nodeId: target.id,
+            answer: params.answer,
+          }),
+        );
+        params.project = result.context;
+      } else {
+        throw new Error(`The ${params.anchorKey} action satisfies an unsupported node type. ${journeyAnchorDiagnostics(inspection)}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const completedActionIds = resolveSatisfiedNextActions(params.project, now);
+    recordJourneyActionCompletionHistory(params.project, action.id, now);
+    // The shared completion pass may have just resolved the action, or the
+    // controlled workflow may have already recorded it. In either case save
+    // once and verify the durable event below.
+    if (completedActionIds.includes(action.id) || action.status === 'RESOLVED') {
+      await recordDeveloperGenerationStep(
+        params.recorder,
+        { name: 'Project saved', category: 'storage', summary: `Saved the completed ${params.anchorKey} action.` },
+        () => getStorageProvider().saveProject(params.userId, params.project),
+      );
+    }
+    const persisted = await recordDeveloperGenerationStep(
+      params.recorder,
+      { name: 'Project reloaded', category: 'storage', summary: `Reloaded the project after completing ${params.anchorKey}.` },
+      () => getStorageProvider().getProject(params.userId, params.project.id),
+    ) ?? params.project;
+    const actionEvent = latestEvent(persisted, 'action_completed', (event) => event.primaryNodeId === action.id);
+    if (!actionEvent) {
+      throw new Error(`The ${params.anchorKey} action outcome was not recorded. ${journeyAnchorDiagnostics(inspection)}`);
+    }
+    const outcomeEvent = target
+      ? latestEvent(
+        persisted,
+        target.type === 'DECISION' ? 'decision_resolved' : 'gap_resolved',
+        (event) => event.primaryNodeId === target.id,
+      )
+      : undefined;
+    if (outcomeEvent) {
+      await snapshotForEvent({
+        userId: params.userId,
+        project: persisted,
+        event: outcomeEvent,
+        type: target?.type === 'DECISION' ? 'decision_confirmed' : 'gap_resolved',
+        nodeId: target?.id,
+        label: target?.type === 'DECISION' ? params.decisionLabel : params.questionLabel,
+        summary: params.summary,
+        recorder: params.recorder,
+      });
+    }
+    await snapshotForEvent({
+      userId: params.userId,
+      project: persisted,
+      event: actionEvent,
+      type: 'action_completed',
+      nodeId: action.id,
+      label: `${params.anchorKey} action completed`,
+      summary: params.summary,
+      recorder: params.recorder,
+    });
+    return persisted;
   }
-  const result = await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Question resolved', category: 'resolution', summary: 'Recorded the confirmed 30-day deletion answer.' },
-    () => answerQuestion({
-      userId,
-      projectId: project.id,
-      nodeId: question.id,
-      answer: 'Engineering confirmed that Harbor pilot customer data can be automatically deleted within 30 days after the pilot.',
-    }),
-  );
-  const updated = result.context;
-  const event = latestEvent(updated, 'gap_resolved', (candidate) => candidate.primaryNodeId === question.id);
-  if (!event) throw new Error('The deletion question was answered without a question history event.');
-  await snapshotForEvent({
-    userId,
-    project: updated,
-    event,
-    type: 'gap_resolved',
-    nodeId: question.id,
-    label: '30-day deletion question resolved',
-    summary: 'Engineering confirmed the required deletion support.',
-    recorder,
-  });
-  return updated;
-}
 
-function openPricingDecision(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return node.type === 'DECISION'
-      && node.status === 'OPEN'
-      && (text.includes('price') || text.includes('pricing'))
-      && (text.includes('pilot') || text.includes('harbor') || text.includes('approve'));
-  });
-}
-
-function pricingDecision(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) => {
-    const text = node.text.toLowerCase();
-    return node.type === 'DECISION'
-      && (text.includes('price') || text.includes('pricing'))
-      && (text.includes('pilot') || text.includes('harbor') || text.includes('approve'));
-  });
-}
-
-async function resolvePricingDecision(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
-  const decision = openPricingDecision(project);
-  if (!decision) {
-    const existing = pricingDecision(project);
-    if (existing?.status === 'RESOLVED') return project;
-    throw new Error('The Harbor history demo could not find the open pricing decision.');
+  if (inspection.node.type === 'DECISION') {
+    const updated = await recordDeveloperGenerationStep(
+      params.recorder,
+      {
+        name: `${params.anchorKey} transition resolved`,
+        category: 'resolution',
+        journeyAnchor: params.anchorKey,
+        candidateNodeIds,
+        summary: params.summary,
+      },
+      () => confirmDecision(params.project, {
+        decisionNodeId: inspection.node!.id,
+        customDecision: params.decisionOutcome,
+        reason: params.decisionReason,
+      }),
+    );
+    await recordDeveloperGenerationStep(
+      params.recorder,
+      { name: 'Project saved', category: 'storage', summary: `Saved the resolved ${params.anchorKey} transition.` },
+      () => getStorageProvider().saveProject(params.userId, updated),
+    );
+    const reloaded = await recordDeveloperGenerationStep(
+      params.recorder,
+      { name: 'Project reloaded', category: 'storage', summary: `Reloaded the project after resolving ${params.anchorKey}.` },
+      () => getStorageProvider().getProject(params.userId, params.project.id),
+    );
+    const persisted = reloaded ?? updated;
+    const event = latestEvent(persisted, 'decision_resolved', (candidate) => candidate.primaryNodeId === inspection.node!.id);
+    if (!event) throw new Error(`The ${params.anchorKey} transition was updated without a decision history event. ${journeyAnchorDiagnostics(inspection)}`);
+    await snapshotForEvent({
+      userId: params.userId,
+      project: persisted,
+      event,
+      type: 'decision_confirmed',
+      nodeId: inspection.node.id,
+      label: params.decisionLabel,
+      summary: persisted.nodes.find((node) => node.id === inspection.node!.id)?.decision_outcome,
+      recorder: params.recorder,
+    });
+    return persisted;
   }
-  const updated = await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Decision resolved', category: 'resolution', summary: 'Confirmed the final pilot pricing decision.' },
-    () => confirmDecision(project, {
-      decisionNodeId: decision.id,
-      customDecision: 'Approve the Harbor pilot price at $38,500.',
-      reason: 'The amount is below the $45,000 budget ceiling and covers the confirmed CSV scope and expected support effort.',
-    }),
+
+  if (inspection.node.type === 'UNKNOWN' || inspection.node.type === 'ASSUMPTION') {
+    const result = await recordDeveloperGenerationStep(
+      params.recorder,
+      {
+        name: `${params.anchorKey} transition resolved`,
+        category: 'resolution',
+        journeyAnchor: params.anchorKey,
+        candidateNodeIds,
+        summary: params.summary,
+      },
+      () => answerQuestion({
+        userId: params.userId,
+        projectId: params.project.id,
+        nodeId: inspection.node!.id,
+        answer: params.answer,
+      }),
+    );
+    const updated = result.context;
+    const event = latestEvent(updated, 'gap_resolved', (candidate) => candidate.primaryNodeId === inspection.node!.id);
+    if (!event) throw new Error(`The ${params.anchorKey} transition was answered without a question history event. ${journeyAnchorDiagnostics(inspection)}`);
+    await snapshotForEvent({
+      userId: params.userId,
+      project: updated,
+      event,
+      type: 'gap_resolved',
+      nodeId: inspection.node.id,
+      label: params.questionLabel,
+      summary: params.summary,
+      recorder: params.recorder,
+    });
+    return updated;
+  }
+
+  return recordDeveloperGenerationStep(
+    params.recorder,
+    {
+      name: `${params.anchorKey} transition resolved`,
+      category: 'resolution',
+      journeyAnchor: params.anchorKey,
+      candidateNodeIds,
+      summary: params.summary,
+    },
+    () => { throw new Error(`The anchored node cannot use an existing decision or question workflow. ${journeyAnchorDiagnostics(inspection)}`); },
   );
-  await recordDeveloperGenerationStep(
-    recorder,
-    { name: 'Project saved', category: 'storage', summary: 'Saved the resolved pricing decision.' },
-    () => getStorageProvider().saveProject(userId, updated),
-  );
-  const event = latestEvent(updated, 'decision_resolved', (candidate) => candidate.primaryNodeId === decision.id);
-  if (!event) throw new Error('The pricing decision was updated without a decision history event.');
-  await snapshotForEvent({
-    userId,
-    project: updated,
-    event,
-    type: 'decision_confirmed',
-    nodeId: decision.id,
-    label: 'Pilot pricing decision confirmed',
-    summary: updated.nodes.find((node) => node.id === decision.id)?.decision_outcome,
-    recorder,
-  });
-  return updated;
 }
 
 export function askRecordId(projectId: string, turn: string, role: 'user' | 'assistant'): string {
@@ -831,18 +916,18 @@ interface HarborDemoProposalSpec {
 const HARBOR_DEMO_PROPOSALS: Record<string, readonly HarborDemoProposalSpec[]> = {
   planning: [
     {
-      type: 'UNKNOWN',
-      text: 'Confirm whether Harbor requires security approval before procurement can issue the purchase order.',
+      type: 'DECISION',
+      text: 'Choose the technical integration for the Harbor pilot.',
     },
     {
-      type: 'ASSUMPTION',
-      text: 'Expand the pilot from 500 to 1,000 tickets.',
+      type: 'NEXT_ACTION',
+      text: 'Run the production access rehearsal before launch authorization.',
     },
   ],
   'security-impact': [
     {
-      type: 'NEXT_ACTION',
-      text: 'Obtain written confirmation from engineering about 30-day deletion support.',
+      type: 'UNKNOWN',
+      text: 'Confirm whether engineering can enforce 30-day customer-data deletion.',
     },
     {
       type: 'ASSUMPTION',
@@ -851,16 +936,16 @@ const HARBOR_DEMO_PROPOSALS: Record<string, readonly HarborDemoProposalSpec[]> =
   ],
   procurement: [
     {
-      type: 'NEXT_ACTION',
-      text: 'Confirm final pilot pricing with Harbor.',
+      type: 'DECISION',
+      text: 'Approve the final pilot price for Harbor.',
     },
     {
       type: 'NEXT_ACTION',
       text: 'Prepare the refreshed penetration-test report for security review.',
     },
     {
-      type: 'DECISION',
-      text: 'Reconsider the confirmed CSV integration decision.',
+      type: 'ASSUMPTION',
+      text: 'Expand the pilot before launch readiness is confirmed.',
     },
   ],
 };
@@ -1111,6 +1196,8 @@ async function transitionHarborProposal(params: {
   turn: HarborAskTurn;
   proposal: AskContextProposal;
   action: 'add' | 'dismiss';
+  anchors: JourneyAnchorBook;
+  anchorKey?: string;
   recorder?: DeveloperGenerationRecorder;
 }): Promise<Project> {
   const storage = getStorageProvider();
@@ -1150,6 +1237,7 @@ async function transitionHarborProposal(params: {
     { name: 'Project reloaded', category: 'storage', summary: 'Reloaded project state before applying the proposal transition.' },
     () => storage.getProject(params.userId, params.turn.project.id),
   ) ?? params.turn.project;
+  const projectBeforeProposal = project;
   if (params.action === 'add') {
     try {
       project = await recordDeveloperGenerationStep(
@@ -1170,6 +1258,14 @@ async function transitionHarborProposal(params: {
           proposal: nextProposal,
         }),
       );
+      if (params.anchorKey) {
+        recordControlledJourneyAnchor(params.anchors, {
+          key: params.anchorKey,
+          before: projectBeforeProposal,
+          after: project,
+          sourceId: proposalSourceIdFor(message.id, proposalId),
+        });
+      }
     } catch (error) {
       const pending: AskContextProposal = { ...nextProposal, confirmationStatus: 'pending' };
       await storage.saveAskMessage(params.userId, {
@@ -1238,14 +1334,6 @@ function missingSnapshotEvents(project: Project, snapshots: Awaited<ReturnType<R
     .map((event) => ({ id: event.id, title: event.title, type: event.type }));
 }
 
-function finalRehearsalQuestion(project: Project): ClarityNode | undefined {
-  return project.nodes.find((node) =>
-    ['UNKNOWN', 'ASSUMPTION', 'RISK', 'NEXT_ACTION'].includes(node.type)
-      && node.status === 'OPEN'
-      && /production.*access|access.*rehearsal|rehearsal/i.test(node.text)
-  );
-}
-
 function snapshotHasTrigger(snapshot: ProjectSnapshot, type: ProjectSnapshotTrigger): boolean {
   return snapshot.trigger.type === type;
 }
@@ -1256,10 +1344,20 @@ async function askProposalTransition(
   pattern: RegExp,
   action: 'add' | 'dismiss',
   description: string,
+  anchors: JourneyAnchorBook,
+  anchorKey?: string,
   recorder?: DeveloperGenerationRecorder,
 ): Promise<Project> {
   const proposal = proposalMatching(turn, pattern, description);
-  return transitionHarborProposal({ userId, turn, proposal, action, recorder });
+  return transitionHarborProposal({
+    userId,
+    turn,
+    proposal,
+    action,
+    anchors,
+    ...(anchorKey ? { anchorKey } : {}),
+    recorder,
+  });
 }
 
 export async function createHarborHistoryDemoForUser(params: {
@@ -1271,6 +1369,7 @@ export async function createHarborHistoryDemoForUser(params: {
   let project = createProjectFromInput(projectInput(HARBOR_HISTORY_DEMO_TITLE), createdAt);
   const created = true;
   const pdfs: HarborHistoryDemoResult['pdfs'] = [];
+  const anchors = createJourneyAnchorBook();
   const recorder = await startDeveloperGenerationRun({
     userId: params.userId,
     projectId: project.id,
@@ -1326,20 +1425,23 @@ export async function createHarborHistoryDemoForUser(params: {
   project = await askProposalTransition(
     params.userId,
     firstAsk,
-    /security|procurement|purchase order|approval/i,
+    /technical|integration/i,
     'add',
-    'security and procurement',
+    'technical integration decision',
+    anchors,
+    'technicalScope',
     recorder,
   );
   project = await askProposalTransition(
     params.userId,
     { ...firstAsk, project },
-    /500|1[,.]?000|expand/i,
-    'dismiss',
-    'premature pilot expansion',
+    /rehearsal|production access/i,
+    'add',
+    'production rehearsal action',
+    anchors,
+    'launchRehearsal',
     recorder,
   );
-
   project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[1], recorder);
   const secondAsk = await runHarborAskTurn({
     userId: params.userId,
@@ -1354,7 +1456,9 @@ export async function createHarborHistoryDemoForUser(params: {
     secondAsk,
     /30.?day|deletion|engineering/i,
     'add',
-    'deletion-support action',
+    'deletion-support question',
+    anchors,
+    'deletionSupport',
     recorder,
   );
   project = await askProposalTransition(
@@ -1363,11 +1467,25 @@ export async function createHarborHistoryDemoForUser(params: {
     /exception|temporary approval|approved.*exception/i,
     'dismiss',
     'unsupported deletion exception',
+    anchors,
+    undefined,
     recorder,
   );
 
   project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[2], recorder);
-  project = await resolveTechnicalDecision(params.userId, project, recorder);
+  project = await resolveAnchoredTransition({
+    userId: params.userId,
+    project,
+    anchors,
+    anchorKey: 'technicalScope',
+    recorder,
+    decisionOutcome: 'Use the nightly CSV integration for the pilot and defer the custom API until after the pilot.',
+    decisionReason: 'The CSV path fits the pilot timeline and preserves the longer API integration for a later phase.',
+    answer: 'The nightly CSV integration is confirmed for the pilot and the custom API is deferred until after the pilot.',
+    decisionLabel: 'Technical integration decision confirmed',
+    questionLabel: 'Technical integration transition confirmed',
+    summary: 'Confirmed the technical integration transition.',
+  });
   const procurementAsk = await runHarborAskTurn({
     userId: params.userId,
     project,
@@ -1382,28 +1500,58 @@ export async function createHarborHistoryDemoForUser(params: {
     /price|pricing|commercial/i,
     'add',
     'final pricing',
+    anchors,
+    'finalPricing',
     recorder,
   );
   project = await askProposalTransition(
     params.userId,
     { ...procurementAsk, project },
     /penetration|security package|security report/i,
-    'add',
+    'dismiss',
     'refreshed penetration test',
+    anchors,
+    undefined,
     recorder,
   );
   project = await askProposalTransition(
     params.userId,
     { ...procurementAsk, project },
-    /CSV|integration/i,
+    /expand|readiness/i,
     'dismiss',
-    'redundant integration reconsideration',
+    'premature expansion',
+    anchors,
+    undefined,
     recorder,
   );
 
   project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[3], recorder);
-  project = await resolveDeletionQuestion(params.userId, project, recorder);
-  project = await resolvePricingDecision(params.userId, project, recorder);
+  project = await resolveAnchoredTransition({
+    userId: params.userId,
+    project,
+    anchors,
+    anchorKey: 'deletionSupport',
+    recorder,
+    decisionOutcome: 'Engineering confirmed that Harbor pilot customer data can be automatically deleted within 30 days after the pilot.',
+    decisionReason: 'The final procurement path depends on confirmed support for the required deletion policy.',
+    answer: 'Engineering confirmed that Harbor pilot customer data can be automatically deleted within 30 days after the pilot.',
+    decisionLabel: '30-day deletion requirement confirmed',
+    questionLabel: '30-day deletion question resolved',
+    summary: 'Recorded the confirmed 30-day deletion answer.',
+  });
+  project = await resolveAnchoredTransition({
+    userId: params.userId,
+    project,
+    anchors,
+    anchorKey: 'finalPricing',
+    recorder,
+    decisionOutcome: 'Approve the Harbor pilot price at $38,500.',
+    decisionReason: 'The amount is below the $45,000 budget ceiling and covers the confirmed CSV scope and expected support effort.',
+    answer: 'Approve the Harbor pilot price at $38,500.',
+    decisionLabel: 'Pilot pricing decision confirmed',
+    questionLabel: 'Pilot pricing transition confirmed',
+    summary: 'Confirmed the final pilot pricing outcome.',
+  });
   project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[4], recorder);
 
   HARBOR_HISTORY_DOCUMENTS.forEach((document) => {
@@ -1483,9 +1631,32 @@ export async function createHarborHistoryDemoForUser(params: {
   if (snapshotRecords.some((snapshot) => !snapshot.assessments.focus || !snapshot.assessments.overview || !snapshot.assessments.today)) {
     throw new Error('Harbor history demo created a snapshot without Focus, Overview, or Today assessment state.');
   }
-  if (!finalRehearsalQuestion(project)) {
-    throw new Error('Harbor history demo final state is missing its open production access rehearsal question.');
-  }
+  await recorder.step(
+    {
+      name: 'Final journey validation',
+      category: 'validation',
+      journeyAnchor: 'launchRehearsal',
+      candidateNodeIds: [
+        ...(anchors.get('technicalScope')?.candidateNodeIds ?? []),
+        ...(anchors.get('deletionSupport')?.candidateNodeIds ?? []),
+        ...(anchors.get('finalPricing')?.candidateNodeIds ?? []),
+        ...(anchors.get('launchRehearsal')?.candidateNodeIds ?? []),
+      ],
+      summary: 'Validated anchored outcomes and the remaining actionable rehearsal.',
+    },
+    () => {
+      for (const key of ['technicalScope', 'deletionSupport', 'finalPricing']) {
+        const inspection = inspectJourneyAnchor(anchors, key, project);
+        if (!inspection.node || !journeyAnchorHasOutcome(inspection) || !hasJourneyOutcomeHistory(project, inspection.node.id)) {
+          throw new Error(`Harbor ${key} transition is not resolved in the graph history. ${journeyAnchorDiagnostics(inspection)}`);
+        }
+      }
+      const rehearsal = inspectJourneyAnchor(anchors, 'launchRehearsal', project);
+      if (!rehearsal.node || rehearsal.node.status !== 'OPEN') {
+        throw new Error(`Harbor launch rehearsal is not still actionable. ${journeyAnchorDiagnostics(rehearsal)}`);
+      }
+    },
+  );
   const downloadablePdfCount = HARBOR_HISTORY_DOCUMENTS.filter((document) =>
     project.sources.some((source) => source.id === sourceIdFor(project.id, document) && source.storage_url)
   ).length;

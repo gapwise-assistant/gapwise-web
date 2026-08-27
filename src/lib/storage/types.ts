@@ -203,6 +203,8 @@ export interface DeveloperGenerationStep {
   edgeCountBefore?: number;
   edgeCountAfter?: number;
   derivedNodeIds?: string[];
+  journeyAnchor?: string;
+  candidateNodeIds?: string[];
   summary?: string;
   error?: string;
 }

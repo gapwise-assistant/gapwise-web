@@ -325,7 +325,13 @@ async function createHarborHistoryDemoViaAPI(userId: string): Promise<{
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? 'The Harbor history demo could not be created.');
+    const error = new Error(body.error ?? 'The Harbor history demo could not be created.') as Error & {
+      generationRunId?: string;
+      projectId?: string;
+    };
+    error.generationRunId = typeof body.generationRunId === 'string' ? body.generationRunId : undefined;
+    error.projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+    throw error;
   }
   return (await res.json()) as {
     project: Project;
@@ -348,7 +354,13 @@ async function createRiversideHistoryDemoViaAPI(userId: string): Promise<{
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? 'The Riverside history demo could not be created.');
+    const error = new Error(body.error ?? 'The Riverside history demo could not be created.') as Error & {
+      generationRunId?: string;
+      projectId?: string;
+    };
+    error.generationRunId = typeof body.generationRunId === 'string' ? body.generationRunId : undefined;
+    error.projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+    throw error;
   }
   return (await res.json()) as {
     project: Project;
@@ -406,6 +418,17 @@ async function persistScopeToAPI(userId: string, scope: AppScope): Promise<Scope
   } catch {
     return null;
   }
+}
+
+function reportDemoFailure(label: string, caught: unknown): void {
+  const error = caught instanceof Error ? caught : new Error(String(caught));
+  const diagnostic = error as Error & { generationRunId?: string; projectId?: string };
+  console.error('[Gapwise developer demo failed]', {
+    demo: label,
+    error,
+    generationRunId: diagnostic.generationRunId,
+    projectId: diagnostic.projectId,
+  });
 }
 
 async function loadMemoriesFromAPI(userId: string, profile: UserMemoryProfile): Promise<DurableMemory[]> {
@@ -510,7 +533,6 @@ export default function Home() {
   const [cleanupPreview, setCleanupPreview] = useState<LocalCleanupPreview | null>(null);
   const [cleanupError, setCleanupError] = useState('');
   const [isLocalhostDeveloper, setIsLocalhostDeveloper] = useState(false);
-  const [demoLoadError, setDemoLoadError] = useState('');
   const [projectFocusKey, setProjectFocusKey] = useState(0);
   const [idontKnowGap, setIdontKnowGap] = useState<CandidateGap | null>(null);
   const [idontKnowProjectId, setIdontKnowProjectId] = useState<string | null>(null);
@@ -582,12 +604,8 @@ export default function Home() {
       setScope(nextScope);
       setGeneralContext(loadedGeneralContext);
       setIsLoading(false);
-    }).catch(() => {
-      setProjects([]);
-      setProject(emptyGeneralContext());
-      setScope(EVERYTHING_SCOPE);
-      setGeneralContext(emptyGeneralContext());
-      setStorageMessage('Projects could not be loaded from persistent storage.');
+    }).catch((error) => {
+      console.error('[Gapwise project state load failed]', error);
       setIsLoading(false);
     });
   }, [auth.isReady, auth.userId]);
@@ -625,8 +643,9 @@ export default function Home() {
         ? loadedGeneralContext
         : loadedProjects.projects.find((item) => item.id === current.id) ?? current);
       setProjectRefreshVersion((current) => current + 1);
-    } catch {
-      // The answer is already persisted; keep the current view if a refresh is unavailable.
+    } catch (error) {
+      console.error('[Gapwise project state refresh failed]', error);
+      // The mutation is already persisted; keep the last successfully loaded view.
     }
   }, [userId]);
 
@@ -721,7 +740,6 @@ export default function Home() {
 
   const handleLoadDemo = useCallback(async () => {
     setIsLoadingDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadGoldenDemoViaAPI(userId);
       setProjects(result.projects);
@@ -730,7 +748,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The demo could not be loaded.');
+      reportDemoFailure('demo', caught);
     } finally {
       setIsLoadingDemo(false);
     }
@@ -738,7 +756,6 @@ export default function Home() {
 
   const handleLoadCareerConflictDemo = useCallback(async () => {
     setIsLoadingCareerDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadCareerConflictDemoViaAPI(userId);
       setProjects(result.projects);
@@ -764,7 +781,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The career conflict demo could not be loaded.');
+      reportDemoFailure('career conflict demo', caught);
     } finally {
       setIsLoadingCareerDemo(false);
     }
@@ -772,7 +789,6 @@ export default function Home() {
 
   const handleLoadHackathonDemo = useCallback(async () => {
     setIsLoadingHackathonDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadHackathonDemoViaAPI(userId);
       setProjects(result.projects);
@@ -798,7 +814,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The voluntary demo could not be loaded.');
+      reportDemoFailure('voluntary demo', caught);
     } finally {
       setIsLoadingHackathonDemo(false);
     }
@@ -806,7 +822,6 @@ export default function Home() {
 
   const handleLoadKintaGenDemo = useCallback(async () => {
     setIsLoadingKintaGenDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadKintaGenDemoViaAPI(userId);
       setProjects(result.projects);
@@ -832,7 +847,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The scientific assistant demo could not be loaded.');
+      reportDemoFailure('scientific assistant demo', caught);
     } finally {
       setIsLoadingKintaGenDemo(false);
     }
@@ -840,7 +855,6 @@ export default function Home() {
 
   const handleLoadBakeryDemo = useCallback(async () => {
     setIsLoadingBakeryDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadBakeryDemoViaAPI(userId);
       setProjects(result.projects);
@@ -866,7 +880,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery pop-up demo could not be loaded.');
+      reportDemoFailure('bakery pop-up demo', caught);
     } finally {
       setIsLoadingBakeryDemo(false);
     }
@@ -874,7 +888,6 @@ export default function Home() {
 
   const handleLoadBakeryJourneyDemo = useCallback(async () => {
     setIsLoadingBakeryJourneyDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadBakeryJourneyDemoViaAPI(userId);
       setProjects(result.projects);
@@ -900,7 +913,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('scope');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The bakery journey demo could not be loaded.');
+      reportDemoFailure('bakery journey demo', caught);
     } finally {
       setIsLoadingBakeryJourneyDemo(false);
     }
@@ -908,7 +921,6 @@ export default function Home() {
 
   const handleLoadNorthstarPilotDemo = useCallback(async () => {
     setIsLoadingNorthstarPilotDemo(true);
-    setDemoLoadError('');
     try {
       const result = await loadNorthstarPilotDemoViaAPI(userId);
       setProjects(result.projects);
@@ -934,7 +946,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The Northstar pilot demo could not be loaded.');
+      reportDemoFailure('Northstar pilot demo', caught);
     } finally {
       setIsLoadingNorthstarPilotDemo(false);
     }
@@ -945,7 +957,6 @@ export default function Home() {
     setLoadingCheckpoint: React.Dispatch<React.SetStateAction<boolean>>,
   ) => {
     setLoadingCheckpoint(true);
-    setDemoLoadError('');
     try {
       const result = await loadHarborHotelsCheckpointViaAPI(userId, checkpoint);
       setProjects(result.projects);
@@ -971,7 +982,7 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
-      setDemoLoadError(caught instanceof Error ? caught.message : `The Harbor Hotels ${checkpoint} checkpoint failed.`);
+      reportDemoFailure(`Harbor Hotels ${checkpoint} checkpoint`, caught);
     } finally {
       setLoadingCheckpoint(false);
     }
@@ -991,43 +1002,39 @@ export default function Home() {
 
   const handleCreateHarborHistoryDemo = useCallback(async () => {
     setIsLoadingHarborHistoryDemo(true);
-    setDemoLoadError('');
-    setActiveTab('scope');
     try {
       const result = await createHarborHistoryDemoViaAPI(userId);
       await reloadProjectListFromFirestore(result.project.id);
       setStorageMessage('');
     } catch (caught) {
       try {
-        await reloadProjectListFromFirestore();
-      } catch {
-        // Keep the creation failure visible even if the recovery reload also fails.
+        await reloadProjectListFromFirestore(scope.type === 'project' ? scope.projectId : undefined);
+      } catch (reloadError) {
+        reportDemoFailure('Harbor history project reload after failure', reloadError);
       }
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The Harbor history demo could not be created.');
+      reportDemoFailure('Harbor history demo', caught);
     } finally {
       setIsLoadingHarborHistoryDemo(false);
     }
-  }, [reloadProjectListFromFirestore, userId]);
+  }, [reloadProjectListFromFirestore, scope, userId]);
 
   const handleCreateRiversideHistoryDemo = useCallback(async () => {
     setIsLoadingRiversideHistoryDemo(true);
-    setDemoLoadError('');
-    setActiveTab('scope');
     try {
       const result = await createRiversideHistoryDemoViaAPI(userId);
       await reloadProjectListFromFirestore(result.project.id);
       setStorageMessage('');
     } catch (caught) {
       try {
-        await reloadProjectListFromFirestore();
-      } catch {
-        // Keep the creation failure visible even if the recovery reload also fails.
+        await reloadProjectListFromFirestore(scope.type === 'project' ? scope.projectId : undefined);
+      } catch (reloadError) {
+        reportDemoFailure('Riverside history project reload after failure', reloadError);
       }
-      setDemoLoadError(caught instanceof Error ? caught.message : 'The Riverside history demo could not be created.');
+      reportDemoFailure('Riverside history demo', caught);
     } finally {
       setIsLoadingRiversideHistoryDemo(false);
     }
-  }, [reloadProjectListFromFirestore, userId]);
+  }, [reloadProjectListFromFirestore, scope, userId]);
 
   const handleOpenCleanupLocalData = useCallback(() => {
     setIsCleanupLocalDataOpen(true);
@@ -1065,7 +1072,6 @@ export default function Home() {
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
       setIsCleanupLocalDataOpen(false);
-      setDemoLoadError('');
       if (result.partialFailures.length > 0) {
         setStorageMessage(`Your local Gapwise data was deleted, but some cleanup steps need attention: ${result.partialFailures.map((failure) => failure.error).join(' ')}`);
       } else {
@@ -1504,9 +1510,7 @@ export default function Home() {
           isLoadingHarborEarly={isLoadingHarborEarly}
           isLoadingHarborMiddle={isLoadingHarborMiddle}
           isLoadingHarborLate={isLoadingHarborLate}
-          error={demoLoadError}
           onCreateProject={() => {
-            setDemoLoadError('');
             setIsNewProjectOpen(true);
           }}
           onLoadDemo={() => void handleLoadDemo()}
@@ -1564,13 +1568,6 @@ export default function Home() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
             <div className="rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-xs text-amber-200">
               {storageMessage}
-            </div>
-          </div>
-        )}
-        {demoLoadError && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-            <div role="alert" className="rounded-xl border border-rose-800 bg-rose-950/40 px-4 py-3 text-xs text-rose-200">
-              {demoLoadError}
             </div>
           </div>
         )}

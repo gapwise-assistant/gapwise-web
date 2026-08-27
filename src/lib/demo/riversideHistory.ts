@@ -22,10 +22,19 @@ import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAs
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { buildGraphHealthReport } from '@/lib/graph/decisionMapDebug';
 import type { AppScope } from '@/types/scope';
-import type { ClarityNode, EdgeType, Project, ProjectHistoryEvent } from '@/types/clarity';
+import type { EdgeType, Project, ProjectHistoryEvent } from '@/types/clarity';
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
 import { boundedId } from '@/lib/ids/boundedId';
+import {
+  createJourneyAnchorBook,
+  hasJourneyOutcomeHistory,
+  inspectJourneyAnchor,
+  journeyAnchorHasOutcome,
+  journeyAnchorDiagnostics,
+  recordControlledJourneyAnchor,
+  type JourneyAnchorBook,
+} from '@/lib/demo/journeyAnchors';
 import type { ProjectSnapshot, ProjectSnapshotTrigger } from '@/types/projectSnapshot';
 import {
   attachDeveloperGenerationError,
@@ -180,7 +189,7 @@ const RIVERSIDE_DEMO_PROPOSALS: Record<string, readonly RiversideDemoProposalSpe
     { type: 'ASSUMPTION', text: 'Promise delivery across the entire city for the first six-week pilot.' },
   ],
   cancellations: [
-    { type: 'RISK', text: 'Volunteer driver cancellations could leave one or more Wednesday routes uncovered.' },
+    { type: 'UNKNOWN', text: 'Confirm complete volunteer driver coverage for every Wednesday route.' },
     { type: 'NEXT_ACTION', text: 'Prepare a backup-driver list for the Wednesday delivery routes.' },
   ],
   pricing: [
@@ -415,7 +424,12 @@ async function uploadPdf(userId: string, projectId: string, document: RiversideH
   return uploaded.storageUrl;
 }
 
-async function processDocument(userId: string, project: Project, document: RiversideHistoryDocument, recorder?: DeveloperGenerationRecorder): Promise<Project> {
+async function processDocument(
+  userId: string,
+  project: Project,
+  document: RiversideHistoryDocument,
+  recorder?: DeveloperGenerationRecorder,
+): Promise<Project> {
   const bytes = pdfBytes(document);
   const sourceId = sourceIdFor(project.id, document);
   const storageUrl = await recordDeveloperGenerationStep(
@@ -557,7 +571,7 @@ async function runAskTurn(params: { userId: string; project: Project; chat: AskC
   return { project: nextProject, chat, assistantMessageId, proposals };
 }
 
-async function transitionProposal(params: { userId: string; turn: RiversideAskTurn; proposal: AskContextProposal; action: 'add' | 'dismiss'; recorder?: DeveloperGenerationRecorder }): Promise<Project> {
+async function transitionProposal(params: { userId: string; turn: RiversideAskTurn; proposal: AskContextProposal; action: 'add' | 'dismiss'; anchors: JourneyAnchorBook; anchorKey?: string; recorder?: DeveloperGenerationRecorder }): Promise<Project> {
   const storage = getStorageProvider();
   const message = (await storage.getAskMessages(params.userId)).find((candidate) => candidate.id === params.turn.assistantMessageId);
   if (!message || !params.proposal.id) throw new Error('The Riverside proposal record was not found.');
@@ -574,12 +588,21 @@ async function transitionProposal(params: { userId: string; turn: RiversideAskTu
     { name: 'Project reloaded', category: 'storage', summary: 'Reloaded project state before applying the proposal transition.' },
     () => storage.getProject(params.userId, params.turn.project.id),
   ) ?? params.turn.project;
+  const projectBeforeProposal = project;
   if (params.action === 'add') {
     project = await recordDeveloperGenerationStep(
       params.recorder,
       { name: 'Proposal source processed', category: 'proposal', chatId: message.chatId, messageId: message.id, proposalId: params.proposal.id, sourceId: proposalSourceIdFor(message.id, params.proposal.id), summary: 'Persisted and processed the proposal as project context.' },
       () => persistAskProposal({ userId: params.userId, projectId: project.id, assistantMessageId: message.id, proposal: nextProposal }),
     );
+    if (params.anchorKey) {
+      recordControlledJourneyAnchor(params.anchors, {
+        key: params.anchorKey,
+        before: projectBeforeProposal,
+        after: project,
+        sourceId: proposalSourceIdFor(message.id, params.proposal.id),
+      });
+    }
   }
   const proposalId = params.proposal.id;
   const eventId = boundedId('history', `${project.id}:ask_proposal:${params.action}:${message.id}:${proposalId}`);
@@ -609,17 +632,43 @@ async function transitionProposal(params: { userId: string; turn: RiversideAskTu
   return project;
 }
 
-function findOpenNode(project: Project, type: ClarityNode['type'], pattern: RegExp): ClarityNode | undefined {
-  return project.nodes.find((node) => node.status === 'OPEN' && node.type === type && pattern.test(node.text));
-}
+async function resolvePricingIfNeeded(
+  userId: string,
+  project: Project,
+  anchors: JourneyAnchorBook,
+  recorder?: DeveloperGenerationRecorder,
+): Promise<Project> {
+  const inspection = inspectJourneyAnchor(anchors, 'mealPricing', project);
+  if (!inspection.node) {
+    return recordDeveloperGenerationStep(
+      recorder,
+      {
+        name: 'Meal-price transition located',
+        category: 'resolution',
+        journeyAnchor: 'mealPricing',
+        candidateNodeIds: inspection.anchor?.candidateNodeIds ?? [],
+        summary: 'Located the recorded canonical node for the meal-price transition.',
+      },
+      () => { throw new Error(journeyAnchorDiagnostics(inspection)); },
+    );
+  }
+  if (journeyAnchorHasOutcome(inspection)) return project;
 
-async function resolvePricingIfNeeded(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
-  const decision = findOpenNode(project, 'DECISION', /price|pricing/i);
-  if (!decision) return project;
   const updated = await recordDeveloperGenerationStep(
     recorder,
-    { name: 'Decision resolved', category: 'resolution', summary: 'Confirmed the Riverside meal-price decision.' },
-    () => confirmDecision(project, { decisionNodeId: decision.id, customDecision: 'Set the initial Riverside meal price at $14 per meal with delivery included.', reason: 'The price is within the range customers described and covers the current estimated delivery cost.' }),
+    {
+      name: 'Meal-price transition resolved',
+      category: 'resolution',
+      journeyAnchor: 'mealPricing',
+      candidateNodeIds: inspection.anchor?.candidateNodeIds ?? [],
+      summary: 'Applied the confirmed Riverside meal-price outcome to the anchored node.',
+    },
+    () => {
+      if (inspection.node?.type !== 'DECISION') {
+        throw new Error(`The meal-price journey anchor requires a resolvable decision node. ${journeyAnchorDiagnostics(inspection)}`);
+      }
+      return confirmDecision(project, { decisionNodeId: inspection.node.id, customDecision: 'Set the initial Riverside meal price at $14 per meal with delivery included.', reason: 'The price is within the range customers described and covers the current estimated delivery cost.' });
+    },
   );
   await recordDeveloperGenerationStep(
     recorder,
@@ -630,13 +679,43 @@ async function resolvePricingIfNeeded(userId: string, project: Project, recorder
   return updated;
 }
 
-async function resolveDriverQuestionIfNeeded(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<Project> {
-  const question = findOpenNode(project, 'UNKNOWN', /driver|delivery.*coverage|volunteer/i);
-  if (!question) return project;
+async function resolveDriverQuestionIfNeeded(
+  userId: string,
+  project: Project,
+  anchors: JourneyAnchorBook,
+  recorder?: DeveloperGenerationRecorder,
+): Promise<Project> {
+  const inspection = inspectJourneyAnchor(anchors, 'deliveryCoverage', project);
+  if (!inspection.node) {
+    return recordDeveloperGenerationStep(
+      recorder,
+      {
+        name: 'Delivery transition located',
+        category: 'resolution',
+        journeyAnchor: 'deliveryCoverage',
+        candidateNodeIds: inspection.anchor?.candidateNodeIds ?? [],
+        summary: 'Located the recorded canonical node for the delivery-coverage transition.',
+      },
+      () => { throw new Error(journeyAnchorDiagnostics(inspection)); },
+    );
+  }
+  if (journeyAnchorHasOutcome(inspection)) return project;
+
   const result = await recordDeveloperGenerationStep(
     recorder,
-    { name: 'Question resolved', category: 'resolution', summary: 'Recorded confirmed delivery coverage.' },
-    () => answerQuestion({ userId, projectId: project.id, nodeId: question.id, answer: 'Primary and backup volunteer drivers are confirmed for every Wednesday route.' }),
+    {
+      name: 'Delivery transition resolved',
+      category: 'resolution',
+      journeyAnchor: 'deliveryCoverage',
+      candidateNodeIds: inspection.anchor?.candidateNodeIds ?? [],
+      summary: 'Applied the confirmed delivery-coverage outcome to the anchored node.',
+    },
+    () => {
+      if (!inspection.node || !['UNKNOWN', 'ASSUMPTION'].includes(inspection.node.type)) {
+        throw new Error(`The delivery journey anchor is not answerable by the existing question workflow. ${journeyAnchorDiagnostics(inspection)}`);
+      }
+      return answerQuestion({ userId, projectId: project.id, nodeId: inspection.node.id, answer: 'Primary and backup volunteer drivers are confirmed for every Wednesday route.' });
+    },
   );
   await snapshotNewEvents(userId, project, result.context, 'Delivery coverage question resolved', undefined, recorder);
   return result.context;
@@ -680,6 +759,7 @@ export async function createRiversideHistoryDemoForUser(params: { userId: string
   const storage = getStorageProvider();
   const createdAt = new Date().toISOString();
   let project = createProjectFromInput(projectInput(RIVERSIDE_HISTORY_DEMO_TITLE), createdAt);
+  const anchors = createJourneyAnchorBook();
   const recorder = await startDeveloperGenerationRun({ userId: params.userId, projectId: project.id, generator: 'Riverside history demo' });
   try {
   await recorder.step({ name: 'Generation started', category: 'project', summary: 'Started a fresh Riverside history generation.' }, () => project);
@@ -695,25 +775,24 @@ export async function createRiversideHistoryDemoForUser(params: { userId: string
     title: 'Planning the Riverside pilot', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   };
   const validation = await runAskTurn({ userId: params.userId, project, chat, turn: 'validation', message: 'What should we validate before committing to the weekly Riverside launch?', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: validation, proposal: validation.proposals[0], action: 'add', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: { ...validation, project }, proposal: validation.proposals[1], action: 'add', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: { ...validation, project }, proposal: validation.proposals[2], action: 'dismiss', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: validation, proposal: validation.proposals[0], action: 'add', anchors, recorder });
+  project = await transitionProposal({ userId: params.userId, turn: { ...validation, project }, proposal: validation.proposals[1], action: 'add', anchors, anchorKey: 'rehearsal', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: { ...validation, project }, proposal: validation.proposals[2], action: 'dismiss', anchors, recorder });
 
   project = await processDocument(params.userId, project, RIVERSIDE_HISTORY_DOCUMENTS[1], recorder);
   const cancellations = await runAskTurn({ userId: params.userId, project, chat: validation.chat, turn: 'cancellations', message: 'What happens if volunteer drivers cancel on a Wednesday?', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: cancellations, proposal: cancellations.proposals[0], action: 'add', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: { ...cancellations, project }, proposal: cancellations.proposals[1], action: 'dismiss', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: cancellations, proposal: cancellations.proposals[0], action: 'add', anchors, anchorKey: 'deliveryCoverage', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: { ...cancellations, project }, proposal: cancellations.proposals[1], action: 'dismiss', anchors, recorder });
 
   project = await processDocument(params.userId, project, RIVERSIDE_HISTORY_DOCUMENTS[2], recorder);
   const pricing = await runAskTurn({ userId: params.userId, project, chat: cancellations.chat, turn: 'pricing', message: 'What must be confirmed before setting the Riverside meal price?', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: pricing, proposal: pricing.proposals[0], action: 'add', recorder });
-  project = await transitionProposal({ userId: params.userId, turn: { ...pricing, project }, proposal: pricing.proposals[1], action: 'dismiss', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: pricing, proposal: pricing.proposals[0], action: 'add', anchors, anchorKey: 'mealPricing', recorder });
+  project = await transitionProposal({ userId: params.userId, turn: { ...pricing, project }, proposal: pricing.proposals[1], action: 'dismiss', anchors, recorder });
 
   project = await processDocument(params.userId, project, RIVERSIDE_HISTORY_DOCUMENTS[3], recorder);
-  project = await resolveDriverQuestionIfNeeded(params.userId, project, recorder);
-  project = await resolvePricingIfNeeded(params.userId, project, recorder);
+  project = await resolveDriverQuestionIfNeeded(params.userId, project, anchors, recorder);
+  project = await resolvePricingIfNeeded(params.userId, project, anchors, recorder);
   project = await processDocument(params.userId, project, RIVERSIDE_HISTORY_DOCUMENTS[4], recorder);
-  project = await resolvePricingIfNeeded(params.userId, project, recorder);
 
   const snapshots = await storage.listProjectSnapshots(params.userId, project.id);
   const messages = (await storage.getAskMessages(params.userId)).filter((message) => message.projectId === project.id);
@@ -738,15 +817,33 @@ export async function createRiversideHistoryDemoForUser(params: { userId: string
   if (addedProposalCount !== 4 || dismissedProposalCount !== 3 || pendingProposalCount !== 0) {
     throw new Error(`Riverside history demo expected 4 added, 3 dismissed, and 0 pending proposals, got ${addedProposalCount}, ${dismissedProposalCount}, and ${pendingProposalCount}.`);
   }
-  if (!project.nodes.some((node) => node.type === 'DECISION' && node.status === 'RESOLVED' && /price|pricing/i.test(node.text))) {
-    throw new Error('Riverside history demo final state is missing its resolved meal-price decision.');
-  }
-  if (!project.nodes.some((node) => node.type === 'UNKNOWN' && node.status === 'RESOLVED' && /driver|delivery.*coverage|volunteer/i.test(node.text))) {
-    throw new Error('Riverside history demo final state is missing resolved delivery coverage.');
-  }
-  if (!project.nodes.some((node) => node.type === 'UNKNOWN' && node.status === 'OPEN' && /packing-and-delivery rehearsal/i.test(node.text))) {
-    throw new Error('Riverside history demo final state is missing its open packing-and-delivery rehearsal blocker.');
-  }
+  await recorder.step(
+    {
+      name: 'Final journey validation',
+      category: 'validation',
+      journeyAnchor: 'mealPricing',
+      candidateNodeIds: [
+        ...(anchors.get('mealPricing')?.candidateNodeIds ?? []),
+        ...(anchors.get('deliveryCoverage')?.candidateNodeIds ?? []),
+        ...(anchors.get('rehearsal')?.candidateNodeIds ?? []),
+      ],
+      summary: 'Validated the scripted transitions by anchored graph state and history outcomes.',
+    },
+    () => {
+      const pricing = inspectJourneyAnchor(anchors, 'mealPricing', project);
+      if (!pricing.node || !journeyAnchorHasOutcome(pricing) || !hasJourneyOutcomeHistory(project, pricing.node.id)) {
+        throw new Error(`Riverside meal pricing transition is not resolved in the graph history. ${journeyAnchorDiagnostics(pricing)}`);
+      }
+      const delivery = inspectJourneyAnchor(anchors, 'deliveryCoverage', project);
+      if (!delivery.node || !journeyAnchorHasOutcome(delivery) || !hasJourneyOutcomeHistory(project, delivery.node.id)) {
+        throw new Error(`Riverside delivery coverage transition is not resolved in the graph history. ${journeyAnchorDiagnostics(delivery)}`);
+      }
+      const rehearsal = inspectJourneyAnchor(anchors, 'rehearsal', project);
+      if (!rehearsal.node || rehearsal.node.status !== 'OPEN') {
+        throw new Error(`Riverside packing-and-delivery rehearsal is not still actionable. ${journeyAnchorDiagnostics(rehearsal)}`);
+      }
+    },
+  );
   const assertUniqueIds = (kind: string, ids: string[]) => {
     const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
     if (duplicates.length > 0) throw new Error(`Riverside history demo contains duplicate ${kind} IDs: ${[...new Set(duplicates)].join(', ')}`);
