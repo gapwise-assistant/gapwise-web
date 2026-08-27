@@ -148,7 +148,7 @@ export function snapshotReferencesRecord(
  * Content that must remain stable after a record is referenced by a snapshot.
  * Ask proposal confirmation is intentionally mutable because v2 stores its
  * historical value in proposalStates; the message's actual response remains
- * immutable. Chat updatedAt is likewise live bookkeeping, not chat content.
+ * immutable. Storage bookkeeping is likewise not historical content.
  */
 export function snapshotRecordContent(
   type: SnapshotReferencedRecordType,
@@ -156,6 +156,7 @@ export function snapshotRecordContent(
 ): unknown {
   if (!record || typeof record !== 'object') return record;
   const value = JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
+  delete value.serverUpdatedAt;
 
   if (type === 'source') return { content: value.content };
   if (type === 'chat') {
@@ -178,7 +179,20 @@ export function snapshotRecordContentEqual(
   left: unknown,
   right: unknown,
 ): boolean {
-  return JSON.stringify(snapshotRecordContent(type, left)) === JSON.stringify(snapshotRecordContent(type, right));
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+          .map(([key, item]) => [key, stable(item)])
+      );
+    }
+    return value;
+  };
+
+  return JSON.stringify(stable(snapshotRecordContent(type, left)))
+    === JSON.stringify(stable(snapshotRecordContent(type, right)));
 }
 
 export interface ProjectSnapshotSummary {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { clearTracesForTests, recordTrace } from '@/lib/observability/trace';
 import { getStorageProvider, resetStorageProviderForTests } from '@/lib/storage';
+import { historyBranchRequestId } from '@/components/ProjectHistory';
 import {
   branchProjectFromSnapshot,
   createProjectSnapshot,
@@ -13,10 +14,12 @@ import {
 import {
   PROJECT_SNAPSHOT_MAX_BYTES,
   projectSnapshotToSummary,
+  snapshotRecordContentEqual,
   serializedProjectSnapshotSize,
   type ProjectSnapshotV1,
 } from '@/types/projectSnapshot';
 import type { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
+import type { Project } from '@/types/clarity';
 
 const userId = 'snapshot-test-user';
 let storagePath = '';
@@ -71,6 +74,29 @@ describe('project snapshots', () => {
     resetStorageProviderForTests();
     delete process.env.GAPSWISE_MOCK_STORAGE_PATH;
     await rm(storagePath, { recursive: true, force: true });
+  });
+
+  it('ignores storage bookkeeping when checking referenced Ask records', () => {
+    const chat = {
+      id: 'chat_bookkeeping',
+      userId,
+      scopeType: 'project' as const,
+      projectId: 'project_bookkeeping',
+      title: 'Planning',
+      createdAt: '2026-08-25T10:00:00.000Z',
+      updatedAt: '2026-08-25T10:01:00.000Z',
+    };
+
+    expect(snapshotRecordContentEqual('chat', chat, {
+      updatedAt: '2026-08-25T10:02:00.000Z',
+      serverUpdatedAt: { seconds: 123 },
+      userId,
+      title: 'Planning',
+      projectId: 'project_bookkeeping',
+      scopeType: 'project',
+      id: 'chat_bookkeeping',
+      createdAt: '2026-08-25T10:00:00.000Z',
+    })).toBe(true);
   });
 
   it('writes a small v2 manifest without source bodies, Ask text, or traces', async () => {
@@ -236,11 +262,16 @@ describe('project snapshots', () => {
     };
     await storage.saveAskChat(userId, chat);
     await storage.saveAskMessage(userId, message);
-    const snapshot = await createProjectSnapshot({ userId, projectId: project.id, trigger: { type: 'ask_response_created', askMessageId: message.id }, label: 'Ask response' });
-    const branched = await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId: 'branch-request-1' });
+    const createdSnapshot = await createProjectSnapshot({ userId, projectId: project.id, trigger: { type: 'ask_response_created', askMessageId: message.id }, label: 'Ask response' });
+    const snapshot = { ...createdSnapshot, id: `snapshot-${'x'.repeat(180)}` };
+    await storage.saveProjectSnapshot(userId, snapshot);
+    const clientRequestId = historyBranchRequestId(snapshot.id);
+    expect(clientRequestId.length).toBeLessThanOrEqual(180);
+    expect(historyBranchRequestId(snapshot.id)).toBe(clientRequestId);
+    const branched = await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId });
     expect(branched.project.id).not.toBe(project.id);
     expect(branched.project.title).toBe('Branchable project (2)');
-    expect(branched.project.branch).toMatchObject({ sourceProjectId: project.id, sourceSnapshotId: snapshot.id, requestId: 'branch-request-1' });
+    expect(branched.project.branch).toMatchObject({ sourceProjectId: project.id, sourceSnapshotId: snapshot.id, requestId: clientRequestId });
     const branchNodeIds = new Set(branched.project.nodes.map((item) => item.id));
     expect(branchNodeIds.has('question_old')).toBe(false);
     expect(branchNodeIds.has('decision_old')).toBe(false);
@@ -251,7 +282,7 @@ describe('project snapshots', () => {
     expect(branchChat?.id).not.toBe(chat.id);
     expect(branchMessage?.chatId).toBe(branchChat?.id);
     expect(branchMessage?.contextProposals?.[0]).toMatchObject({ confirmationStatus: 'pending', sourceMessageId: branchMessage?.id });
-    expect((await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId: 'branch-request-1' })).project.id).toBe(branched.project.id);
+    expect((await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId })).project.id).toBe(branched.project.id);
   });
 
   it('keeps version 1 snapshots readable', async () => {

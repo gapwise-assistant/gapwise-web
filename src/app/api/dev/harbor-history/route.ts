@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { createHarborHistoryDemoForUser } from '@/lib/demo/harborHistory';
+import { FIRESTORE_REQUIRED_MESSAGE, requireFirestoreStorage } from '@/lib/storage';
+import { StorageError } from '@/lib/storage/types';
 
 export const runtime = 'nodejs';
 
@@ -19,9 +21,20 @@ export async function POST(request: NextRequest) {
   try {
     const body = requestSchema.parse(await request.json().catch(() => ({})));
     const userId = await requireAuthenticatedUserId(request, body.userId);
+    try {
+      const storage = requireFirestoreStorage();
+      // A lightweight read verifies that credentials and the configured
+      // Firestore database are reachable before the multi-step demo begins.
+      await storage.getAppScope(userId);
+    } catch {
+      return NextResponse.json({ error: FIRESTORE_REQUIRED_MESSAGE }, { status: 503 });
+    }
     const result = await createHarborHistoryDemoForUser({ userId, fresh: body.fresh });
     return NextResponse.json(result, { status: result.created ? 201 : 200 });
   } catch (error) {
+    if (error instanceof StorageError && error.code === 'UNAUTHENTICATED') {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
     return NextResponse.json({
       error: error instanceof Error ? error.message : 'The Harbor history demo could not be created.',
     }, { status: 500 });

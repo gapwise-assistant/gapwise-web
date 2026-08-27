@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { getStorageProvider, setActiveProjectId, setAppScope } from '@/lib/storage';
+import { requireFirestoreStorage, setActiveProjectId, setAppScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { branchProjectFromSnapshot, createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
@@ -15,7 +15,7 @@ const branchSchema = z.object({
 
 function errorResponse(error: unknown) {
   const status = error instanceof StorageError
-    ? error.code === 'UNAUTHENTICATED' ? 401 : error.code === 'PERMISSION_DENIED' ? 403 : error.code === 'VALIDATION_ERROR' ? 400 : 503
+    ? error.code === 'UNAUTHENTICATED' ? 401 : error.code === 'PERMISSION_DENIED' ? 403 : error.code === 'NOT_FOUND' ? 404 : error.code === 'VALIDATION_ERROR' ? 400 : 503
     : 500;
   return NextResponse.json({ error: error instanceof Error ? error.message : 'Project branch failed.' }, { status });
 }
@@ -28,10 +28,12 @@ export async function POST(
     const { projectId, snapshotId } = await params;
     const body = branchSchema.parse(await request.json().catch(() => ({})));
     const userId = await requireAuthenticatedUserId(request, body.userId);
-    const snapshot = await getStorageProvider().getProjectSnapshot(userId, snapshotId);
-    if (!snapshot || snapshot.projectId !== projectId) {
-      throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
-    }
+    const storage = requireFirestoreStorage();
+    const project = await storage.getProject(userId, projectId);
+    const snapshot = await storage.getProjectSnapshot(userId, snapshotId);
+    if (!project) throw new StorageError('The project does not exist.', 'NOT_FOUND');
+    if (!snapshot) throw new StorageError('The requested project snapshot was not found.', 'NOT_FOUND');
+    if (snapshot.projectId !== projectId) throw new StorageError('The requested snapshot belongs to another project.', 'PERMISSION_DENIED');
     const result = await branchProjectFromSnapshot({
       userId,
       snapshotId,

@@ -17,10 +17,12 @@ export function isNextActionSatisfied(project: Project, node: ClarityNode): bool
 
   return project.edges.some((edge) => {
     if (edge.source === node.id && edge.type === 'satisfies') {
-      return resolvedOutcome(nodesById.get(edge.target));
-    }
-    if (edge.target === node.id && edge.type === 'depends_on') {
-      return resolvedOutcome(nodesById.get(edge.source));
+      const target = nodesById.get(edge.target);
+      return Boolean(
+        target
+        && (target.type === 'UNKNOWN' || target.type === 'ASSUMPTION' || target.type === 'DECISION')
+        && resolvedOutcome(target),
+      );
     }
     return false;
   });

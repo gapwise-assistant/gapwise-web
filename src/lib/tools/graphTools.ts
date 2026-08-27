@@ -6,7 +6,7 @@ import { projectForReasoning } from '@/lib/context/sourceState';
 import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
-import { appendGapResolvedHistory } from '@/lib/history/projectHistory';
+import { appendGapResolvedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 
 function timestampId(prefix: string): string {
@@ -67,7 +67,8 @@ export function resolveGap(
   if (classification.supersedesOriginal) {
     createGraphEdge(updated, { source: understanding.id, target: gap.id, type: 'supersedes' });
   }
-  resolveSatisfiedNextActions(updated, now);
+  const completedActionIds = resolveSatisfiedNextActions(updated, now);
+  appendNextActionCompletionHistory(updated, completedActionIds, now);
 
   updated.history.push({
     question: gap.text,

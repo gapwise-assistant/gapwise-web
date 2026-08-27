@@ -18,6 +18,12 @@ import {
   canonicalOpenQuestions,
 } from '@/lib/questions/canonical';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
+import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import {
+  changedProjectNodeIds,
+  completeProjectRelationships,
+} from '@/lib/graph/relationshipCompletion';
 
 const reconciliationClassificationSchema = z.enum([
   'NEW_UNCERTAINTY',
@@ -1014,11 +1020,47 @@ export async function processContextSource(
       relevance: analysis.relevance,
       operations,
       relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
+      deferHistory: true,
       processingLog,
     }, profile);
+    const persistedSource = updated.sources.find((source) => source.id === input.sourceId);
+    const relationshipChangedNodeIds = changedProjectNodeIds(project, updated);
+    const relationshipCompletion = await completeProjectRelationships({
+      projectBefore: project,
+      projectAfter: updated,
+      changedNodeIds: relationshipChangedNodeIds,
+      source: {
+        id: persistedSource?.id ?? input.sourceId ?? 'new-source',
+        filename: input.filename,
+        content: input.content,
+      },
+      genAI: options.genAI,
+      model: options.model,
+    });
+    updated = relationshipCompletion.project;
+    const completedActionIds = resolveSatisfiedNextActions(updated, new Date().toISOString());
+    updated = appendContextAddedHistory(project, updated, {
+      sourceId: input.sourceId ?? 'new-source',
+      filename: input.filename,
+      createdAt: new Date().toISOString(),
+    });
+    if (completedActionIds.length > 0) {
+      appendNextActionCompletionHistory(updated, completedActionIds, new Date().toISOString());
+    }
     if (processingLog) {
-      const persistedSource = updated.sources.find((source) => source.id === input.sourceId);
-      if (persistedSource) persistedSource.processing_log = processingLog;
+      const sourceWithLog = updated.sources.find((source) => source.id === input.sourceId);
+      if (sourceWithLog) sourceWithLog.processing_log = processingLog;
+      processingLog.stages.push({
+        name: 'Relationship completion',
+        status: relationshipCompletion.trace.error ? 'failed' : 'completed',
+        started_at: new Date().toISOString(),
+        duration_ms: 0,
+        input: {
+          changed_node_ids: relationshipChangedNodeIds,
+        },
+        output: relationshipCompletion.trace,
+        ...(relationshipCompletion.trace.error ? { error: relationshipCompletion.trace.error } : {}),
+      });
     }
     updated.clarity_score = calculateClarityScore(projectForReasoning(updated));
     updated.active_question = selectTopGap(projectForReasoning(updated), profile);

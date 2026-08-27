@@ -96,16 +96,6 @@ async function persistProjectToAPI(userId: string, project: Project): Promise<bo
     if (!res.ok) throw new Error('Persistent storage write failed');
     return true;
   } catch {
-    // Fallback: persist to localStorage only
-    const existing = localStorage.getItem(`gapwise_state_${userId}`);
-    let state: any = existing ? JSON.parse(existing) : {};
-    state.contexts = [{ id: project.id, userId, title: project.title, goal: project.goal,
-      clarity_score: project.clarity_score, createdAt: project.created_at, updatedAt: new Date().toISOString(), status: project.status === 'archived' ? 'ARCHIVED' : 'ACTIVE' }];
-    state.nodes = project.nodes.map(n => ({ ...n, userId, createdBy: n.created_by, importance: n.impact, sourceIds: n.source_refs, createdAt: n.created_at, updatedAt: n.updated_at }));
-    state.edges = project.edges.map(e => ({ ...e, userId, status: 'ACTIVE', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
-    state.sources = project.sources.map(s => ({ ...s, userId, status: 'ACTIVE', createdAt: s.extracted_at, updatedAt: s.extracted_at }));
-    state.conversations = project.history.map(h => ({ question: h.question, answer: h.answer, graph_diff_summary: h.graph_diff_summary, userId, createdAt: h.timestamp, updatedAt: h.timestamp, status: 'COMPLETED', id: `conv_${Math.random()}` }));
-    localStorage.setItem(`gapwise_state_${userId}`, JSON.stringify(state));
     return false;
   }
 }
@@ -342,7 +332,14 @@ async function createHarborHistoryDemoViaAPI(userId: string): Promise<{
   };
 }
 
-async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boolean> {
+interface ScopePersistenceResult {
+  scope?: AppScope;
+  activeProjectId?: string;
+  project?: Project;
+  projects?: Project[];
+}
+
+async function persistScopeToAPI(userId: string, scope: AppScope): Promise<ScopePersistenceResult | null> {
   try {
     const res = await authFetch('/api/projects', {
       method: 'PATCH',
@@ -350,10 +347,9 @@ async function persistScopeToAPI(userId: string, scope: AppScope): Promise<boole
       body: JSON.stringify({ userId, scope }),
     });
     if (!res.ok) throw new Error('Scope write failed');
-    return true;
+    return await res.json() as ScopePersistenceResult;
   } catch {
-    localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify(scope));
-    return false;
+    return null;
   }
 }
 
@@ -399,8 +395,16 @@ function persistProfileToLocalStorage(userId: string, profile: UserMemoryProfile
   localStorage.setItem(`gapwise_profile_${userId}`, JSON.stringify(profile));
 }
 
-function clearDemoBrowserState(userId: string, projectId: string): void {
+function clearLegacyProjectBrowserState(userId: string): void {
   if (typeof window === 'undefined') return;
+  localStorage.removeItem(`gapwise_state_${userId}`);
+  localStorage.removeItem(`gapwise_active_project_${userId}`);
+  localStorage.removeItem(`gapwise_scope_${userId}`);
+}
+
+function clearDemoBrowserState(userId: string): void {
+  if (typeof window === 'undefined') return;
+  clearLegacyProjectBrowserState(userId);
   const keysToRemove = new Set([
     `gapwise_state_${userId}`,
     `gapwise_active_project_${userId}`,
@@ -415,8 +419,6 @@ function clearDemoBrowserState(userId: string, projectId: string): void {
       localStorage.removeItem(key!);
     }
   }
-  localStorage.setItem(`gapwise_active_project_${userId}`, projectId);
-  localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify({ type: 'project', projectId }));
 }
 
 export default function Home() {
@@ -463,6 +465,9 @@ export default function Home() {
   useEffect(() => {
     setIsLocalhostDeveloper(isLocalhostBrowser());
   }, []);
+  useEffect(() => {
+    if (auth.userId) clearLegacyProjectBrowserState(auth.userId);
+  }, [auth.userId]);
   const loadingDemoLabel = isLoadingCareerDemo
     ? 'Career demo'
     : isLoadingHackathonDemo
@@ -539,7 +544,7 @@ export default function Home() {
       return current.map((item) => (item.id === next.id ? next : item));
     });
     const savedToApi = await persistProjectToAPI(userId, next);
-    setStorageMessage(savedToApi ? '' : 'Saved locally. Persistent storage API was unavailable.');
+    setStorageMessage(savedToApi ? '' : 'Persistent storage was unavailable; the change was not saved.');
     return savedToApi;
   }, [project, projects, userId]);
 
@@ -560,23 +565,30 @@ export default function Home() {
     }
   }, [userId]);
 
-  const handleSelectProject = useCallback((projectId: string) => {
+  const handleSelectProject = useCallback(async (projectId: string) => {
     const selected = projects.find((item) => item.id === projectId);
-    if (selected) {
-      setProject(selected);
-      const nextScope: AppScope = { type: 'project', projectId: selected.id };
-      setScope(nextScope);
-      persistScopeToAPI(userId, nextScope).then((savedToApi) => {
-        setStorageMessage(savedToApi ? '' : 'Scope saved locally. Persistent storage API was unavailable.');
-      });
+    if (!selected) return;
+    const nextScope: AppScope = { type: 'project', projectId: selected.id };
+    const persisted = await persistScopeToAPI(userId, nextScope);
+    if (!persisted?.scope || persisted.scope.type !== 'project') {
+      setStorageMessage('Project selection could not be saved to persistent storage.');
+      return;
     }
+    if (persisted.projects) setProjects(persisted.projects);
+    setProject(persisted.project ?? selected);
+    setScope(persisted.scope);
+    setStorageMessage('');
   }, [projects, userId]);
 
-  const handleSelectEverything = useCallback(() => {
-    setScope(EVERYTHING_SCOPE);
-    persistScopeToAPI(userId, EVERYTHING_SCOPE).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Scope saved locally. Persistent storage API was unavailable.');
-    });
+  const handleSelectEverything = useCallback(async () => {
+    const persisted = await persistScopeToAPI(userId, EVERYTHING_SCOPE);
+    if (!persisted?.scope || persisted.scope.type !== 'everything') {
+      setStorageMessage('Everything selection could not be saved to persistent storage.');
+      return;
+    }
+    if (persisted.projects) setProjects(persisted.projects);
+    setScope(persisted.scope);
+    setStorageMessage('');
   }, [userId]);
 
   const openResolvedGaps = useCallback(() => {
@@ -594,9 +606,7 @@ export default function Home() {
     setScope(nextScope);
     setProjectFocusKey((current) => current + 1);
     setActiveTab('scope');
-    persistScopeToAPI(userId, nextScope).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Project created. Scope could not be saved to persistent storage.');
-    });
+    setStorageMessage('');
   }, [userId]);
 
   const handleCreateProject = useCallback(async (input: CreateProjectInput) => {
@@ -604,10 +614,6 @@ export default function Home() {
     setProjects(result.projects);
     setProject(result.project);
     setScope({ type: 'project', projectId: result.project.id });
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`gapwise_active_project_${userId}`, result.project.id);
-      localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify({ type: 'project', projectId: result.project.id }));
-    }
     setIsNewProjectOpen(false);
     setActiveTab('scope');
     setProjectFocusKey((current) => current + 1);
@@ -642,7 +648,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, CAREER_CONFLICT_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -676,7 +682,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, HACKATHON_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -710,7 +716,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, KINTAGEN_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -744,7 +750,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, BAKERY_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -778,7 +784,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, BAKERY_JOURNEY_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -812,7 +818,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, NORTHSTAR_PILOT_DEMO_ID);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, result.memories);
       setFeedbackEvents([]);
@@ -849,7 +855,7 @@ export default function Home() {
       setScope(result.scope);
       setMemories([]);
       setProfile(DEFAULT_USER_PROFILE);
-      clearDemoBrowserState(userId, result.project.id);
+      clearDemoBrowserState(userId);
       persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
       saveMemoriesToBrowser(userId, []);
       setFeedbackEvents([]);
@@ -911,11 +917,10 @@ export default function Home() {
         body: JSON.stringify({ userId, action: 'RESET' }),
       });
     } catch {}
-    // Always clear localStorage too
+    // Remove obsolete browser keys, but never use browser storage as project
+    // or scope persistence.
     if (typeof window !== 'undefined') {
-      localStorage.removeItem(`gapwise_state_${userId}`);
-      localStorage.setItem(`gapwise_active_project_${userId}`, GOLDEN_DEMO_PROJECT.id);
-      localStorage.setItem(`gapwise_scope_${userId}`, JSON.stringify(EVERYTHING_SCOPE));
+      clearLegacyProjectBrowserState(userId);
     }
     const fresh = JSON.parse(JSON.stringify(GOLDEN_DEMO_PROJECT));
     const seedMemories = memoriesFromProfile(DEFAULT_USER_PROFILE);

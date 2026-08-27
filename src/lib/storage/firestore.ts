@@ -72,6 +72,12 @@ function assertReferencedRecordCanChange(
 }
 
 export class FirestoreStorageProvider implements StorageProvider {
+  readonly kind = 'firestore' as const;
+  readonly capabilities = {
+    durableProjectState: true,
+    durableSnapshots: true,
+  } as const;
+
   constructor(private readonly db: Firestore = getFirestoreClient()) {}
 
   async listProjects(userId: string): Promise<Project[]> {
@@ -582,7 +588,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     if (data.scope === 'global') return false;
     if (data.projectId) return data.projectId === projectId;
     if (collection === 'contexts') return docId === projectId;
-    return projectId === createGoldenDemoProject().id;
+    return false;
   }
 
   private withMemoryAliases(userId: string, memory: DurableMemory): DurableMemory & { userId: string } {

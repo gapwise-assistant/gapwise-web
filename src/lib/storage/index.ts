@@ -11,6 +11,9 @@ import { isDemoMode } from '@/lib/runtime/demoMode';
 
 let provider: StorageProvider | null = null;
 
+export const FIRESTORE_REQUIRED_MESSAGE =
+  'Harbor History Demo requires Firestore. Configure Firebase credentials and enable Firestore before creating it.';
+
 export function getStorageMode(): StorageMode {
   if (isDemoMode()) return 'mock';
   return process.env.USE_FIRESTORE === 'false' ? 'mock' : 'firestore';
@@ -20,6 +23,23 @@ export function getStorageProvider(): StorageProvider {
   if (provider) return provider;
   provider = getStorageMode() === 'firestore' ? new FirestoreStorageProvider() : new MockStorageProvider();
   return provider;
+}
+
+export function requireFirestoreStorage(): StorageProvider {
+  try {
+    const storage = getStorageProvider();
+    if (
+      storage.kind !== 'firestore'
+      || !storage.capabilities.durableProjectState
+      || !storage.capabilities.durableSnapshots
+    ) {
+      throw new Error(FIRESTORE_REQUIRED_MESSAGE);
+    }
+    return storage;
+  } catch (error) {
+    if (error instanceof StorageError && error.message === FIRESTORE_REQUIRED_MESSAGE) throw error;
+    throw new StorageError(FIRESTORE_REQUIRED_MESSAGE, 'CONFIGURATION_ERROR');
+  }
 }
 
 export function resetStorageProviderForTests(): void {

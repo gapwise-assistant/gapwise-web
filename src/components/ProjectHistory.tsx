@@ -39,6 +39,10 @@ export function snapshotForHistoryEvent(
   return undefined;
 }
 
+export function historyBranchRequestId(snapshotId: string): string {
+  return `history-branch:${snapshotId.slice(-96)}`;
+}
+
 const CHANGE_LABELS: Record<ProjectHistoryChange['kind'], string> = {
   learned: 'Learned',
   resolved: 'Resolved',
@@ -343,10 +347,11 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
     setBranchingSnapshotId(selectedSnapshot.snapshot.id);
     setSnapshotError('');
     try {
+      const branchRequestId = historyBranchRequestId(selectedSnapshot.snapshot.id);
       const response = await authFetch(`/api/projects/${encodeURIComponent(project.id)}/snapshots/${encodeURIComponent(selectedSnapshot.snapshot.id)}/branch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, clientRequestId: `history-branch:${selectedSnapshot.snapshot.id}` }),
+        body: JSON.stringify({ userId, clientRequestId: branchRequestId }),
       });
       const body = await response.json().catch(() => ({})) as { project?: Project; error?: string };
       if (!response.ok || !body.project) throw new Error(body.error ?? 'The project could not be created from this moment.');

@@ -40,6 +40,7 @@ export interface DecisionMapDebugTrace {
   schemaVersion: 1;
   projectId: string;
   capturedAt: string;
+  graphHealth: GraphHealthReport;
   render: {
     filter: DecisionMapFilter;
     selectedNodeId: string | null;
@@ -109,6 +110,17 @@ export interface DecisionMapDebugTrace {
     filterUsefulness: Array<{ filter: DecisionMapFilter; meaningful: boolean; visibleNodeCount: number; visibleEdgeCount: number; reductionFromAllPercent: number }>;
     layoutWarnings: string[];
   };
+}
+
+export interface GraphHealthReport {
+  nodeCount: number;
+  edgeCount: number;
+  isolatedNodeCount: number;
+  isolatedActionableNodeIds: string[];
+  staleOpenActionIds: string[];
+  overlappingCanonicalNodeIds: string[];
+  openWorkflowNodeCount: number;
+  connectedOpenWorkflowNodeCount: number;
 }
 
 export interface SemanticNodeTrace {
@@ -380,6 +392,40 @@ function isActionableNow(project: Project, node: ClarityNode): boolean {
   return !isNodeBlocked(project, node.id);
 }
 
+export function buildGraphHealthReport(project: Project): GraphHealthReport {
+  const workflowTypes = new Set<NodeType>(['DECISION', 'UNKNOWN', 'ASSUMPTION', 'NEXT_ACTION', 'RISK']);
+  const connectedNodeIds = new Set(project.edges.flatMap((edge) => [edge.source, edge.target]));
+  const openWorkflowNodes = project.nodes.filter((node) => node.status === 'OPEN' && workflowTypes.has(node.type));
+  const canonicalMembers = new Map<string, string[]>();
+  project.nodes
+    .filter((node) => node.status !== 'DEPRECATED')
+    .forEach((node) => {
+      const canonicalId = node.canonical_node_id ?? node.canonical_question_id;
+      if (!canonicalId || canonicalId === node.id) return;
+      const members = canonicalMembers.get(canonicalId) ?? [];
+      members.push(node.id);
+      canonicalMembers.set(canonicalId, members);
+    });
+
+  return {
+    nodeCount: project.nodes.length,
+    edgeCount: project.edges.length,
+    isolatedNodeCount: project.nodes.filter((node) => !connectedNodeIds.has(node.id)).length,
+    isolatedActionableNodeIds: openWorkflowNodes
+      .filter((node) => !connectedNodeIds.has(node.id) && !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(project, node)))
+      .map((node) => node.id),
+    staleOpenActionIds: project.nodes
+      .filter((node) => node.type === 'NEXT_ACTION' && node.status === 'OPEN' && isNextActionSatisfied(project, node))
+      .map((node) => node.id),
+    overlappingCanonicalNodeIds: [...canonicalMembers.entries()]
+      .filter(([, members]) => members.length > 1)
+      .map(([canonicalId]) => canonicalId)
+      .sort(),
+    openWorkflowNodeCount: openWorkflowNodes.length,
+    connectedOpenWorkflowNodeCount: openWorkflowNodes.filter((node) => connectedNodeIds.has(node.id)).length,
+  };
+}
+
 function visibleForFilter(
   project: Project,
   filter: DecisionMapFilter,
@@ -631,6 +677,7 @@ export function buildDecisionMapDebugTrace(project: Project, options: DecisionMa
     schemaVersion: 1,
     projectId: project.id,
     capturedAt: new Date().toISOString(),
+    graphHealth: buildGraphHealthReport(project),
     render: { filter: options.filter, selectedNodeId: options.selectedNodeId, focusMode: options.focusMode, pathMode: options.pathMode, rendererReported: Boolean(options.renderer) },
     rawProjectGraph: {
       projectId: project.id,

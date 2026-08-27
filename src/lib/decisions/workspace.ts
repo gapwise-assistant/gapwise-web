@@ -3,7 +3,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { ClarityEdge, ClarityNode, EdgeType, Project } from '@/types/clarity';
 import { activeContextSources, projectForReasoning } from '@/lib/context/sourceState';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
-import { appendDecisionResolvedHistory } from '@/lib/history/projectHistory';
+import { appendDecisionResolvedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import {
   ensureResolutionConsistency,
   writeSemanticEdge,
@@ -359,7 +359,8 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
 
   ensureResolutionConsistency(updated);
   const reason = input.reason?.trim();
-  resolveSatisfiedNextActions(updated, now);
+  const completedActionIds = resolveSatisfiedNextActions(updated, now);
+  appendNextActionCompletionHistory(updated, completedActionIds, now);
   updated.history.push({
     question: previousText,
     answer: finalText,

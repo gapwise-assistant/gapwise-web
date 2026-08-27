@@ -6,6 +6,9 @@ import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
 import type { AskContextProposal } from '@/types/ask';
 import { canonicalQuestionGroups, canonicalOpenQuestions } from '@/lib/questions/canonical';
+import { changedProjectNodeIds, completeProjectRelationships } from '@/lib/graph/relationshipCompletion';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 
 function askSourceId(chatId: string, messageId: string): string {
   return `ask_${chatId}_${messageId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 240);
@@ -50,7 +53,10 @@ export async function persistAskProposal(params: {
   const target = await loadTarget(params.userId, params.projectId);
   const sourceId = proposalSourceId(params.assistantMessageId, params.proposal.id ?? 'proposal');
   const now = new Date().toISOString();
-  const updated = await ingestContextSource(target.project, {
+  const proposalContext = [params.proposal.text, params.proposal.reasoning]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join('\n');
+  const ingested = await ingestContextSource(target.project, {
     sourceId,
     filename: `Ask proposal ${params.assistantMessageId}.txt`,
     content: params.proposal.text,
@@ -69,7 +75,27 @@ export async function persistAskProposal(params: {
       status: params.proposal.status,
       ...(params.proposal.reasoning ? { whyItMatters: [params.proposal.reasoning] } : {}),
     }],
+    deferHistory: true,
   }, DEFAULT_USER_PROFILE);
+  const completion = await completeProjectRelationships({
+    projectBefore: target.project,
+    projectAfter: ingested,
+    changedNodeIds: changedProjectNodeIds(target.project, ingested),
+    source: {
+      id: sourceId,
+      filename: `Ask proposal ${params.assistantMessageId}.txt`,
+      content: proposalContext,
+    },
+  });
+  const completedActionIds = resolveSatisfiedNextActions(completion.project);
+  let updated = appendContextAddedHistory(target.project, completion.project, {
+    sourceId,
+    filename: `Ask proposal ${params.assistantMessageId}.txt`,
+    createdAt: now,
+  });
+  if (completedActionIds.length > 0) {
+    appendNextActionCompletionHistory(updated, completedActionIds);
+  }
   await saveTarget(params.userId, updated, target.isGeneral);
   return updated;
 }

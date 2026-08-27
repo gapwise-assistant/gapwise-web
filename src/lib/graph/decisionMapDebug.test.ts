@@ -1,9 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import { createBakeryDemoProject } from '@/lib/demo/bakery';
-import { buildDecisionMapDebugTrace } from './decisionMapDebug';
+import { buildDecisionMapDebugTrace, buildGraphHealthReport } from './decisionMapDebug';
 import { calculateDecisionMapLayout, calculateDecisionMapMetrics } from './constellation';
 
 describe('Decision Map debug trace', () => {
+  it('reports isolated actionable nodes, stale actions, and canonical overlaps', () => {
+    const project = createBakeryDemoProject();
+    const decision = project.nodes.find((node) => node.type === 'DECISION')!;
+    const action = {
+      ...project.nodes.find((node) => node.type === 'NEXT_ACTION')!,
+      id: 'debug-action',
+      status: 'OPEN' as const,
+      canonical_node_id: decision.id,
+    };
+    const secondAlias = {
+      ...decision,
+      id: 'debug-decision-alias',
+      status: 'OPEN' as const,
+      canonical_node_id: decision.id,
+    };
+    project.nodes.push(action, secondAlias);
+    project.edges.push({ id: 'debug-satisfies', source: action.id, target: decision.id, type: 'satisfies' });
+    decision.status = 'RESOLVED';
+
+    const health = buildGraphHealthReport(project);
+
+    expect(health.nodeCount).toBe(project.nodes.length);
+    expect(health.edgeCount).toBe(project.edges.length);
+    expect(health.staleOpenActionIds).toContain(action.id);
+    expect(health.overlappingCanonicalNodeIds).toContain(decision.id);
+    expect(health.openWorkflowNodeCount).toBeGreaterThan(0);
+    expect(health.connectedOpenWorkflowNodeCount).toBeLessThanOrEqual(health.openWorkflowNodeCount);
+  });
+
   it('records the complete persisted graph, All visibility, focus, and layout without changing the graph', () => {
     const project = createBakeryDemoProject();
     const before = JSON.stringify(project);

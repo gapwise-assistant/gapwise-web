@@ -114,6 +114,79 @@ export function allowedRelationshipTypes(
 }
 
 /**
+ * Relationship choices offered to the post-reconciliation completion pass.
+ * Provenance and broad evidentiary edges are created by their dedicated
+ * workflows; completion should only classify a concrete dependency,
+ * influence, information, or intended-outcome relationship.
+ */
+export function completionAllowedRelationshipTypes(
+  source: ClarityNode,
+  target: ClarityNode,
+): EdgeType[] {
+  // Completion is deliberately narrower than the general graph validator.
+  // `derived_from` is provenance and `supports` is supplied by explicit
+  // answer/decision workflows; neither should be guessed by this pass.
+  const structurallyAllowed = allowedRelationshipTypes(source, target)
+    .filter((relationship) => relationship !== 'derived_from' && relationship !== 'supports');
+  const questionOrDecisionTarget = isQuestionNode(target) || target.type === 'DECISION';
+
+  // Facts and results provide information for a gap or decision. A resolves
+  // edge is offered only when the text is a completed result, never merely
+  // because the evidence node is stored with RESOLVED lifecycle status.
+  if (isEvidenceNode(source) && questionOrDecisionTarget) {
+    return structurallyAllowed.filter((relationship) =>
+      relationship === 'informs'
+      || (relationship === 'resolves' && hasConclusiveResultEvidence(source)),
+    );
+  }
+
+  // A resolved decision outcome can answer a separate factual question, but
+  // an open decision is not evidence for another node.
+  if (source.type === 'DECISION' && source.status === 'RESOLVED' && isQuestionNode(target)) {
+    return structurallyAllowed.filter((relationship) => relationship === 'resolves');
+  }
+
+  // Constraints, assumptions, and preferences can shape a question/decision,
+  // but completion should not turn ordinary evaluation into a hard blocker.
+  if (source.type === 'CONSTRAINT' && questionOrDecisionTarget) {
+    return structurallyAllowed.filter((relationship) =>
+      relationship === 'informs' || relationship === 'affects',
+    );
+  }
+  if (source.type === 'ASSUMPTION' && questionOrDecisionTarget) {
+    return structurallyAllowed.filter((relationship) => relationship === 'informs' || relationship === 'affects');
+  }
+  if (source.type === 'PREFERENCE' && target.type === 'DECISION') {
+    return structurallyAllowed.filter((relationship) => relationship === 'affects');
+  }
+
+  // An unresolved factual prerequisite can block a downstream choice. A
+  // NEXT_ACTION instead describes intended work that will satisfy its target.
+  if (source.type === 'UNKNOWN' && target.type === 'DECISION') {
+    return structurallyAllowed.filter((relationship) => relationship === 'blocks' || relationship === 'affects');
+  }
+  if (source.type === 'NEXT_ACTION' && questionOrDecisionTarget) {
+    return structurallyAllowed.filter((relationship) =>
+      relationship === 'satisfies' || relationship === 'informs' || relationship === 'affects',
+    );
+  }
+
+  // These are the main downstream project paths. Keeping them explicit
+  // prevents unrelated facts from consuming the bounded pair budget.
+  if (source.type === 'DECISION' && target.type === 'GOAL') {
+    return structurallyAllowed.filter((relationship) => relationship === 'affects');
+  }
+  if (source.type === 'RISK' && (target.type === 'GOAL' || target.type === 'DECISION')) {
+    return structurallyAllowed.filter((relationship) => relationship === 'affects' || relationship === 'blocks');
+  }
+  if (source.type === 'CONSTRAINT' && target.type === 'GOAL') {
+    return structurallyAllowed.filter((relationship) => relationship === 'affects');
+  }
+
+  return [];
+}
+
+/**
  * Relationship strength is only used for the narrow generic-vs-specific cases
  * where two edges express the same project meaning. It is not a global ranking
  * of all relationship types.
@@ -282,6 +355,10 @@ export function writeSemanticEdge(
     id: edge.id ?? `edge_semantic_${Date.now()}_${project.edges.length}_${Math.random().toString(36).slice(2, 8)}`,
   };
   project.edges.push(persisted);
+  // A valid resolves edge is also a lifecycle transition. Keeping this in the
+  // shared writer means Context ingestion, completion, and explicit workflows
+  // all preserve the same target-state invariant.
+  ensureResolutionConsistency(project);
   return persisted;
 }
 

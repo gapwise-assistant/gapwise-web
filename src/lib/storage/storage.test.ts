@@ -8,10 +8,12 @@ import { getFirestoreClient } from '@/lib/firebase-admin';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import {
+  FIRESTORE_REQUIRED_MESSAGE,
   getStorageMode,
   getStorageProvider,
   listProjects as listUserProjects,
   loadProjectState,
+  requireFirestoreStorage,
   resetStorageProviderForTests,
 } from '@/lib/storage';
 import { MockStorageProvider } from '@/lib/storage/mock';
@@ -496,6 +498,21 @@ describe('Firestore configuration', () => {
       restoreEnv('USE_FIRESTORE', originalMode);
       restoreEnv('GOOGLE_CLOUD_PROJECT', originalProject);
       restoreEnv('GCLOUD_PROJECT', originalGcloudProject);
+    }
+  });
+
+  it('rejects the Harbor history workflow when durable Firestore is disabled', () => {
+    const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
+    const originalMode = process.env.USE_FIRESTORE;
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    process.env.USE_FIRESTORE = 'false';
+    resetStorageProviderForTests();
+
+    try {
+      expect(() => requireFirestoreStorage()).toThrow(FIRESTORE_REQUIRED_MESSAGE);
+    } finally {
+      restoreEnv('GAPSWISE_DEMO_MODE', originalDemoMode);
+      restoreEnv('USE_FIRESTORE', originalMode);
     }
   });
 

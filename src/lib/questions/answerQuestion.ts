@@ -8,6 +8,8 @@ import { classifyAnswer } from '@/lib/questions/answerClassification';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
+import { appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -199,6 +201,8 @@ export async function editAnsweredQuestion(params: {
     route: '/api/questions/answer',
     label: 'Gap Agent after edited answer',
   });
+  const completedActionIds = resolveSatisfiedNextActions(refreshed.project, now);
+  appendNextActionCompletionHistory(refreshed.project, completedActionIds, now);
   await saveProject(params.userId, refreshed.project);
   return {
     ownerType: 'project',

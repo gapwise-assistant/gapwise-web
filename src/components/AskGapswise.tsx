@@ -96,18 +96,6 @@ interface ResearchActionState {
   targetDecisionText?: string;
 }
 
-function sessionStorageKey(userId: string, scope: AppScope): string {
-  return `gapwise_ask_session_${userId}_${scopeStorageKey(scope)}`;
-}
-
-function messagesStorageKey(userId: string, scope: AppScope): string {
-  return `gapwise_ask_messages_${userId}_${scopeStorageKey(scope)}`;
-}
-
-function chatsStorageKey(userId: string, scope: AppScope): string {
-  return `gapwise_ask_chats_${userId}_${scopeStorageKey(scope)}`;
-}
-
 function hiddenWorkspaceKey(userId: string, scope: AppScope): string {
   return `gapwise_ask_workspace_hidden_${userId}_${scopeStorageKey(scope)}`;
 }
@@ -351,42 +339,17 @@ export function AskGapswise({
 
   useEffect(() => {
     setHasLoadedRemoteState(false);
+    setChats([]);
+    setActiveChatId(null);
     setHiddenProposalKeys(new Set());
     setShownProposalKeys(new Set());
-    try {
-      const storedChats = localStorage.getItem(chatsStorageKey(userId, scope));
-      const parsedChats: ChatSession[] = storedChats ? JSON.parse(storedChats) : [];
-      setChats(parsedChats);
-      const storedActiveId = localStorage.getItem(sessionStorageKey(userId, scope));
-      const nextActiveId = parsedChats.some((candidate) => candidate.id === storedActiveId)
-        ? storedActiveId
-        : parsedChats[0]?.id ?? null;
-      setActiveChatId(nextActiveId);
-      setIsWorkspaceHidden(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) === 'true');
-    } catch {
-      setChats([]);
-      setActiveChatId(null);
-    }
+    setIsWorkspaceHidden(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) === 'true');
+    setSavedResearchMessageIds(new Set());
+    setSavedContextMessageIds(new Set());
+    setConfirmedAnswerMessageIds(new Set());
+    setConfirmedDecisionMessageIds(new Set());
     setHasLoadedPersistedState(true);
   }, [scope, userId]);
-
-  useEffect(() => {
-    if (!hasLoadedPersistedState || !activeChatId) return;
-    try {
-      localStorage.setItem(sessionStorageKey(userId, scope), activeChatId);
-    } catch {
-      // Ignore storage write issues
-    }
-  }, [activeChatId, hasLoadedPersistedState, scope, userId]);
-
-  useEffect(() => {
-    if (!hasLoadedPersistedState) return;
-    try {
-      localStorage.setItem(chatsStorageKey(userId, scope), JSON.stringify(chats));
-    } catch {
-      // Ignore storage write issues
-    }
-  }, [chats, hasLoadedPersistedState, scope, userId]);
 
   useEffect(() => {
     if (!hasLoadedPersistedState) return;
@@ -415,7 +378,11 @@ export function AskGapswise({
         setConfirmedAnswerMessageIds(researchStatus.confirmedAnswerMessageIds);
         setConfirmedDecisionMessageIds(researchStatus.confirmedDecisionMessageIds);
       } catch {
-        // Keep the local cache visible when the database is temporarily unavailable.
+        // The database is authoritative. Do not fall back to an older browser
+        // copy when the persistent conversation request fails.
+        if (!isMounted) return;
+        setChats([]);
+        setActiveChatId(null);
       } finally {
         if (isMounted) setHasLoadedRemoteState(true);
       }

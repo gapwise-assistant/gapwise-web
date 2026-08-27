@@ -395,6 +395,30 @@ export function appendDecisionResolvedHistory(
   return appendResolutionHistory(before, after, { ...params, type: 'decision_resolved' });
 }
 
+/** Records workflow actions that became obsolete because their explicit
+ * intended outcomes were resolved. */
+export function appendNextActionCompletionHistory(
+  project: Project,
+  actionNodeIds: string[],
+  createdAt = new Date().toISOString(),
+): Project {
+  const nodes = nodeMap(project);
+  actionNodeIds.forEach((nodeId) => {
+    const action = nodes.get(nodeId);
+    if (!action || action.type !== 'NEXT_ACTION' || action.status !== 'RESOLVED') return;
+    appendProjectHistoryEvent(project, {
+      createdAt,
+      type: 'action_completed',
+      title: 'Action completed',
+      summary: action.text,
+      primaryNodeId: action.id,
+      primarySnapshot: snapshotNode(action),
+      changes: [nodeChange('resolved', action)],
+    });
+  });
+  return project;
+}
+
 /**
  * Adds a shared before/after Focus Assessment to an already-created mutation
  * event. Focus is derived after the real mutation and refresh path; this

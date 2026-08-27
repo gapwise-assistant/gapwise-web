@@ -151,6 +151,12 @@ export interface AskSuggestionsCacheRecord {
 }
 
 export interface StorageProvider {
+  readonly kind: StorageMode;
+  readonly capabilities: {
+    durableProjectState: boolean;
+    durableSnapshots: boolean;
+  };
+
   listProjects(userId: string): Promise<Project[]>;
   getProject(userId: string, projectId?: string): Promise<Project | null>;
   saveProject(userId: string, project: Project): Promise<void>;
@@ -219,6 +225,7 @@ export class StorageError extends Error {
     public readonly code:
       | 'UNAUTHENTICATED'
       | 'PERMISSION_DENIED'
+      | 'NOT_FOUND'
       | 'UNAVAILABLE'
       | 'VALIDATION_ERROR'
       | 'CONFIGURATION_ERROR'

@@ -1,4 +1,4 @@
-import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
+import { applicationDefault, cert, getApp, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth as getFirebaseAuth, Auth } from 'firebase-admin/auth';
 import { Firestore, getFirestore, initializeFirestore } from 'firebase-admin/firestore';
 import { StorageError } from '@/lib/storage/types';
@@ -9,14 +9,31 @@ let firestoreClient: Firestore | null = null;
 const FIREBASE_ADMIN_APP_NAME = 'gapswise-admin';
 
 function getGoogleCloudProjectId(): string {
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
   if (!projectId) {
     throw new StorageError(
-      'Firestore mode requires GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT.',
+      'Firestore mode requires FIREBASE_PROJECT_ID, GOOGLE_CLOUD_PROJECT, or GCLOUD_PROJECT.',
       'CONFIGURATION_ERROR'
     );
   }
   return projectId;
+}
+
+function firebaseCredential(projectId: string) {
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.trim();
+  if (!clientEmail && !privateKey) return applicationDefault();
+  if (!clientEmail || !privateKey) {
+    throw new StorageError(
+      'Firestore service-account configuration requires FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY together.',
+      'CONFIGURATION_ERROR'
+    );
+  }
+  return cert({
+    projectId,
+    clientEmail,
+    privateKey: privateKey.replace(/\\n/g, '\n'),
+  });
 }
 
 export function getFirebaseAdminApp(): App {
@@ -38,7 +55,7 @@ export function getFirebaseAdminApp(): App {
   }
 
   firebaseApp = initializeApp({
-    credential: applicationDefault(),
+    credential: firebaseCredential(projectId),
     projectId,
   }, FIREBASE_ADMIN_APP_NAME);
 

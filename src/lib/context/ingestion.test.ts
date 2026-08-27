@@ -350,6 +350,43 @@ describe('context ingestion', () => {
     expect(decision?.why_it_matters ?? []).not.toContain(expect.stringContaining('Resolved by newer evidence'));
   });
 
+  it('marks an explicitly satisfied action complete when its target is already resolved', async () => {
+    const project = createProjectFromInput({ name: 'Venue plan', goal: 'Choose and book a suitable venue.' }, '2026-08-20T09:00:00Z');
+    project.nodes.push({
+      id: 'resolved-venue-choice',
+      type: 'DECISION',
+      text: 'Use the community venue.',
+      status: 'RESOLVED',
+      confidence: 1,
+      impact: 0.9,
+      source_refs: [],
+      created_by: 'user',
+      created_at: '2026-08-20T09:00:00Z',
+      updated_at: '2026-08-20T09:00:00Z',
+    });
+
+    const updated = await ingestContextSource(project, {
+      sourceId: 'completed-action-note',
+      filename: 'completed-action-note.txt',
+      type: 'text',
+      content: 'The selected venue is already recorded; the remaining action is no longer needed.',
+      derivedNodes: [{
+        type: 'NEXT_ACTION',
+        text: 'Select the workshop venue.',
+        confidence: 0.9,
+        impact: 0.8,
+        relationship: 'satisfies',
+        relatedNodeIds: ['resolved-venue-choice'],
+      }],
+    }, DEFAULT_USER_PROFILE);
+
+    const action = updated.nodes.find((node) => node.text === 'Select the workshop venue.');
+    expect(action?.status).toBe('RESOLVED');
+    expect(updated.historyEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'action_completed', primaryNodeId: action?.id }),
+    ]));
+  });
+
   it('rejects resolves from an unfinished action even when the target is a decision', async () => {
     const project = createProjectFromInput({ name: 'Venue plan', goal: 'Choose and book a suitable venue.' }, '2026-08-20T09:00:00Z');
     const updated = await ingestContextSource(project, {

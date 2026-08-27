@@ -5,7 +5,8 @@ import {
   questionIdentityKey,
 } from '@/lib/questions/canonical';
 import { resolveQuestionReferences } from '@/lib/questions/presentation';
-import { appendContextAddedHistory } from '@/lib/history/projectHistory';
+import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
+import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
 import { applyProjectPatch, canonicalChangesToProjectPatch } from '@/lib/context/canonicalChanges';
 import {
   relationshipHasSemanticSupport,
@@ -84,6 +85,22 @@ export interface IngestSourceInput {
   derivedNodes?: PrecomputedSourceNode[];
   canonicalChanges?: CanonicalChange[];
   relationships?: PrecomputedRelationship[];
+  /** Internal hook used when an async relationship-completion pass must run
+   * before the source history event is finalized. */
+  deferHistory?: boolean;
+}
+
+function meaningfulNodeValue(node: ClarityNode): string {
+  return JSON.stringify([
+    node.type,
+    node.text,
+    node.status,
+    node.confidence,
+    node.impact,
+    node.decision_outcome ?? null,
+    node.canonical_node_id ?? null,
+    node.canonical_question_id ?? null,
+  ]);
 }
 
 export function makeId(prefix: string): string {
@@ -737,6 +754,10 @@ export async function ingestContextSource(
     updated.sources = updated.sources.filter((source) => source.id !== sourceId);
   }
 
+  const nodeValuesBeforePatch = new Map(
+    updated.nodes.map((node) => [node.id, meaningfulNodeValue(node)] as const),
+  );
+
   const processedAt = input.processedAt
     ?? (processingStatus === 'completed' || processingStatus === 'failed' ? now : undefined);
   const newSource: ContextSource = {
@@ -808,6 +829,18 @@ export async function ingestContextSource(
     });
   }
 
+  // Adding a source reference or refreshing persistence metadata does not
+  // make an old node current for relationship purposes. Only a new node or a
+  // meaningful node-state change may authorize a source-local relationship.
+  const meaningfullyChangedNodeIds = new Set([
+    ...patchResult.createdNodeIds,
+    ...patchResult.updatedNodeIds.filter((nodeId) => {
+      const beforeValue = nodeValuesBeforePatch.get(nodeId);
+      const afterNode = updated.nodes.find((node) => node.id === nodeId);
+      return !beforeValue || !afterNode || meaningfulNodeValue(afterNode) !== beforeValue;
+    }),
+  ]);
+
   const operationNodeIds = { ...patchResult.operationNodeIds };
   patchOperations.forEach((operation, index) => {
     const id = operationNodeIds[operation.operationRef ?? `op:${index}`];
@@ -851,10 +884,8 @@ export async function ingestContextSource(
         ));
         return;
       }
-      const sourceIsCurrent = patchResult.createdNodeIds.includes(candidate.sourceNodeId)
-        || patchResult.updatedNodeIds.includes(candidate.sourceNodeId);
-      const targetIsCurrent = patchResult.createdNodeIds.includes(candidate.targetNodeId)
-        || patchResult.updatedNodeIds.includes(candidate.targetNodeId);
+      const sourceIsCurrent = meaningfullyChangedNodeIds.has(candidate.sourceNodeId);
+      const targetIsCurrent = meaningfullyChangedNodeIds.has(candidate.targetNodeId);
       if (!sourceIsCurrent && !targetIsCurrent) {
         relationshipPersistenceTrace.rejectedRelationships.push(relationshipRejection(candidate, 'not_source_local'));
         return;
@@ -882,15 +913,23 @@ export async function ingestContextSource(
     });
   }
 
+  // Deferred callers run relationship completion before finalizing history.
+  // Direct/demo ingestion has no later pass, so apply the same explicit
+  // satisfies-based action lifecycle update here.
+  const completedActionIds = input.deferHistory
+    ? []
+    : resolveSatisfiedNextActions(updated, now);
   const reasoningProject = projectForReasoning(updated);
   updated.clarity_score = calculateClarityScore(reasoningProject);
   updated.active_question = selectTopGap(reasoningProject, profile);
   updated.updated_at = now;
-  return appendContextAddedHistory(project, updated, {
+  if (input.deferHistory) return updated;
+  const withHistory = appendContextAddedHistory(project, updated, {
     sourceId,
     filename: input.filename,
     createdAt: now,
   });
+  return appendNextActionCompletionHistory(withHistory, completedActionIds, now);
 }
 
 export function discardContextSource(project: Project, sourceId: string, profile: UserMemoryProfile): Project {

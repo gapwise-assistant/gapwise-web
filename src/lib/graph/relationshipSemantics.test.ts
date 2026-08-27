@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ClarityNode, Project } from '@/types/clarity';
 import {
   allowedRelationshipTypes,
+  completionAllowedRelationshipTypes,
   relationshipAddsDistinctMeaning,
   relationshipRoleCompatible,
   removeSupersededRelationships,
@@ -54,6 +55,19 @@ describe('relationship semantics', () => {
     expect(relationshipRoleCompatible(decision, goal, 'depends_on')).toBe(false);
     expect(allowedRelationshipTypes(action, constraint)).not.toContain('satisfies');
     expect(allowedRelationshipTypes(action, decision)).toContain('satisfies');
+  });
+
+  it('keeps completion choices narrow and excludes provenance/support guesses', () => {
+    const evidence = node('evidence', 'EVIDENCE', 'The option requires two weeks and costs 400.', 'RESOLVED');
+    const decision = node('decision', 'DECISION', 'Choose between the available options.', 'OPEN');
+    const goal = node('goal', 'GOAL', 'Deliver the project.', 'OPEN');
+    const action = node('action', 'NEXT_ACTION', 'Confirm the selected option.', 'OPEN');
+    const question = node('question', 'UNKNOWN', 'Is the selected option available?', 'OPEN');
+
+    expect(completionAllowedRelationshipTypes(evidence, decision)).toEqual(['informs']);
+    expect(completionAllowedRelationshipTypes(evidence, goal)).toEqual([]);
+    expect(completionAllowedRelationshipTypes(action, question)).toEqual(['informs', 'satisfies', 'affects']);
+    expect(completionAllowedRelationshipTypes(decision, goal)).toEqual(['affects']);
   });
 
   it('rejects a generic affects edge when a precise prerequisite already exists', () => {
@@ -202,5 +216,19 @@ describe('relationship semantics', () => {
       source: action.id, target: constraint.id, type: 'resolves', confidence: 0.9,
     })).toBeUndefined();
     expect(project.edges).toEqual([]);
+  });
+
+  it('resolves the target when a conclusive outcome edge is written', () => {
+    const evidence = node('evidence', 'EVIDENCE', 'The corrected request returned 201 and created the expected record.', 'RESOLVED');
+    const question = node('question', 'UNKNOWN', 'Does the corrected request resolve the failure?', 'OPEN');
+    const project = { nodes: [evidence, question], edges: [] } as unknown as Project;
+
+    expect(writeSemanticEdge(project, {
+      source: evidence.id,
+      target: question.id,
+      type: 'resolves',
+      confidence: 0.95,
+    })).toBeDefined();
+    expect(question.status).toBe('RESOLVED');
   });
 });

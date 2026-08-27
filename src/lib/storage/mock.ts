@@ -98,6 +98,12 @@ function assertReferencedRecordCanChange(
 }
 
 export class MockStorageProvider implements StorageProvider {
+  readonly kind = 'mock' as const;
+  readonly capabilities = {
+    durableProjectState: false,
+    durableSnapshots: false,
+  } as const;
+
   constructor(
     private readonly filePath = process.env.GAPSWISE_MOCK_STORAGE_PATH?.trim()
       || path.join(process.cwd(), '.gapwise-data', 'mock-storage.json')

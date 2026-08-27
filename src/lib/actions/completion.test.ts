@@ -71,6 +71,18 @@ describe('NEXT_ACTION completion', () => {
     expect(isNextActionSatisfied(graph, action)).toBe(false);
   });
 
+  it('does not complete an action from an invalid satisfies target', () => {
+    const constraint = node('constraint', 'CONSTRAINT', 'The budget is fixed.', 'RESOLVED');
+    const action = node('book', 'NEXT_ACTION', 'Book the venue.', 'OPEN');
+    const graph = project([constraint, action], [
+      { id: 'edge', source: action.id, target: constraint.id, type: 'satisfies' },
+    ]);
+
+    expect(isNextActionSatisfied(graph, action)).toBe(false);
+    expect(resolveSatisfiedNextActions(graph, '2026-08-23T13:00:00.000Z')).toEqual([]);
+    expect(action.status).toBe('OPEN');
+  });
+
   it('does not use similar wording without an explicit graph relationship', () => {
     const venue = node('venue', 'DECISION', 'The venue model is Riverside Kitchen.', 'RESOLVED');
     const action = node('venue-action', 'NEXT_ACTION', 'Decide which venue model to use.', 'OPEN');
@@ -85,6 +97,18 @@ describe('NEXT_ACTION completion', () => {
     ]);
 
     expect(isNextActionSatisfied(graph, action)).toBe(false);
+  });
+
+  it('does not complete an action when a resolved prerequisite points to it', () => {
+    const prerequisite = node('permit', 'UNKNOWN', 'Is the permit approved?', 'RESOLVED');
+    const action = node('book', 'NEXT_ACTION', 'Book the venue.', 'OPEN');
+    const graph = project([prerequisite, action], [
+      { id: 'edge', source: prerequisite.id, target: action.id, type: 'depends_on' },
+    ]);
+
+    expect(isNextActionSatisfied(graph, action)).toBe(false);
+    expect(resolveSatisfiedNextActions(graph, '2026-08-23T13:00:00.000Z')).toEqual([]);
+    expect(action.status).toBe('OPEN');
   });
 
   it('excludes a stale linked action from Attention candidates', () => {

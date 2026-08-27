@@ -452,7 +452,7 @@ export async function materializeProjectSnapshot(params: {
   const storage = getStorageProvider();
   const snapshot = await storage.getProjectSnapshot(params.userId, params.snapshotId);
   if (!snapshot || snapshot.userId !== params.userId) {
-    throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
+    throw new StorageError('The requested project snapshot was not found.', 'NOT_FOUND');
   }
   if (!isProjectSnapshotV2(snapshot)) {
     return {
@@ -532,7 +532,7 @@ export async function createProjectSnapshot(params: {
 }): Promise<ProjectSnapshotV2> {
   const storage = getStorageProvider();
   const project = await storage.getProject(params.userId, params.projectId);
-  if (!project) throw new StorageError('The project for this snapshot was not found.', 'VALIDATION_ERROR');
+  if (!project) throw new StorageError('The project for this snapshot was not found.', 'NOT_FOUND');
   const [allChats, allMessages, allResearch] = await Promise.all([
     storage.getAskChats(params.userId),
     storage.getAskMessages(params.userId),
@@ -615,7 +615,7 @@ export async function branchProjectFromSnapshot(params: {
   const storage = getStorageProvider();
   const snapshot = await storage.getProjectSnapshot(params.userId, params.snapshotId);
   if (!snapshot || snapshot.userId !== params.userId) {
-    throw new StorageError('The requested project snapshot was not found.', 'PERMISSION_DENIED');
+    throw new StorageError('The requested project snapshot was not found.', 'NOT_FOUND');
   }
   const materialized = await materializeProjectSnapshot(params);
   const missingRequired = materialized.missingReferences.filter((item) => item.type !== 'trace');
