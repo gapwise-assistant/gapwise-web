@@ -7,12 +7,23 @@ import { AppScope, scopeStorageKey } from '@/types/scope';
 import { AssistantMarkdown } from '@/components/AssistantMarkdown';
 import { addSourceCitations } from '@/lib/ask/citations';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
-import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
 import { AskSourceModal } from '@/components/AskSourceModal';
 import { formatDateTime } from '@/lib/datetime/displayDateTime';
 import type { UserMemoryProfile } from '@/types/clarity';
 import { Button } from '@/components/ui/Button';
+
+type AskSuggestionsStatus = 'preparing' | 'ready' | 'stale' | 'failed';
+
+interface AskSuggestionsAssessment {
+  topQuestions: string[];
+  otherQuestions: string[];
+  projectId: string;
+  semanticVersion?: string;
+  generatedAt?: string;
+  generatedBy?: string;
+  status: AskSuggestionsStatus;
+}
 
 interface AskGapswiseProps {
   userId: string;
@@ -310,8 +321,9 @@ export function AskGapswise({
   const [error, setError] = useState('');
   const [selectedSources, setSelectedSources] = useState<AskSource[] | null>(null);
   const [isWorkspaceHidden, setIsWorkspaceHidden] = useState(false);
-  const [suggestedQuestions, setSuggestedQuestions] = useState<SuggestedQuestionGroups | null>(null);
+  const [suggestionsAssessment, setSuggestionsAssessment] = useState<AskSuggestionsAssessment | null>(null);
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+  const [isSuggestionRetrying, setIsSuggestionRetrying] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState('');
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [hasLoadedRemoteState, setHasLoadedRemoteState] = useState(false);
@@ -343,8 +355,9 @@ export function AskGapswise({
     setHasLoadedRemoteState(false);
     setChats([]);
     setActiveChatId(null);
-    setSuggestedQuestions(null);
+    setSuggestionsAssessment(null);
     setIsSuggestionsLoading(scope.type === 'project');
+    setIsSuggestionRetrying(false);
     setSuggestionsError('');
     setHiddenProposalKeys(new Set());
     setShownProposalKeys(new Set());
@@ -406,7 +419,7 @@ export function AskGapswise({
         setIsSuggestionsLoading(false);
         return;
       }
-      setSuggestedQuestions(null);
+      setSuggestionsAssessment(null);
       setIsSuggestionsLoading(true);
       setSuggestionsError('');
       try {
@@ -417,9 +430,12 @@ export function AskGapswise({
           projectId?: string;
           error?: string;
           status?: string;
+          semanticVersion?: string;
+          generatedAt?: string;
+          generatedBy?: string;
         };
-        if (!response.ok) throw new Error(data.error ?? 'Suggestions are unavailable.');
-        if (data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable for this workspace.');
+        if (!response.ok) throw new Error('Suggestions are unavailable right now.');
+        if (data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable right now.');
         const top = (data.topQuestions ?? [])
           .filter((question): question is string => typeof question === 'string')
           .slice(0, 3);
@@ -427,10 +443,30 @@ export function AskGapswise({
           .filter((question): question is string => typeof question === 'string')
           .slice(0, 3);
         if (!isMounted) return;
-        setSuggestedQuestions({ top, other });
-      } catch (caught) {
+        const status = data.status === 'ready'
+          || data.status === 'stale'
+          || data.status === 'failed'
+          || data.status === 'preparing'
+          ? data.status
+          : 'preparing';
+        setSuggestionsAssessment({
+          topQuestions: top,
+          otherQuestions: other,
+          projectId: data.projectId,
+          ...(data.semanticVersion ? { semanticVersion: data.semanticVersion } : {}),
+          ...(data.generatedAt ? { generatedAt: data.generatedAt } : {}),
+          ...(data.generatedBy ? { generatedBy: data.generatedBy } : {}),
+          status,
+        });
+      } catch {
         if (!isMounted) return;
-        setSuggestionsError(caught instanceof Error ? caught.message : 'Suggestions are unavailable.');
+        setSuggestionsAssessment({
+          topQuestions: [],
+          otherQuestions: [],
+          projectId: scope.projectId,
+          status: 'failed',
+        });
+        setSuggestionsError('Suggestions are unavailable right now.');
       } finally {
         if (isMounted) setIsSuggestionsLoading(false);
       }
@@ -440,6 +476,48 @@ export function AskGapswise({
       isMounted = false;
     };
   }, [hasLoadedPersistedState, profile, scope, userId]);
+
+  const retrySuggestions = async () => {
+    if (scope.type !== 'project' || isSuggestionRetrying) return;
+    setIsSuggestionRetrying(true);
+    setSuggestionsError('');
+    try {
+      const response = await authFetch('/api/internal/ask/suggestions/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, projectId: scope.projectId }),
+      });
+      const data = await response.json() as {
+        topQuestions?: unknown[];
+        otherQuestions?: unknown[];
+        projectId?: string;
+        status?: string;
+        semanticVersion?: string;
+        generatedAt?: string;
+        generatedBy?: string;
+      };
+      if (!response.ok || data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable right now.');
+      const status = data.status === 'ready'
+        || data.status === 'stale'
+        || data.status === 'failed'
+        || data.status === 'preparing'
+        ? data.status
+        : 'preparing';
+      setSuggestionsAssessment({
+        topQuestions: (data.topQuestions ?? []).filter((question): question is string => typeof question === 'string').slice(0, 3),
+        otherQuestions: (data.otherQuestions ?? []).filter((question): question is string => typeof question === 'string').slice(0, 3),
+        projectId: data.projectId,
+        ...(data.semanticVersion ? { semanticVersion: data.semanticVersion } : {}),
+        ...(data.generatedAt ? { generatedAt: data.generatedAt } : {}),
+        ...(data.generatedBy ? { generatedBy: data.generatedBy } : {}),
+        status,
+      });
+    } catch {
+      setSuggestionsError('Suggestions are unavailable right now.');
+    } finally {
+      setIsSuggestionRetrying(false);
+    }
+  };
 
   const handleNewChat = () => {
     const fresh = newChat();
@@ -808,13 +886,14 @@ export function AskGapswise({
               <p className="mt-1 text-xs leading-relaxed text-slate-400">Based on your goal and context, these are the three questions most likely to help you move forward.</p>
             </div>
           </div>
-          {isSuggestionsLoading ? (
+          {(isSuggestionsLoading && !suggestionsAssessment)
+            || (suggestionsAssessment?.status === 'preparing' && !suggestionsAssessment.topQuestions.length) ? (
             <div className="mt-4 space-y-2" aria-label="Loading suggested questions">
               {[1, 2, 3].map((item) => <div key={item} className="h-10 animate-pulse rounded-lg bg-slate-900/80" />)}
             </div>
-          ) : suggestedQuestions?.top.length ? (
+          ) : suggestionsAssessment?.topQuestions.length ? (
             <div className="mt-4 grid gap-2">
-              {suggestedQuestions.top.slice(0, 3).map((question) => (
+              {suggestionsAssessment.topQuestions.slice(0, 3).map((question) => (
                 <button
                   key={question}
                   type="button"
@@ -825,9 +904,39 @@ export function AskGapswise({
                   {question}
                 </button>
               ))}
+              {suggestionsAssessment.status === 'preparing' && (
+                <p className="text-xs text-slate-500" role="status">Updating suggestions…</p>
+              )}
+              {suggestionsAssessment.status === 'stale' && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500" role="status">
+                  <span>Updating from the latest workspace changes…</span>
+                  <Button type="button" variant="secondary" size="sm" loading={isSuggestionRetrying} onClick={() => void retrySuggestions()}>
+                    Retry
+                  </Button>
+                </div>
+              )}
+              {suggestionsAssessment.status === 'failed' && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200" role="status">
+                  <span>Suggestions could not be updated.</span>
+                  <Button type="button" variant="secondary" size="sm" loading={isSuggestionRetrying} onClick={() => void retrySuggestions()}>
+                    Retry
+                  </Button>
+                </div>
+              )}
             </div>
           ) : (
-            <p className="mt-3 text-xs text-slate-500">{suggestionsError || 'Suggestions are being prepared.'}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span>{suggestionsError || (suggestionsAssessment?.status === 'failed'
+                ? 'Suggestions are unavailable right now.'
+                : suggestionsAssessment?.status === 'stale'
+                  ? 'Updating from the latest workspace changes…'
+                  : 'Suggestions are being prepared.')}</span>
+              {(suggestionsAssessment?.status === 'failed' || suggestionsAssessment?.status === 'stale') && (
+                <Button type="button" variant="secondary" size="sm" loading={isSuggestionRetrying} onClick={() => void retrySuggestions()}>
+                  Retry
+                </Button>
+              )}
+            </div>
           )}
         </section>
       )}

@@ -22,7 +22,7 @@ import type { ContextProcessingLog } from '@/types/clarity';
 import { boundedId } from '@/lib/ids/boundedId';
 import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
-import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export function askSourceId(chatId: string, messageId: string): string {
@@ -204,7 +204,7 @@ export async function persistAskProposal(params: {
   }
   await saveTarget(params.userId, updated, target.isGeneral);
   if (!target.isGeneral && params.refreshSuggestions !== false && semanticProjectVersion(target.project) !== semanticProjectVersion(updated)) {
-    await refreshAskSuggestionsForProject({ userId: params.userId, project: updated, profile });
+    await scheduleAskSuggestionsRefresh({ userId: params.userId, project: updated, profile });
   }
   return updated;
 }
@@ -224,6 +224,7 @@ export async function persistAskConversationContext(params: {
 }): Promise<{
   sourceId: string;
   historyEventId?: string;
+  semanticStateChanged?: boolean;
   openQuestionIds: string[];
   openQuestions: Array<{ id: string; text: string }>;
 }> {
@@ -244,7 +245,7 @@ export async function persistAskConversationContext(params: {
   const semanticStateChanged = semanticProjectVersion(target.project) !== semanticProjectVersion(result.project);
   if (!result.skipped) await saveTarget(params.userId, result.project, target.isGeneral);
   if (!target.isGeneral && semanticStateChanged && !result.skipped && params.refreshSuggestions !== false) {
-    await refreshAskSuggestionsForProject({ userId: params.userId, project: result.project, profile });
+    await scheduleAskSuggestionsRefresh({ userId: params.userId, project: result.project, profile });
   }
 
   const source = result.project.sources.find((candidate) => candidate.id === sourceId);
@@ -268,6 +269,7 @@ export async function persistAskConversationContext(params: {
 
   return {
     sourceId,
+    semanticStateChanged,
     ...(historyEventId ? { historyEventId } : {}),
     openQuestionIds: uniqueOpenQuestions.map((question) => question.id),
     openQuestions: uniqueOpenQuestions,

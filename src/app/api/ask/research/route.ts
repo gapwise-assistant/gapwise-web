@@ -8,7 +8,7 @@ import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { AskResearchEvidence } from '@/types/ask';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { confirmDecision } from '@/lib/decisions/workspace';
-import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
 
 export const runtime = 'nodejs';
 
@@ -282,7 +282,7 @@ export async function POST(request: Request) {
           projectId: chat.projectId,
         });
         if (answerResult.projectId) {
-          await refreshAskSuggestionsForProject({ userId, project: answerResult.context });
+          await scheduleAskSuggestionsRefresh({ userId, project: answerResult.context });
         }
       } else {
         const target = await loadDecisionTarget(userId, chat.projectId, targetDecisionId!);
@@ -293,7 +293,7 @@ export async function POST(request: Request) {
         if (target.isGeneral) await saveGeneralContext(userId, updated);
         else {
           await saveProject(userId, updated);
-          await refreshAskSuggestionsForProject({ userId, project: updated });
+          await scheduleAskSuggestionsRefresh({ userId, project: updated });
         }
       }
       const confirmed = { ...research, status: 'confirmed' as const, updatedAt: new Date().toISOString() };

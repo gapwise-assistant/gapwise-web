@@ -10,6 +10,8 @@ const projectRequestSchema = z.object({
   projectId: z.string().trim().min(1),
 });
 
+const assessmentStatuses = new Set(['preparing', 'ready', 'stale', 'failed']);
+
 async function readRequest(request: Request): Promise<{ userId?: string; projectId: string }> {
   if (request.method === 'GET') {
     const url = new URL(request.url);
@@ -45,22 +47,26 @@ async function readSavedSuggestions(request: Request): Promise<NextResponse> {
     if (currentProjectVersion === null) {
       return NextResponse.json({ error: 'The requested workspace was not found.' }, { status: 404 });
     }
-
     const latest = await storage.getLatestAskSuggestionsCache(userId, parsed.projectId);
-    const status = latest?.status
-      ?? (latest && latest.semanticProjectVersion && currentProjectVersion
-        && latest.semanticProjectVersion !== currentProjectVersion
+
+    if (latest && latest.projectId !== parsed.projectId) {
+      return NextResponse.json({ error: 'Suggestions are unavailable for this workspace.' }, { status: 503 });
+    }
+    const requestedVersion = latest?.requestedSemanticProjectVersion ?? latest?.semanticProjectVersion;
+    const status = !latest
+      ? 'preparing'
+      : requestedVersion && requestedVersion !== currentProjectVersion
         ? 'stale'
-        : latest
-          ? 'ready'
-          : 'preparing');
+        : latest.status && assessmentStatuses.has(latest.status)
+          ? latest.status
+          : 'ready';
 
     return NextResponse.json({
       topQuestions: latest?.topQuestions ?? [],
       otherQuestions: latest?.otherQuestions ?? [],
       projectId: parsed.projectId,
-      ...(latest?.projectStateVersion ? { semanticVersion: latest.projectStateVersion } : {}),
-      ...(latest?.updatedAt ? { generatedAt: latest.updatedAt } : {}),
+      semanticVersion: latest?.publishedInputVersion ?? latest?.projectStateVersion ?? currentProjectVersion,
+      ...(latest?.generatedAt ?? latest?.updatedAt ? { generatedAt: latest.generatedAt ?? latest.updatedAt } : {}),
       status,
       cached: true,
       ...(latest?.generatedBy ? { generatedBy: latest.generatedBy } : {}),

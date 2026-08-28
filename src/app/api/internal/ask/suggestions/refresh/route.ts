@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       projectId: project.id,
       semanticVersion: project.semantic_version,
       generatedBy: suggestions.generatedBy,
-      status: suggestions.warning ? 'stale' : 'ready',
+      status: suggestions.status ?? (suggestions.warning ? 'failed' : 'ready'),
       cached: suggestions.cached,
     });
   } catch (error) {

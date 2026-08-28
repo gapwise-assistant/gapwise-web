@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_USER_PROFILE, createGoldenDemoProject } from '@/lib/demo/seed';
 import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 import type { AskSuggestionsCacheRecord } from '@/lib/storage/types';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 const mocks = vi.hoisted(() => ({
   askGapswise: vi.fn(),
@@ -142,5 +143,70 @@ describe('Ask suggestions refresh', () => {
     expect(mocks.generateLocalAskSuggestions).toHaveBeenCalledOnce();
     expect(mocks.askGapswise).not.toHaveBeenCalled();
     expect(storage.saveAskSuggestionsCache).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an older generation overwrite a newer semantic version', async () => {
+    const firstProject = createGoldenDemoProject();
+    const secondProject = structuredClone(firstProject);
+    secondProject.nodes[0]!.text = `${secondProject.nodes[0]!.text} with newer context`;
+    let persistedVersion = semanticProjectVersion(firstProject);
+    let current: AskSuggestionsCacheRecord | null = null;
+    const releases: Array<() => void> = [];
+    const raceStorage = {
+      getAskSuggestionsCache: vi.fn(),
+      saveAskSuggestionsCache: vi.fn(),
+      getLatestAskSuggestionsCache: vi.fn(async () => current),
+      getProjectSemanticVersion: vi.fn(async () => persistedVersion),
+      beginAskSuggestionsRefresh: vi.fn(async (_userId: string, record: AskSuggestionsCacheRecord) => {
+        current = { ...record };
+        return true;
+      }),
+      publishAskSuggestionsCache: vi.fn(async (_userId: string, record: AskSuggestionsCacheRecord, generationId: string) => {
+        if (current?.generationId !== generationId) return false;
+        current = { ...record };
+        return true;
+      }),
+    };
+    mocks.askGapswise.mockImplementation(() => new Promise((resolve) => {
+      const generatedLabel = `Generated ${releases.length + 1}?`;
+      const release = () => resolve({
+        answer: JSON.stringify({
+          top_questions: [generatedLabel],
+          other_questions: [],
+        }),
+      });
+      releases.push(release);
+    }));
+
+    const firstRefresh = refreshAskSuggestionsForProject({
+      userId: 'ask-user',
+      project: firstProject,
+      profile: DEFAULT_USER_PROFILE,
+      memories: [],
+      storage: raceStorage as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    persistedVersion = semanticProjectVersion(secondProject);
+    const secondRefresh = refreshAskSuggestionsForProject({
+      userId: 'ask-user',
+      project: secondProject,
+      profile: DEFAULT_USER_PROFILE,
+      memories: [],
+      storage: raceStorage as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(releases).toHaveLength(2);
+    releases[1]!();
+    await expect(secondRefresh).resolves.toMatchObject({ top: ['Generated 2?'] });
+    releases[0]!();
+    await firstRefresh;
+
+    expect(current).toMatchObject({
+      status: 'ready',
+      requestedSemanticProjectVersion: persistedVersion,
+      topQuestions: ['Generated 2?'],
+    });
+    expect(raceStorage.publishAskSuggestionsCache).toHaveBeenCalledOnce();
   });
 });

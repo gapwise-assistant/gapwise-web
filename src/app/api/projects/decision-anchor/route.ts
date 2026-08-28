@@ -10,7 +10,7 @@ import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import type { Project } from '@/types/clarity';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
-import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
 
 export const runtime = 'nodejs';
 
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       label: 'Gap Agent after decision anchoring',
     });
     await saveProject(userId, refreshed.project);
-    await refreshAskSuggestionsForProject({ userId, project: refreshed.project, profile });
+    await scheduleAskSuggestionsRefresh({ userId, project: refreshed.project, profile });
 
     const decision = openDecisions(refreshed.project).find((node) => normalizedTitle(node.text) === normalizedTitle(parsed.data.title));
     const runtime = refreshed.runtime;

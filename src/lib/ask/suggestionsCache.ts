@@ -6,6 +6,7 @@ import { getStorageProvider } from '@/lib/storage';
 import { hashText } from '@/lib/context/ingestion';
 import { activeMemories } from '@/lib/memory/store';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
+import { askSuggestionsCurrentCacheId } from '@/lib/ask/suggestionsCacheId';
 
 const ASK_SUGGESTIONS_CACHE_SCHEMA_VERSION = 2;
 const inFlight = new Map<string, Promise<CachedAskSuggestions>>();
@@ -21,6 +22,7 @@ export interface AskSuggestionsGeneration {
 export interface CachedAskSuggestions extends SuggestedQuestionGroups {
   generatedBy: string;
   cached: boolean;
+  status?: 'preparing' | 'ready' | 'stale' | 'failed';
   warning?: string;
   stage?: string;
 }
@@ -97,13 +99,22 @@ export async function getCachedAskSuggestions(
 
   const request = (async () => {
     try {
-      const cached = await storage.getAskSuggestionsCache(params.userId, cacheId);
-      if (cached?.projectStateVersion === projectStateVersion && cached.scopeKey === params.scopeKey) {
+      const cached = typeof storage.getLatestAskSuggestionsCache === 'function'
+        ? await storage.getLatestAskSuggestionsCache(params.userId, params.projectId ?? params.scopeKey)
+        : await storage.getAskSuggestionsCache(params.userId, askSuggestionsCurrentCacheId(params.projectId ?? params.scopeKey));
+      if (
+        cached?.projectStateVersion === projectStateVersion
+        && cached.scopeKey === params.scopeKey
+        && cached.status !== 'failed'
+        && cached.status !== 'preparing'
+        && cached.status !== 'stale'
+      ) {
         return {
           top: cached.topQuestions,
           other: cached.otherQuestions,
           generatedBy: cached.generatedBy,
           cached: true,
+          status: 'ready' as const,
         };
       }
     } catch {
@@ -115,18 +126,21 @@ export async function getCachedAskSuggestions(
     if (generated.cacheable) {
       try {
         await storage.saveAskSuggestionsCache(params.userId, {
-          id: cacheId,
+          id: askSuggestionsCurrentCacheId(params.projectId ?? params.scopeKey),
           userId: params.userId,
           ...(params.projectId ? { projectId: params.projectId } : {}),
           scopeKey: params.scopeKey,
           projectStateVersion,
           semanticProjectVersion: semanticProjectVersion(params.project),
+          requestedSemanticProjectVersion: semanticProjectVersion(params.project),
+          publishedInputVersion: projectStateVersion,
           topQuestions: generated.suggestions.top,
           otherQuestions: generated.suggestions.other,
           generatedBy: generated.generatedBy,
           createdAt: now,
           updatedAt: now,
-          status: 'ready',
+          status: 'ready' as const,
+          generatedAt: now,
         });
       } catch {
         // Return generated suggestions even when cache persistence is unavailable.
@@ -136,6 +150,7 @@ export async function getCachedAskSuggestions(
       ...generated.suggestions,
       generatedBy: generated.generatedBy,
       cached: false,
+      status: 'ready' as const,
       ...(generated.warning ? { warning: generated.warning } : {}),
       ...(generated.stage ? { stage: generated.stage } : {}),
     };

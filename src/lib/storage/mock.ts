@@ -33,6 +33,7 @@ import {
   type ProjectSnapshotSummary,
   type SnapshotReferencedRecordType,
 } from '@/types/projectSnapshot';
+import { askSuggestionsCurrentCacheId } from '@/lib/ask/suggestionsCacheId';
 
 interface MockDatabase {
   users: Record<
@@ -361,8 +362,8 @@ export class MockStorageProvider implements StorageProvider {
 
   async getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null> {
     return (await this.getUser(userId)).askSuggestionAssessments
-      ?.filter((record) => record.projectId === projectId)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+      ?.find((record) => record.id === askSuggestionsCurrentCacheId(projectId)
+        && record.projectId === projectId) ?? null;
   }
 
   async getProjectSemanticVersion(userId: string, projectId: string): Promise<string | null> {
@@ -373,6 +374,80 @@ export class MockStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
+  }
+
+  async beginAskSuggestionsRefresh(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    const currentId = askSuggestionsCurrentCacheId(record.projectId ?? record.scopeKey);
+    const existing = user.askSuggestionAssessments.find((candidate) => candidate.id === currentId);
+    if (existing?.projectId && existing.projectId !== record.projectId) return false;
+    if (
+      existing?.status === 'preparing'
+      && existing.requestedSemanticProjectVersion === record.requestedSemanticProjectVersion
+    ) return false;
+    const now = record.requestedAt ?? record.updatedAt;
+    const preparing: AskSuggestionsCacheRecord = {
+      ...record,
+      id: currentId,
+      status: 'preparing',
+      topQuestions: existing?.topQuestions ?? record.topQuestions,
+      otherQuestions: existing?.otherQuestions ?? record.otherQuestions,
+      createdAt: existing?.createdAt ?? record.createdAt,
+      updatedAt: now,
+    };
+    const index = user.askSuggestionAssessments.findIndex((candidate) => candidate.id === currentId);
+    if (index >= 0) user.askSuggestionAssessments[index] = preparing;
+    else user.askSuggestionAssessments.push(preparing);
+    db.users[userId] = user;
+    await this.writeDb(db);
+    return true;
+  }
+
+  async publishAskSuggestionsCache(
+    userId: string,
+    record: AskSuggestionsCacheRecord,
+    generationId: string,
+  ): Promise<boolean> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    const currentId = askSuggestionsCurrentCacheId(record.projectId ?? record.scopeKey);
+    const index = user.askSuggestionAssessments.findIndex((candidate) => candidate.id === currentId);
+    const current = index >= 0 ? user.askSuggestionAssessments[index] : undefined;
+    if (
+      !current
+      || current.projectId !== record.projectId
+      || current.generationId !== generationId
+      || current.requestedSemanticProjectVersion !== record.requestedSemanticProjectVersion
+    ) return false;
+    user.askSuggestionAssessments[index] = { ...record, id: currentId, generationId };
+    db.users[userId] = user;
+    await this.writeDb(db);
+    return true;
+  }
+
+  async markAskSuggestionsStale(
+    userId: string,
+    projectId: string,
+    requestedSemanticProjectVersion: string,
+  ): Promise<void> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    const currentId = askSuggestionsCurrentCacheId(projectId);
+    const index = user.askSuggestionAssessments.findIndex((candidate) => candidate.id === currentId);
+    const current = index >= 0 ? user.askSuggestionAssessments[index] : undefined;
+    if (!current || current.projectId !== projectId) return;
+    const now = new Date().toISOString();
+    user.askSuggestionAssessments[index] = {
+      ...current,
+      status: 'stale',
+      requestedSemanticProjectVersion,
+      requestedAt: now,
+      updatedAt: now,
+      generationId: undefined,
+    };
+    db.users[userId] = user;
+    await this.writeDb(db);
   }
 
   async listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]> {

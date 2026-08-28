@@ -261,15 +261,13 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   }), [userId]);
   const brief = serverBrief ?? emptyBrief;
   const requestSequence = React.useRef(0);
-  const previousRequestKey = React.useRef<string | null>(null);
+  const forceRefreshRef = React.useRef(false);
 
   React.useEffect(() => {
     const controller = new AbortController();
     const requestId = ++requestSequence.current;
-    const force = refreshCounter > 0 || (
-      previousRequestKey.current !== null && previousRequestKey.current !== requestKey
-    );
-    previousRequestKey.current = requestKey;
+    const force = forceRefreshRef.current;
+    forceRefreshRef.current = false;
     setServerBrief(null);
     setFocusAssessment(null);
     setLoadedRequestKey(null);
@@ -594,7 +592,10 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
 
           <button
             type="button"
-            onClick={() => setRefreshCounter((value) => value + 1)}
+            onClick={() => {
+              forceRefreshRef.current = true;
+              setRefreshCounter((value) => value + 1);
+            }}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-400 hover:border-cyan-700 hover:text-cyan-300"
             aria-label="Refresh"
             title="Refresh"

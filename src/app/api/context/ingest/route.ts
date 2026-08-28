@@ -17,7 +17,7 @@ import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
-import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export const runtime = 'nodejs';
@@ -227,7 +227,7 @@ export async function POST(request: Request) {
   }
   if (!result.skipped) await saveTarget(source.userId, result.project, target.isGeneral);
   if (!target.isGeneral && semanticStateChanged && !result.skipped && !result.error) {
-    await refreshAskSuggestionsForProject({
+    await scheduleAskSuggestionsRefresh({
       userId: source.userId,
       project: result.project,
       profile,

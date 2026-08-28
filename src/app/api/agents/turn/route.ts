@@ -16,7 +16,8 @@ import { gapAgentOutputFromAssessment } from '@/lib/agents/gapAssessmentV1';
 import type { AgentTurnResult } from '@/lib/agents/orchestrator';
 import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
 import type { UserMemoryProfile } from '@/types/clarity';
-import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 function traceAgentConfigs(gapRuntime: GapRuntimeResult) {
   const policy = getAgentModelPolicy();
@@ -161,7 +162,9 @@ export async function POST(request: Request) {
 
     if (body.applyGraphUpdates) {
       await saveProject(userId, result.project);
-      await refreshAskSuggestionsForProject({ userId, project: result.project, profile });
+      if (semanticProjectVersion(project) !== semanticProjectVersion(result.project)) {
+        await scheduleAskSuggestionsRefresh({ userId, project: result.project, profile });
+      }
     }
 
     recordTrace({

@@ -34,6 +34,7 @@ import {
   type SnapshotReferencedRecordType,
 } from '@/types/projectSnapshot';
 import { compactProcessingLogForFirestore } from '@/lib/context/processingLog';
+import { askSuggestionsCurrentCacheId } from '@/lib/ask/suggestionsCacheId';
 
 type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
@@ -405,11 +406,11 @@ export class FirestoreStorageProvider implements StorageProvider {
   async getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null> {
     try {
       const snapshot = await this.collection(userId, 'askSuggestionAssessments')
-        .where('projectId', '==', projectId)
+        .doc(askSuggestionsCurrentCacheId(projectId))
         .get();
-      return snapshot.docs
-        .map((doc) => this.fromFirestore<AskSuggestionsCacheRecord>(doc.data()))
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+      if (!snapshot.exists) return null;
+      const record = this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!);
+      return record.projectId === projectId ? record : null;
     } catch (error) {
       throw this.toStorageError(error);
     }
@@ -428,6 +429,105 @@ export class FirestoreStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.save(userId, 'askSuggestionAssessments', record);
+  }
+
+  async beginAskSuggestionsRefresh(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean> {
+    try {
+      const ref = this.collection(userId, 'askSuggestionAssessments')
+        .doc(askSuggestionsCurrentCacheId(record.projectId ?? record.scopeKey));
+      let started = false;
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        const existing = snapshot.exists
+          ? this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!)
+          : null;
+        if (existing?.projectId && existing.projectId !== record.projectId) return;
+        if (
+          existing?.status === 'preparing'
+          && existing.requestedSemanticProjectVersion === record.requestedSemanticProjectVersion
+        ) return;
+
+        const now = record.requestedAt ?? record.updatedAt;
+        const preparing: AskSuggestionsCacheRecord = {
+          ...record,
+          id: ref.id,
+          status: 'preparing',
+          topQuestions: existing?.topQuestions ?? record.topQuestions,
+          otherQuestions: existing?.otherQuestions ?? record.otherQuestions,
+          createdAt: existing?.createdAt ?? record.createdAt,
+          updatedAt: now,
+        };
+        transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt(preparing)));
+        started = true;
+      });
+      return started;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async publishAskSuggestionsCache(
+    userId: string,
+    record: AskSuggestionsCacheRecord,
+    generationId: string,
+  ): Promise<boolean> {
+    try {
+      const ref = this.collection(userId, 'askSuggestionAssessments')
+        .doc(askSuggestionsCurrentCacheId(record.projectId ?? record.scopeKey));
+      let published = false;
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (!snapshot.exists) return;
+        const current = this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!);
+        if (
+          current.projectId !== record.projectId
+          || current.generationId !== generationId
+          || current.requestedSemanticProjectVersion !== record.requestedSemanticProjectVersion
+        ) return;
+        transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...record,
+          id: ref.id,
+          projectId: current.projectId,
+          generationId,
+        })));
+        published = true;
+      });
+      return published;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async markAskSuggestionsStale(
+    userId: string,
+    projectId: string,
+    requestedSemanticProjectVersion: string,
+  ): Promise<void> {
+    try {
+      const ref = this.collection(userId, 'askSuggestionAssessments')
+        .doc(askSuggestionsCurrentCacheId(projectId));
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (!snapshot.exists) return;
+        const current = this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!);
+        if (current.projectId !== projectId) return;
+        if (
+          current.status === 'preparing'
+          && current.requestedSemanticProjectVersion === requestedSemanticProjectVersion
+        ) return;
+        const now = new Date().toISOString();
+        transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...current,
+          status: 'stale' as const,
+          requestedSemanticProjectVersion,
+          requestedAt: now,
+          updatedAt: now,
+          generationId: undefined,
+        })), { merge: false });
+      });
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
   }
 
   async listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]> {

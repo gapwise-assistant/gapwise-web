@@ -140,6 +140,8 @@ export interface ProjectOverviewAssessmentCacheRecord {
   };
 }
 
+export type AskSuggestionAssessmentStatus = 'preparing' | 'ready' | 'stale' | 'failed';
+
 export interface AskSuggestionsCacheRecord {
   id: string;
   userId: string;
@@ -148,12 +150,21 @@ export interface AskSuggestionsCacheRecord {
   projectStateVersion: string;
   /** The project-only revision used for cheap read-path staleness checks. */
   semanticProjectVersion?: string;
+  /** The project-only revision requested by the latest refresh. */
+  requestedSemanticProjectVersion?: string;
+  /** The full project/profile/memory input version used by a published result. */
+  publishedInputVersion?: string;
+  /** Compare-and-set token for the refresh currently being generated. */
+  generationId?: string;
   topQuestions: string[];
   otherQuestions: string[];
   generatedBy: string;
   createdAt: string;
   updatedAt: string;
-  status?: 'ready' | 'stale' | 'failed';
+  requestedAt?: string;
+  generatedAt?: string;
+  failureStage?: string;
+  status?: AskSuggestionAssessmentStatus;
 }
 
 export type DeveloperGenerationRunStatus = 'running' | 'completed' | 'failed';
@@ -264,6 +275,9 @@ export interface StorageProvider {
   getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null>;
   getProjectSemanticVersion(userId: string, projectId: string): Promise<string | null>;
   saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void>;
+  beginAskSuggestionsRefresh?(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean>;
+  publishAskSuggestionsCache?(userId: string, record: AskSuggestionsCacheRecord, generationId: string): Promise<boolean>;
+  markAskSuggestionsStale?(userId: string, projectId: string, requestedSemanticProjectVersion: string): Promise<void>;
 
   listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]>;
   getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null>;
