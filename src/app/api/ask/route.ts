@@ -413,7 +413,7 @@ export async function POST(request: Request) {
               : {}),
           },
           label: 'Ask response created',
-          summary: 'An Ask conversation response was saved for this project.',
+          summary: 'An Ask conversation response was saved for this workspace.',
         });
       } catch (snapshotError) {
         console.warn('[Project snapshots] Ask response snapshot unavailable', snapshotError);
@@ -464,7 +464,7 @@ export async function POST(request: Request) {
         generatedBy: 'local-fallback',
         fallbackPrompt: parsed.data.message,
         fallbackSystemPrompt: localFallbackSystemPrompt,
-        warning: 'The deployed AI agent is unavailable; this answer was generated from the current project context.',
+        warning: 'The deployed AI agent is unavailable; this answer was generated from the current workspace context.',
       });
     } catch {
       // Preserve the existing error response if the local context fallback is also unavailable.

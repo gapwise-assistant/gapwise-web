@@ -94,24 +94,25 @@ export function runGapswiseOrchestrator(
     durableMemories: params.durableMemories,
   });
 
-  const candidates = rankGaps(workingProject);
+  const candidates = rankGaps(workingProject, params.profile);
   const escalation = assessGapEscalation(workingProject, candidates);
   const gapStarted = Date.now();
   const gapAssessment = assessGapsV1Deterministically({
     project: workingProject,
     contextPack,
     memories: params.durableMemories ?? [],
+    profile: params.profile,
   });
   const gapOutput = gapAssessment.selectedGapId || hasLiveDecision(workingProject)
-    ? gapAgentOutputFromAssessment(workingProject, gapAssessment)
-    : runGapAgent(workingProject);
+    ? gapAgentOutputFromAssessment(workingProject, gapAssessment, params.profile)
+    : runGapAgent(workingProject, params.profile);
   const effectiveGap = gapOutput.selectedGapNodeId
     ? candidates.find((candidate) => candidate.node_id === gapOutput.selectedGapNodeId) ?? null
     : null;
   workingProject.active_question = effectiveGap;
   const gapLatency = Date.now() - gapStarted;
   const attentionStarted = Date.now();
-  const attentionOutput = runAttentionAgent(workingProject);
+  const attentionOutput = runAttentionAgent(workingProject, params.profile);
   const attentionLatency = Date.now() - attentionStarted;
   const partnerStarted = Date.now();
   const partner = runPartnerAgent(workingProject, params.profile, gapOutput, attentionOutput);

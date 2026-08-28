@@ -55,4 +55,51 @@ describe('ProjectQuestionsList', () => {
     expect(html).not.toContain('Unanswered');
     expect(html).not.toContain('Use credentials from the current project.');
   });
+
+  it('renders resolved questions, assumptions, and decisions from one shared projection', () => {
+    const html = renderToStaticMarkup(
+      <ProjectQuestionsList
+        openQuestions={[]}
+        answeredQuestions={[]}
+        openDecisions={[]}
+        resolvedGaps={[
+          {
+            nodeId: 'question_1',
+            projectId: 'project_demo',
+            kind: 'question',
+            prompt: 'When should the supplier deliver?',
+            resolution: 'By Friday.',
+            timestamp: '2026-08-22T10:01:00.000Z',
+          },
+          {
+            nodeId: 'assumption_1',
+            projectId: 'project_demo',
+            kind: 'assumption',
+            prompt: 'The first group will need a helper.',
+            resolution: 'A helper is available.',
+            timestamp: '2026-08-22T10:02:00.000Z',
+          },
+          {
+            nodeId: 'decision_1',
+            projectId: 'project_demo',
+            kind: 'decision',
+            prompt: 'Which venue should we use?',
+            resolution: 'Use the community hall.',
+            timestamp: '2026-08-22T10:03:00.000Z',
+          },
+        ]}
+        projectId="project_demo"
+        onAnswerQuestion={vi.fn()}
+        onEditAnsweredQuestion={vi.fn()}
+        onReviewDecision={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('When should the supplier deliver?');
+    expect(html).toContain('The first group will need a helper.');
+    expect(html).toContain('Which venue should we use?');
+    expect(html).not.toContain('By Friday.');
+    expect(html).not.toContain('A helper is available.');
+    expect(html).not.toContain('Use the community hall.');
+  });
 });

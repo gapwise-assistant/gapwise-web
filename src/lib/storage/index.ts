@@ -1,5 +1,5 @@
 import { Project } from '@/types/clarity';
-import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { AppScope, EVERYTHING_SCOPE, WorkspaceScope } from '@/types/scope';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
 import { FirestoreStorageProvider } from '@/lib/storage/firestore';
 import { MockStorageProvider } from '@/lib/storage/mock';
@@ -76,28 +76,22 @@ export async function setAppScope(userId: string, scope: AppScope): Promise<void
   await getStorageProvider().setAppScope(userId, scope);
 }
 
-export async function loadProjectState(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: AppScope }> {
+export async function loadProjectState(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: WorkspaceScope | null }> {
   const projects = await listProjects(userId);
   const storedActiveProjectId = await getActiveProjectId(userId);
   const storedScope = await getAppScope(userId);
-  const scope = resolveScope(storedScope, projects);
+  const scope = resolveScope(storedScope, projects, storedActiveProjectId);
 
-  if (!projects.length) {
-    if (storedScope.type !== 'everything') {
-      await setAppScope(userId, EVERYTHING_SCOPE);
-    }
-    return { projects: [], activeProjectId: null, scope: EVERYTHING_SCOPE };
+  if (!scope) return { projects, activeProjectId: null, scope: null };
+
+  const storedScopeProjectId = storedScope.type === 'project' ? storedScope.projectId : null;
+  if (storedScopeProjectId !== scope.projectId || storedActiveProjectId !== scope.projectId) {
+    // This also migrates legacy `{ type: 'everything' }` preferences to the
+    // selected real workspace without rebuilding or merging project data.
+    await setAppScope(userId, scope);
   }
 
-  const activeProject =
-    projects.find((item) => item.id === (scope.type === 'project' ? scope.projectId : storedActiveProjectId)) ??
-    projects.find((item) => item.status !== 'archived') ??
-    projects[0];
-
-  if (scope.type !== storedScope.type || (scope.type === 'project' && storedScope.type === 'project' && scope.projectId !== storedScope.projectId)) {
-    await setAppScope(userId, EVERYTHING_SCOPE);
-  }
-  return { projects, activeProjectId: activeProject.id, scope };
+  return { projects, activeProjectId: scope.projectId, scope };
 }
 
 export async function loadGeneralContext(userId: string): Promise<Project> {

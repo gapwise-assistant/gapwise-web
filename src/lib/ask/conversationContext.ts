@@ -16,6 +16,7 @@ import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/
 import type { ContextProcessingLog } from '@/types/clarity';
 import { boundedId } from '@/lib/ids/boundedId';
 import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export function askSourceId(chatId: string, messageId: string): string {
   return boundedId('ask', `${chatId}_${messageId}`);
@@ -60,6 +61,7 @@ export async function persistAskProposal(params: {
   proposal: AskContextProposal;
 }): Promise<Project> {
   const target = await loadTarget(params.userId, params.projectId);
+  const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
   const sourceId = proposalSourceId(params.assistantMessageId, proposalId(params.assistantMessageId, params.proposal));
   const now = new Date().toISOString();
   const proposalContext = [params.proposal.text, params.proposal.reasoning]
@@ -85,7 +87,7 @@ export async function persistAskProposal(params: {
       ...(params.proposal.reasoning ? { whyItMatters: [params.proposal.reasoning] } : {}),
     }],
     deferHistory: true,
-  }, DEFAULT_USER_PROFILE);
+  }, profile);
   const relationshipStartedAt = new Date();
   const changedNodeIds = changedProjectNodeIds(target.project, ingested);
   let relationshipProject = ingested;
@@ -177,6 +179,7 @@ export async function persistAskConversationContext(params: {
   openQuestions: Array<{ id: string; text: string }>;
 }> {
   const target = await loadTarget(params.userId, params.projectId);
+  const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
   const sourceId = askSourceId(params.chatId, params.messageId);
   const result = await processContextSource(target.project, {
     sourceId,
@@ -185,7 +188,7 @@ export async function persistAskConversationContext(params: {
     type: 'note',
     origin: 'user',
     semanticRole: 'ask_message',
-  }, DEFAULT_USER_PROFILE, {
+  }, profile, {
     captureProcessingLog: params.captureProcessingLog,
   });
 

@@ -4,6 +4,12 @@ import React, { useEffect, useState } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
 import { TraceEvent } from '@/types/observability';
 import { authFetch } from '@/lib/auth/client';
+import type { DeveloperGenerationRun, DeveloperGenerationStep } from '@/lib/storage/types';
+
+interface GenerationTimeline {
+  run: DeveloperGenerationRun;
+  steps: DeveloperGenerationStep[];
+}
 
 interface TracePanelProps {
   userId: string;
@@ -11,12 +17,14 @@ interface TracePanelProps {
 
 export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
   const [traces, setTraces] = useState<TraceEvent[]>([]);
+  const [generationTimelines, setGenerationTimelines] = useState<GenerationTimeline[]>([]);
   const [open, setOpen] = useState(false);
 
   const load = async () => {
     const res = await authFetch(`/api/dev/traces?userId=${encodeURIComponent(userId)}`);
     const data = await res.json();
     setTraces(data.traces ?? []);
+    setGenerationTimelines(data.generationRuns ?? []);
   };
 
   useEffect(() => {
@@ -39,6 +47,34 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
             </button>
           </div>
           <div className="mt-3 space-y-2">
+            {generationTimelines.length > 0 && (
+              <details className="rounded-xl border border-slate-800 bg-slate-900 p-3" open>
+                <summary className="cursor-pointer text-xs font-bold text-slate-300">
+                  Generation runs · {generationTimelines.length}
+                </summary>
+                <div className="mt-3 space-y-2 text-[11px] text-slate-500">
+                  {generationTimelines.map(({ run, steps }) => (
+                    <details key={run.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+                      <summary className="cursor-pointer text-slate-300">
+                        {run.generator} · {run.status} · {run.durationMs ?? 0}ms
+                      </summary>
+                      <div className="mt-2 space-y-1 border-t border-slate-800 pt-2">
+                        <p>Run: {run.id}</p>
+                        {run.currentStep && <p>Current step: {run.currentStep}</p>}
+                        {run.error && <p className="text-rose-300">{run.error}</p>}
+                        {steps.map((step) => (
+                          <p key={step.id}>
+                            {step.sequence}. {step.name} · {step.status}
+                            {step.durationMs !== undefined ? ` · ${step.durationMs}ms` : ''}
+                            {step.summary ? ` · ${step.summary}` : ''}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </details>
+            )}
             {traces.length === 0 ? (
               <p className="text-xs text-slate-500">No traces recorded yet.</p>
             ) : (
@@ -95,6 +131,29 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
                   <p className="text-slate-500">
                     Context IDs ({trace.contextIds.length}): {trace.contextIds.slice(0, 8).join(', ') || 'none'}{trace.contextIds.length > 8 ? '…' : ''}
                   </p>
+                  {trace.decisionMapDebug && (
+                    <details className="mt-2 border-t border-slate-800 pt-2">
+                      <summary className="cursor-pointer text-xs font-bold text-slate-300">Decision Map diagnostics</summary>
+                      <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+                        {trace.decisionMapActivity && (
+                          <p>
+                            {trace.decisionMapActivity.type} · {trace.decisionMapActivity.change ?? 'No semantic change recorded'}
+                            {trace.decisionMapActivity.focus ? ` · Focus: ${trace.decisionMapActivity.focus}` : ''}
+                          </p>
+                        )}
+                        <p>
+                          Graph: {trace.decisionMapDebug.rawProjectGraph.totalNodes} nodes · {trace.decisionMapDebug.rawProjectGraph.totalEdges} relationships · {trace.decisionMapDebug.renderedMapReadabilitySummary.visibleNodes} visible
+                        </p>
+                        {trace.decisionMapActivity && trace.decisionMapActivity.warningCodes.length > 0 && (
+                          <p>Warnings: {trace.decisionMapActivity.warningCodes.join(', ')}</p>
+                        )}
+                        <details className="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+                          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Raw Decision Map trace</summary>
+                          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed text-slate-600">{JSON.stringify(trace.decisionMapDebug, null, 2)}</pre>
+                        </details>
+                      </div>
+                    </details>
+                  )}
                   {trace.scores.length > 0 && (
                     <p className="text-slate-500">Scores: {trace.scores.map((score) => `${score.id}:${score.score}`).join(', ')}</p>
                   )}

@@ -1,4 +1,4 @@
-import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary, ContextProcessingLog, ProjectHistoryEvent } from '@/types/clarity';
+import { CandidateGap, NodeType, EdgeType, Project, QuestionReconciliationSummary, ContextProcessingLog, ProjectHistoryEvent, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -273,6 +273,8 @@ export interface StorageProvider {
   getMemories(userId: string): Promise<DurableMemory[]>;
   saveMemory(userId: string, memory: DurableMemory): Promise<void>;
   replaceMemories(userId: string, memories: DurableMemory[]): Promise<void>;
+  getUserMemoryProfile(userId: string): Promise<UserMemoryProfile | null>;
+  saveUserMemoryProfile(userId: string, profile: UserMemoryProfile): Promise<void>;
 
   logEvent(userId: string, event: FirestoreEvent): Promise<void>;
 

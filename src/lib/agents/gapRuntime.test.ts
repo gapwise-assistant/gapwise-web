@@ -4,6 +4,7 @@ import { evaluateGapRuntime, getGapAgentRuntimeMode, refreshProjectGapRuntime } 
 import { requestGapAssessment, validateGapGuidanceReferences } from '@/lib/agents/gapRemote';
 import { CAREER_GAP_GOLDEN_SET } from '@/lib/evals/careerGapGoldenSet';
 import { materializeCareerGapCase } from '@/lib/evals/careerGapFixture';
+import { resetStorageProviderForTests } from '@/lib/storage';
 
 vi.mock('@/lib/agents/gapRemote', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agents/gapRemote')>();
@@ -11,6 +12,7 @@ vi.mock('@/lib/agents/gapRemote', async (importOriginal) => {
 });
 
 const mockedRequest = vi.mocked(requestGapAssessment);
+const originalUseFirestore = process.env.USE_FIRESTORE;
 
 function metadata() {
   return {
@@ -56,11 +58,16 @@ describe('Gap Agent runtime modes', () => {
     mockedRequest.mockReset();
     delete process.env.GAPSWISE_DEMO_MODE;
     delete process.env.GAP_AGENT_MODE;
+    process.env.USE_FIRESTORE = 'false';
+    resetStorageProviderForTests();
   });
 
   afterEach(() => {
     delete process.env.GAPSWISE_DEMO_MODE;
     delete process.env.GAP_AGENT_MODE;
+    if (originalUseFirestore === undefined) delete process.env.USE_FIRESTORE;
+    else process.env.USE_FIRESTORE = originalUseFirestore;
+    resetStorageProviderForTests();
   });
 
   it('defaults to deterministic and makes no remote call', async () => {

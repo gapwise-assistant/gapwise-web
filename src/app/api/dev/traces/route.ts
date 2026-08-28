@@ -76,8 +76,8 @@ const decisionMapTraceSchema = z.object({
 
 /**
  * The renderer sends deterministic, user-owned graph diagnostics here so the
- * existing Decision Map Activity panel can inspect the same in-memory trace
- * feed as server-side graph work. No project data is modified.
+ * existing localhost Developer Trace panel can inspect the same in-memory
+ * trace feed as server-side graph work. No project data is modified.
  */
 export async function POST(request: Request) {
   const rejected = rejectNonLocalhost(request);

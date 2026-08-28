@@ -22,7 +22,6 @@ import { decisionMapComponents } from '@/lib/graph/constellation';
 import { buildDecisionMapActivityFingerprint, decisionMapWarningCodes } from '@/lib/graph/decisionMapActivity';
 import { relationshipGroupsForNode } from '@/lib/graph/relationshipContext';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
-import { DecisionMapActivity } from '@/components/DecisionMapActivity';
 import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 
 const LazyConstellationGraph = dynamic(() => import('@/components/ConstellationGraph'), {
@@ -96,7 +95,6 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
   const [viewport, setViewport] = useState<GraphViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
   const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
   const [rendererDiagnostics, setRendererDiagnostics] = useState<DecisionMapRendererDiagnostics | null>(null);
-  const [traceRefreshKey, setTraceRefreshKey] = useState(0);
   const [isLocalhost, setIsLocalhost] = useState(false);
   const fullscreenPanelRef = useRef<HTMLDivElement | null>(null);
   const lastRendererSnapshotKeyRef = useRef<string | null>(null);
@@ -258,7 +256,7 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [focusAssessment, focusMode, isLocalhost, pathMode, project, projection, rendererDiagnostics, selectedNodeId, traceRefreshKey, userId, view]);
+  }, [focusAssessment, focusMode, isLocalhost, pathMode, project, projection, rendererDiagnostics, selectedNodeId, userId, view]);
 
   // Persist one event for a meaningful project/focus change. This effect does
   // not depend on selection, view, layout, viewport, or renderer diagnostics.
@@ -288,7 +286,6 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
         }),
       }).then((response) => {
         if (!response.ok) return;
-        setTraceRefreshKey((current) => current + 1);
       }).catch(() => {
         // Decision Map instrumentation is intentionally best-effort.
       });
@@ -471,10 +468,6 @@ export const ClarityGraphCanvas: React.FC<ClarityGraphCanvasProps> = ({
             )}
           </div>
         </header>
-
-        {isLocalhost && (
-          <DecisionMapActivity userId={userId} project={project} traceRefreshKey={traceRefreshKey} />
-        )}
 
         <div className="flex max-w-full shrink-0 items-center justify-between gap-3 overflow-x-auto border-b border-slate-800 bg-slate-950 p-2">
           <span className="rounded-lg border border-cyan-800 bg-cyan-950 px-3 py-2 text-xs font-medium text-cyan-300">

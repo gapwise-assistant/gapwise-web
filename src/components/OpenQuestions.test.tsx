@@ -46,6 +46,8 @@ describe('OpenQuestions', () => {
     expect(html).toContain('Who is the primary target persona?');
     expect(html).toContain('Blocks the next decision.');
     expect(html).toContain('Resolve');
+    expect(html).toContain('data-variant="primary"');
+    expect(html).toContain('data-variant="secondary"');
     expect(html).not.toContain('Why this matters');
     expect(html).not.toContain('Review decision');
     expect(html).toContain('Edit');

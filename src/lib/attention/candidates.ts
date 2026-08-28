@@ -1,4 +1,4 @@
-import { Project } from '@/types/clarity';
+import { Project, UserMemoryProfile } from '@/types/clarity';
 import { ContextPack, DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate } from '@/types/attention';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
@@ -18,8 +18,12 @@ function includesAny(text: string, terms: string[]): boolean {
   return terms.some((term) => lower.includes(term));
 }
 
+function isActiveMemory(memory: DurableMemory): boolean {
+  return !memory.forgotten_at && memory.status !== 'forgotten';
+}
+
 function hasPriority(memories: DurableMemory[], terms: string[]): boolean {
-  return memories.some((memory) => !memory.forgotten_at && memory.category === 'current_priorities' && includesAny(memory.text, terms));
+  return memories.some((memory) => isActiveMemory(memory) && memory.category === 'current_priorities' && includesAny(memory.text, terms));
 }
 
 function dueSoon(project: Project): boolean {
@@ -68,6 +72,7 @@ export function generateAttentionCandidates(params: {
   userId: string;
   project: Project;
   memories: DurableMemory[];
+  profile?: UserMemoryProfile;
   contextPack?: ContextPack;
   now?: Date;
 }): AttentionCandidate[] {
@@ -78,13 +83,13 @@ export function generateAttentionCandidates(params: {
   const candidates: AttentionCandidate[] = [];
   const incomePriority = hasPriority(memories, ['financial', 'income', 'salary', 'stability', 'money']);
   const careerRoleAccepted = memories.some((memory) =>
-    !memory.forgotten_at && memory.id === 'career_demo_answer_acceptable'
+    isActiveMemory(memory) && memory.id === 'career_demo_answer_acceptable'
   );
   const careerRoleRejected = memories.some((memory) =>
-    !memory.forgotten_at && memory.id === 'career_demo_answer_not_acceptable'
+    isActiveMemory(memory) && memory.id === 'career_demo_answer_not_acceptable'
   );
   const noFrontendPreference = memories.some((memory) =>
-    !memory.forgotten_at && /do not|don't|avoid/.test(memory.text.toLowerCase()) && /frontend/.test(memory.text.toLowerCase())
+    isActiveMemory(memory) && /do not|don't|avoid/.test(memory.text.toLowerCase()) && /frontend/.test(memory.text.toLowerCase())
   ) && !careerRoleAccepted;
 
   params.contextPack?.upcomingCommitments
@@ -246,7 +251,7 @@ export function generateAttentionCandidates(params: {
     }
   });
 
-  rankGaps(reasoningProject).slice(0, 5).forEach((gap) => {
+  rankGaps(reasoningProject, params.profile).slice(0, 5).forEach((gap) => {
     const node = reasoningProject.nodes.find((item) => item.id === gap.node_id);
     const relatedMeeting = reasoningProject.sources.find((source) => includesAny(source.content, ['meeting', 'demo tomorrow', 'tomorrow']));
     const contextPack = buildContextPack({

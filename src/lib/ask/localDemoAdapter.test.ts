@@ -5,7 +5,10 @@ import { loadDurableMemories } from '@/lib/memory/serverStore';
 import { askGapswiseLocally, generateLocalAskSuggestions } from '@/lib/ask/localDemoAdapter';
 
 vi.mock('@/lib/storage', () => ({ loadProjectForScope: vi.fn() }));
-vi.mock('@/lib/memory/serverStore', () => ({ loadDurableMemories: vi.fn(async () => []) }));
+vi.mock('@/lib/memory/serverStore', () => ({
+  loadDurableMemories: vi.fn(async () => []),
+  loadUserMemoryProfile: vi.fn(async (_userId: string, fallback: unknown) => fallback),
+}));
 
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 

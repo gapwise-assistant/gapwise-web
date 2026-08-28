@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoldenDemoProject } from '@/lib/demo/seed';
+import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { createDurableMemory } from '@/lib/memory/policy';
 import {
   askSuggestionsProjectStateVersion,
   clearAskSuggestionsInFlightForTests,
@@ -134,9 +135,16 @@ describe('Ask suggestions cache', () => {
         });
       },
       (project: ReturnType<typeof createGoldenDemoProject>) => {
-        const source = project.sources.find((candidate) => candidate.id === 'src_1');
-        if (!source) throw new Error('Expected a seeded source.');
-        source.content = `${source.content} An additional requirement was confirmed.`;
+        project.sources.push({
+          id: 'src_unrepresented',
+          filename: 'follow-up-note.txt',
+          type: 'note',
+          content: 'An additional requirement was confirmed.',
+          extracted_at: '2026-08-20T12:00:00.000Z',
+          derived_node_ids: [],
+          processing_status: 'completed',
+          origin: 'user',
+        });
       },
     ];
 
@@ -146,6 +154,21 @@ describe('Ask suggestions cache', () => {
       change(project);
       await expect(askSuggestionsProjectStateVersion(project)).resolves.not.toBe(initialVersion);
     }
+  });
+
+  it('changes for saved preferences and active memories, but not forgotten memories', async () => {
+    const project = createGoldenDemoProject();
+    const memory = createDurableMemory('Remember that I prefer evidence-backed recommendations.')!;
+    const initial = await askSuggestionsProjectStateVersion(project, DEFAULT_USER_PROFILE, []);
+    const changedProfile = { ...DEFAULT_USER_PROFILE, answer_density: 'detailed' as const };
+    const withProfile = await askSuggestionsProjectStateVersion(project, changedProfile, []);
+    const withMemory = await askSuggestionsProjectStateVersion(project, DEFAULT_USER_PROFILE, [memory]);
+    const forgotten = { ...memory, status: 'forgotten' as const, forgotten_at: '2026-08-10T12:00:00Z' };
+    const withForgottenMemory = await askSuggestionsProjectStateVersion(project, DEFAULT_USER_PROFILE, [forgotten]);
+
+    expect(withProfile).not.toBe(initial);
+    expect(withMemory).not.toBe(initial);
+    expect(withForgottenMemory).toBe(initial);
   });
 
   it('returns a temporary fallback without saving it and retries the same state', async () => {

@@ -1,8 +1,9 @@
 import { DailyBrief, RecommendationStatus } from '@/types/attention';
-import { Project } from '@/types/clarity';
+import { Project, UserMemoryProfile } from '@/types/clarity';
 import { ContextPack, DurableMemory } from '@/types/contextPack';
 import { FeedbackEvent } from '@/types/feedback';
 import { generateAttentionCandidates } from '@/lib/attention/candidates';
+import { questionPriorityThreshold } from '@/lib/personalization/preferences';
 
 const briefStore = new Map<string, DailyBrief>();
 const feedbackStore = new Map<string, RecommendationStatus>();
@@ -10,6 +11,7 @@ const feedbackStore = new Map<string, RecommendationStatus>();
 function attentionStateKey(params: {
   project: Project;
   memories: DurableMemory[];
+  profile?: UserMemoryProfile;
   contextPack?: ContextPack;
 }): string {
   return JSON.stringify({
@@ -55,6 +57,15 @@ function attentionStateKey(params: {
         status: memory.status ?? 'active',
       }))
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    profile: params.profile
+      ? {
+        answer_density: params.profile.answer_density,
+        question_frequency: params.profile.question_frequency,
+        challenge_level: params.profile.challenge_level,
+        evidence_preference: params.profile.evidence_preference,
+        durable_notes: [...(params.profile.durable_notes ?? [])].sort(),
+      }
+      : null,
     commitments: (params.contextPack?.upcomingCommitments ?? [])
       .map((node) => ({
         type: node.type,
@@ -73,6 +84,7 @@ export function generateDailyBrief(params: {
   userId: string;
   project: Project;
   memories: DurableMemory[];
+  profile?: UserMemoryProfile;
   feedbackEvents?: FeedbackEvent[];
   period?: string;
   force?: boolean;
@@ -97,6 +109,9 @@ export function generateDailyBrief(params: {
       return !activeFeedbackSuppression;
     })
     .filter((candidate) => candidate.status === 'active')
+    .filter((candidate) => !params.profile
+      || candidate.kind !== 'gap'
+      || candidate.score >= questionPriorityThreshold(params.profile))
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 

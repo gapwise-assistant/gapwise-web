@@ -11,11 +11,14 @@ import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import { authFetch } from '@/lib/auth/client';
 import { AskSourceModal } from '@/components/AskSourceModal';
 import { formatDateTime } from '@/lib/datetime/displayDateTime';
+import type { UserMemoryProfile } from '@/types/clarity';
+import { Button } from '@/components/ui/Button';
 
 interface AskGapswiseProps {
   userId: string;
   scope: AppScope;
   scopeLabel: string;
+  profile?: UserMemoryProfile;
   initialPrompt?: string;
   autoSendInitialPrompt?: boolean;
   onInitialPromptSent?: () => void;
@@ -290,6 +293,7 @@ export function AskGapswise({
   userId,
   scope,
   scopeLabel,
+  profile,
   initialPrompt,
   autoSendInitialPrompt,
   onInitialPromptSent,
@@ -429,7 +433,7 @@ export function AskGapswise({
     return () => {
       isMounted = false;
     };
-  }, [hasLoadedPersistedState, scope, scopeLabel, userId]);
+  }, [hasLoadedPersistedState, profile, scope, scopeLabel, userId]);
 
   const handleNewChat = () => {
     const fresh = newChat();
@@ -904,35 +908,37 @@ export function AskGapswise({
                         <>
                           {visibleProposals.length > 0 && (
                             <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
-                              <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">Potential project update</p>
+                              <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-cyan-300">Potential workspace update</p>
                               {visibleProposals.map((proposal) => {
                                 const proposalBusy = proposal.id ? proposalBusyIds.has(proposal.id) : false;
                                 return (
                                   <div key={proposalUiKey(message.id, proposal)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                       <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{proposal.type}</span>
-                                      {proposal.confirmationStatus === 'added' && <span className="text-xs font-semibold text-emerald-300">Added to project</span>}
+                                      {proposal.confirmationStatus === 'added' && <span className="text-xs font-semibold text-emerald-300">Added to workspace</span>}
                                     </div>
                                     <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-200">{proposal.text}</p>
                                     {proposal.reasoning && <p className="mt-1 text-xs leading-relaxed text-slate-400">{proposal.reasoning}</p>}
                                     {(!proposal.confirmationStatus || proposal.confirmationStatus === 'pending' || proposal.confirmationStatus === 'proposed') && (
                                       <div className="mt-3 flex flex-wrap gap-2">
-                                        <button
-                                          type="button"
+                                        <Button
+                                          variant="primary"
+                                          size="sm"
                                           onClick={() => void handleProposalAction(message, proposal, 'add')}
                                           disabled={proposalBusy}
-                                          className="min-h-9 rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-extrabold text-slate-950 disabled:opacity-50"
+                                          loading={proposalBusy}
                                         >
-                                          {proposalBusy ? 'Saving…' : 'Add'}
-                                        </button>
-                                        <button
-                                          type="button"
+                                          Add
+                                        </Button>
+                                        <Button
+                                          variant="danger"
+                                          size="sm"
                                           onClick={() => void handleProposalAction(message, proposal, 'dismiss')}
                                           disabled={proposalBusy}
-                                          className="min-h-9 rounded-md border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:border-slate-500 disabled:opacity-50"
+                                          loading={proposalBusy}
                                         >
                                           Dismiss
-                                        </button>
+                                        </Button>
                                       </div>
                                     )}
                                   </div>
@@ -942,14 +948,13 @@ export function AskGapswise({
                           )}
                           {hiddenProposals.length > 0 && (
                             <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-800 pt-3">
-                              <span className="text-xs font-semibold text-slate-500">Potential project update dismissed</span>
-                              <button
-                                type="button"
+                              <span className="text-xs font-semibold text-slate-500">Potential workspace update dismissed</span>
+                              <Button
+                                variant="secondary"
                                 onClick={showHiddenProposals}
-                                className="rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
                               >
                                 Show
-                              </button>
+                              </Button>
                             </div>
                           )}
                         </>
@@ -963,13 +968,12 @@ export function AskGapswise({
                         {confirmedAnswerMessageIds.has(message.id) ? (
                           <span className="text-xs font-semibold text-emerald-300">Answer confirmed.</span>
                         ) : (
-                          <button
-                            type="button"
+                          <Button
+                            variant="primary"
                             onClick={() => openResearchAction(message, 'use_as_answer')}
-                            className="min-h-10 rounded-lg border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs font-bold text-amber-200 hover:border-amber-600"
                           >
                             Use as my answer
-                          </button>
+                          </Button>
                         )}
                       </div>
                     )}
@@ -1013,7 +1017,7 @@ export function AskGapswise({
             rows={2}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Gapwise anything about your projects, goals, or external knowledge..."
+            placeholder="Ask Gapwise anything about your workspaces, goals, or external knowledge..."
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-500"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -1040,7 +1044,7 @@ export function AskGapswise({
             <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
               <div>
                 <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">
-                  {researchAction.mode === 'save_as_context' ? 'User Context' : researchAction.mode === 'use_as_decision' ? 'Project Decision' : researchAction.mode === 'use_as_answer' ? 'Answer Question' : 'Cited Web Research'}
+                  {researchAction.mode === 'save_as_context' ? 'User Context' : researchAction.mode === 'use_as_decision' ? 'Workspace Decision' : researchAction.mode === 'use_as_answer' ? 'Answer Question' : 'Cited Web Research'}
                 </p>
                 <h2 id="ask-action-title" className="mt-1 text-lg font-bold text-slate-100">
                   {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Use as my decision' : researchAction.mode === 'use_as_answer' ? 'Use as my answer' : 'Save research'}
@@ -1124,13 +1128,12 @@ export function AskGapswise({
             {researchError && <p className="mt-4 text-sm text-rose-300" role="alert">{researchError}</p>}
 
             <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => setResearchAction(null)} disabled={researchBusy} className="min-h-11 rounded-lg border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 hover:border-slate-500">
+              <Button variant="ghost" size="md" onClick={() => setResearchAction(null)} disabled={researchBusy}>
                 Cancel
-              </button>
-              <button type="button" onClick={() => void submitResearchAction()} disabled={researchBusy || !researchAction.text.trim()} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-extrabold text-slate-950 disabled:opacity-50">
-                {researchBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              </Button>
+              <Button variant="primary" size="md" onClick={() => void submitResearchAction()} disabled={!researchAction.text.trim()} loading={researchBusy}>
                 {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Confirm decision' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
-              </button>
+              </Button>
             </div>
           </section>
         </div>

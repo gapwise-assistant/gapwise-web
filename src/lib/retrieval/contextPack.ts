@@ -34,7 +34,7 @@ function newestFirst(a: ClarityNode, b: ClarityNode): number {
 function activeMemories(memories: DurableMemory[]): DurableMemory[] {
   const now = Date.now();
   return memories.filter((memory) => {
-    if (memory.forgotten_at) return false;
+    if (memory.forgotten_at || memory.status === 'forgotten') return false;
     if (!memory.expires_at) return true;
     return new Date(memory.expires_at).getTime() > now;
   });

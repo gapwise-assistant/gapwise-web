@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 
 describe('NewUserOnboarding', () => {
-  it('offers a clean project start and an explicit demo load', () => {
+  it('offers a clean workspace start and an explicit demo load', () => {
     const html = renderToStaticMarkup(
       <NewUserOnboarding
         isLoadingDemo={false}
@@ -18,8 +18,8 @@ describe('NewUserOnboarding', () => {
       />
     );
 
-    expect(html).toContain('No projects yet');
-    expect(html).toContain('Create project');
+    expect(html).toContain('No workspaces yet');
+    expect(html).toContain('Create workspace');
     expect(html).toContain('Load demo');
     expect(html).toContain('Career demo');
     expect(html).toContain('Voluntary demo');

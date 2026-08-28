@@ -10,6 +10,7 @@ import type { MaterializedProjectSnapshot, ProjectSnapshotSummary } from '@/type
 import { ProjectSnapshotModal } from '@/components/ProjectSnapshotModal';
 import { boundedId } from '@/lib/ids/boundedId';
 import { formatDateHeading, formatDateTime } from '@/lib/datetime/displayDateTime';
+import { workspaceCopy } from '@/lib/ui/workspaceCopy';
 
 interface ProjectHistoryProps {
   project: Project;
@@ -60,8 +61,8 @@ function displayOnlyProjectStartedEvent(project: Project): ProjectHistoryEvent {
     projectId: project.id,
     createdAt: project.created_at,
     type: 'project_started',
-    title: 'Project started',
-    summary: 'Created this project with its initial goal.',
+    title: 'Workspace started',
+    summary: 'Created this workspace with its initial goal.',
   };
 }
 
@@ -143,7 +144,7 @@ export function HistoryActionsMenu({
 
   const items = [
     ...(hasSnapshot && onOpenSnapshot
-      ? [{ label: 'Open project at this moment', onSelect: onOpenSnapshot }]
+      ? [{ label: 'Open workspace at this moment', onSelect: onOpenSnapshot }]
       : []),
     ...(hasSource && onOpenSource ? [{ label: 'Open source', onSelect: onOpenSource }] : []),
   ];
@@ -270,17 +271,19 @@ export function HistoryEventCard({
   const hasSnapshotAction = Boolean(snapshot && onViewSnapshot);
   const hasSourceAction = Boolean(source && event.sourceId && onNavigateToSource);
   const hasHistoryActions = hasSnapshotAction || hasSourceAction || snapshotsLoading;
+  const displayTitle = workspaceCopy(event.title);
+  const displaySummary = event.summary ? workspaceCopy(compactSummary(event.summary)) : null;
   const disclosureLabel = expanded
-    ? `Hide details for ${event.title}`
-    : `Show details for ${event.title}`;
+    ? `Hide details for ${displayTitle}`
+    : `Show details for ${displayTitle}`;
 
   return (
     <article className={`relative rounded-xl border bg-slate-900/80 p-4 sm:p-5 ${event.type === 'project_started' ? 'border-emerald-800/80' : 'border-slate-800'}`}>
       <span className={`absolute -left-[1.56rem] top-5 h-3 w-3 rounded-full border-2 bg-slate-950 ${event.type === 'project_started' ? 'border-emerald-400' : 'border-cyan-400'}`} aria-hidden="true" />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
-          {event.type === 'project_started' && <span className="mb-1 inline-flex rounded-full border border-emerald-700/80 bg-emerald-950/50 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-emerald-300">Project start</span>}
-          <h3 className="text-sm font-extrabold text-slate-100">{event.title}</h3>
+          {event.type === 'project_started' && <span className="mb-1 inline-flex rounded-full border border-emerald-700/80 bg-emerald-950/50 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-emerald-300">Workspace start</span>}
+          <h3 className="text-sm font-extrabold text-slate-100">{displayTitle}</h3>
           <time dateTime={event.createdAt} className="mt-1 block text-xs font-medium text-slate-500">{formatDateTime(event.createdAt)}</time>
           {source && <p className="mt-1 text-xs font-semibold text-cyan-300">{source}</p>}
         </div>
@@ -305,11 +308,11 @@ export function HistoryEventCard({
           aria-label={disclosureLabel}
           className="mt-2 flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs leading-relaxed text-slate-500 transition-colors hover:bg-slate-800/60 hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
         >
-          <span className="min-w-0">{event.summary ? compactSummary(event.summary) : 'See what changed'}</span>
+          <span className="min-w-0">{displaySummary ?? 'See what changed'}</span>
           <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
         </button>
       ) : event.summary ? (
-        <p className="mt-2 text-xs leading-relaxed text-slate-500">{compactSummary(event.summary)}</p>
+        <p className="mt-2 text-xs leading-relaxed text-slate-500">{displaySummary}</p>
       ) : null}
 
       {expanded && (
@@ -442,7 +445,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) throw new Error('Project history snapshots unavailable');
+        if (!response.ok) throw new Error('Workspace history snapshots unavailable');
         return response.json() as Promise<{ snapshots?: ProjectSnapshotSummary[] }>;
       })
       .then((body) => {
@@ -457,7 +460,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         setSnapshots([]);
         setSnapshotsProjectId(project.id);
         setSnapshotsLoading(false);
-        setSnapshotIndexError('Historical project actions are temporarily unavailable.');
+        setSnapshotIndexError('Historical workspace actions are temporarily unavailable.');
       });
     return () => {
       active = false;
@@ -535,11 +538,11 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         body: JSON.stringify({ userId, clientRequestId: branchRequestId }),
       });
       const body = await response.json().catch(() => ({})) as { project?: Project; error?: string };
-      if (!response.ok || !body.project) throw new Error(body.error ?? 'The project could not be created from this moment.');
+      if (!response.ok || !body.project) throw new Error(body.error ?? 'The workspace could not be created from this moment.');
       closeSnapshot();
       onProjectBranched?.(body.project);
     } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'The project could not be created from this moment.');
+      setSnapshotError(error instanceof Error ? error.message : 'The workspace could not be created from this moment.');
     } finally {
       setBranchingSnapshotId(null);
     }
@@ -556,7 +559,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
   if (events.length === 0) {
     return (
       <section className="mx-auto max-w-3xl rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center">
-        <h2 className="text-lg font-extrabold text-slate-100">No project history yet.</h2>
+        <h2 className="text-lg font-extrabold text-slate-100">No workspace history yet.</h2>
         <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-500">
           Important changes will appear here as you add context, resolve gaps, and make decisions.
         </p>
@@ -565,11 +568,11 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
   }
 
   return (
-    <section className="mx-auto max-w-3xl space-y-5" aria-label="Project history">
+    <section className="mx-auto max-w-3xl space-y-5" aria-label="Workspace history">
       <div>
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">PROJECT HISTORY</p>
-        <h2 className="mt-2 text-xl font-extrabold text-slate-100">How this project got here</h2>
-        <p className="mt-1 text-sm text-slate-400">Meaningful changes in the project understanding, decisions, and priorities.</p>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">WORKSPACE HISTORY</p>
+        <h2 className="mt-2 text-xl font-extrabold text-slate-100">How this workspace got here</h2>
+        <p className="mt-1 text-sm text-slate-400">Meaningful changes in the workspace understanding, decisions, and priorities.</p>
         {projectSnapshotsLoading && (
           <div className="mt-3" role="status" aria-label="Loading historical actions">
             <div className="h-px w-full animate-pulse bg-slate-700/80" />
@@ -578,7 +581,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
         )}
         {snapshotIndexError && (
           <p role="status" className="mt-3 text-xs leading-relaxed text-amber-300">
-            Historical project actions are temporarily unavailable.<br />
+            Historical workspace actions are temporarily unavailable.<br />
             The timeline details are still available.
           </p>
         )}

@@ -1,6 +1,6 @@
 import { rankGaps } from '@/lib/tools/graphTools';
 import type { ContextPack, DurableMemory } from '@/types/contextPack';
-import type { ClarityNode, Project } from '@/types/clarity';
+import type { ClarityNode, Project, UserMemoryProfile } from '@/types/clarity';
 import { gapAgentOutputSchema, type GapAgentOutput } from '@/lib/agents/schemas';
 import {
   GAP_CONTRACT_VERSION,
@@ -18,6 +18,7 @@ export interface GapAssessmentV1Input {
   project: Project;
   contextPack: ContextPack;
   memories: DurableMemory[];
+  profile?: UserMemoryProfile;
 }
 
 interface ScoredCandidate {
@@ -279,7 +280,7 @@ function decisionChangeCategory(
  * candidate scaffold sent to the live ADK Gap Agent.
  */
 export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapAssessmentV1 {
-  const rankedGaps = rankGaps(input.project);
+  const rankedGaps = rankGaps(input.project, input.profile);
   const currentGaps = new Map(rankedGaps.map((gap) => [gap.node_id, gap]));
   const seenQuestions = new Set<string>();
   const scored: ScoredCandidate[] = candidateNodes(input.project, input.contextPack).map((node) => {
@@ -378,11 +379,12 @@ export function assessGapsV1Deterministically(input: GapAssessmentV1Input): GapA
 export function gapAgentOutputFromAssessment(
   project: Project,
   assessment: GapAssessmentV1,
+  profile?: UserMemoryProfile,
 ): GapAgentOutput {
   const selected = assessment.candidates.find((candidate) => candidate.gapId === assessment.selectedGapId);
   const selectedNodeId = selected?.sourceUnknownNodeIds[0] ?? null;
   const ranked = selectedNodeId
-    ? rankGaps(project).find((candidate) => candidate.node_id === selectedNodeId)
+    ? rankGaps(project, profile).find((candidate) => candidate.node_id === selectedNodeId)
     : null;
   const retrievalAnswered = assessment.candidates.length > 0
     && assessment.selectedGapId === null

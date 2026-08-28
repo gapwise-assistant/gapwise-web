@@ -5,6 +5,7 @@ import { Check, MoreHorizontal } from 'lucide-react';
 import type { AttentionCandidate } from '@/types/attention';
 import type { TodayQuestion } from '@/lib/today/sections';
 import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
+import { Button } from '@/components/ui/Button';
 
 export interface OpenQuestionRowItem {
   id: string;
@@ -62,7 +63,7 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
     closeOpenMenus();
     setMenuOpen(true);
   };
-  const displayTitle = item.question.question;
+  const displayTitle = item.question.presentationTitle ?? item.question.question;
   const displaySummary = item.question.presentationSummary || item.context;
 
   return (
@@ -81,13 +82,13 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
+          <Button
+            variant={item.answered ? 'secondary' : 'primary'}
+            size="sm"
             onClick={() => onAnswer(item.question)}
-            className={`inline-flex h-7 min-h-7 items-center rounded-md border px-2 text-[10px] font-semibold transition-colors sm:min-h-0 ${item.answered ? 'border-slate-700 bg-slate-800 text-slate-300 hover:text-slate-100' : 'border-teal-700/80 bg-teal-950/30 text-teal-200 hover:border-teal-500 hover:bg-teal-900/40 hover:text-teal-100'}`}
           >
             {item.answered ? 'Edit' : 'Resolve'}
-          </button>
+          </Button>
           {overflowLabels.length > 0 && (
             <div ref={menuRef} className="relative">
               <button

@@ -1,8 +1,9 @@
 'use client';
 
 import React, { FormEvent, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, ChevronRight, FileText, HelpCircle, Loader2, Map, X } from 'lucide-react';
+import { CheckCircle2, ChevronRight, FileText, HelpCircle, Map, X } from 'lucide-react';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { Button } from '@/components/ui/Button';
 import type { QuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 
 export interface AnswerQuestionDecisionOption {
@@ -194,7 +195,7 @@ export function AnswerQuestionModal({
               </div>
             </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={onClose} className="rounded-lg bg-emerald-400 px-4 py-2 text-xs font-bold text-slate-950">Done</button>
+              <Button variant="primary" onClick={onClose}>Done</Button>
             </div>
           </div>
         ) : (
@@ -234,7 +235,7 @@ export function AnswerQuestionModal({
                         </span>
                       </label>
                     ))}
-                    {selectedOption && <button type="button" onClick={() => setSimulationOptionId(selectedOption.id)} className="rounded-lg border border-cyan-800 px-3 py-2 text-xs font-bold text-cyan-200 hover:border-cyan-600">Simulate on Decision Map</button>}
+                    {selectedOption && <Button variant="secondary" onClick={() => setSimulationOptionId(selectedOption.id)}>Simulate on Decision Map</Button>}
                     {simulatedOption && <div className="rounded-lg border border-indigo-800/70 bg-indigo-950/20 p-3" role="status"><p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-indigo-300">Decision Map preview</p><p className="mt-1 text-xs font-semibold text-slate-200">{target.decisionTitle ?? 'The related decision'} would become: {simulatedOption.text}</p><p className="mt-1 text-[11px] text-indigo-200">Selected path: {simulatedOption.label}</p><p className="mt-2 text-[11px] text-slate-500">This is a simulation only; your decision map has not been changed.</p></div>}
                   </div>
                 </AccordionSection>
@@ -281,9 +282,13 @@ export function AnswerQuestionModal({
 
             {target.nodeId && onViewDecisionMap && (
               <div className="flex justify-end">
-                <button type="button" onClick={() => { onClose(); onViewDecisionMap(target.nodeId as string); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-200">
-                  <Map className="h-3.5 w-3.5" /> View in Decision Map
-                </button>
+                <Button
+                  variant="ghost"
+                  onClick={() => { onClose(); onViewDecisionMap(target.nodeId as string); }}
+                  icon={<Map className="h-3.5 w-3.5" aria-hidden="true" />}
+                >
+                  View in Decision Map
+                </Button>
               </div>
             )}
 
@@ -301,16 +306,15 @@ export function AnswerQuestionModal({
             </section>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {onDontKnow && <button type="button" onClick={onDontKnow} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200"><HelpCircle className="h-3.5 w-3.5" /> I don't know yet</button>}
+              {onDontKnow && <Button variant="ghost" onClick={onDontKnow} icon={<HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />}>I don&apos;t know yet</Button>}
             </div>
 
             {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
 
             <div className="flex justify-end border-t border-slate-800 pt-4">
-              <button type="submit" disabled={!answer.trim() || isSaving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
-                  {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Save answer
-              </button>
+              <Button type="submit" variant="primary" loading={isSaving} disabled={!answer.trim()}>
+                Save answer
+              </Button>
             </div>
           </form>
         )}

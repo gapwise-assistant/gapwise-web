@@ -6,7 +6,7 @@ import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelPolicy } from '@/lib/agents/modelPolicy';
-import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { evaluateGapRuntime, getGapAgentRuntimeMode, type GapRuntimeResult } from '@/lib/agents/gapRuntime';
 import { rankGaps } from '@/lib/tools/graphTools';
 import { runAttentionAgent } from '@/lib/agents/attentionAgent';
@@ -15,6 +15,7 @@ import { gapAgentOutputSchema, validateStructuredOutput } from '@/lib/agents/sch
 import { gapAgentOutputFromAssessment } from '@/lib/agents/gapAssessmentV1';
 import type { AgentTurnResult } from '@/lib/agents/orchestrator';
 import { decisionValueForTrace } from '@/lib/observability/decisionValueTrace';
+import type { UserMemoryProfile } from '@/types/clarity';
 
 function traceAgentConfigs(gapRuntime: GapRuntimeResult) {
   const policy = getAgentModelPolicy();
@@ -29,16 +30,20 @@ function traceAgentConfigs(gapRuntime: GapRuntimeResult) {
   }));
 }
 
-function applyLiveGapSelection(result: AgentTurnResult, runtime: GapRuntimeResult): void {
+function applyLiveGapSelection(
+  result: AgentTurnResult,
+  runtime: GapRuntimeResult,
+  profile: UserMemoryProfile,
+): void {
   if (runtime.mode !== 'live' || runtime.fallbackUsed) return;
-  const ranked = rankGaps(result.project);
+  const ranked = rankGaps(result.project, profile);
   const selected = runtime.effectiveGapNodeId
     ? ranked.find((candidate) => candidate.node_id === runtime.effectiveGapNodeId) ?? null
     : null;
   if (selected && runtime.effectiveGuidance) selected.guidance = runtime.effectiveGuidance;
   result.project.active_question = selected;
   const gapOutput = runtime.agentAssessment
-    ? gapAgentOutputFromAssessment(result.project, runtime.agentAssessment)
+    ? gapAgentOutputFromAssessment(result.project, runtime.agentAssessment, profile)
     : validateStructuredOutput(gapAgentOutputSchema, {
       selectedGapNodeId: selected?.node_id ?? null,
       question: selected?.question ?? null,
@@ -46,8 +51,8 @@ function applyLiveGapSelection(result: AgentTurnResult, runtime: GapRuntimeResul
       retrievalAnswered: false,
       reasons: ['No validated live Gap Agent assessment was available.'],
     });
-  const attention = runAttentionAgent(result.project);
-  result.partner = runPartnerAgent(result.project, DEFAULT_USER_PROFILE, gapOutput, attention);
+  const attention = runAttentionAgent(result.project, profile);
+  result.partner = runPartnerAgent(result.project, profile, gapOutput, attention);
 }
 
 export const runtime = 'nodejs';
@@ -68,9 +73,10 @@ export async function POST(request: Request) {
     if (!input) throw new StorageError('Missing input.', 'VALIDATION_ERROR');
 
     const project = await loadProject(userId);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
     let durableMemories: Awaited<ReturnType<typeof loadDurableMemories>> = [];
     try {
-      durableMemories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);
+      durableMemories = await loadDurableMemories(userId, profile);
     } catch {
       // A memory-provider outage must not break the existing graph turn.
     }
@@ -78,7 +84,7 @@ export async function POST(request: Request) {
       userId,
       input,
       project,
-      profile: DEFAULT_USER_PROFILE,
+      profile,
       durableMemories,
       applyGraphUpdates: body.applyGraphUpdates ?? false,
     });
@@ -87,9 +93,10 @@ export async function POST(request: Request) {
       project: result.project,
       contextPack: result.contextPack,
       memories: durableMemories,
+      profile,
       mode: getGapAgentRuntimeMode(),
     });
-    applyLiveGapSelection(result, gapRuntime);
+    applyLiveGapSelection(result, gapRuntime, profile);
     const { observability, ...responseResult } = result;
 
     if (gapRuntime.metadata) {

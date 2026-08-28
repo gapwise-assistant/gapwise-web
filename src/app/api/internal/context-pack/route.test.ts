@@ -6,6 +6,7 @@ import { POST } from './route';
 vi.mock('@/lib/storage', () => ({
   loadProjectForScope: vi.fn(),
   getStorageProvider: vi.fn(() => ({
+    getUserMemoryProfile: vi.fn(async () => null),
     getMemories: vi.fn(async () => []),
     replaceMemories: vi.fn(async () => {}),
   })),

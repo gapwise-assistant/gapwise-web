@@ -60,7 +60,7 @@ async function assertTargetQuestion(userId: string, projectId: string | undefine
 async function loadDecisionTarget(userId: string, projectId: string | undefined, decisionId: string): Promise<{ project: Awaited<ReturnType<typeof loadGeneralContext>>; isGeneral: boolean }> {
   if (projectId && projectId !== GENERAL_CONTEXT_ID) {
     const project = (await listProjects(userId)).find((candidate) => candidate.id === projectId);
-    if (!project) throw new StorageError('The selected Ask project does not exist.', 'VALIDATION_ERROR');
+    if (!project) throw new StorageError('The selected Ask workspace does not exist.', 'VALIDATION_ERROR');
     return { project, isGeneral: false };
   }
   return { project: await loadGeneralContext(userId), isGeneral: true };
@@ -158,7 +158,7 @@ export async function POST(request: Request) {
       candidate.id === body.assistantMessageId && candidate.chatId === body.chatId && candidate.role === 'assistant'
     );
     if (!chat || !assistantMessage) throw new StorageError('The cited Ask response could not be found.', 'PERMISSION_DENIED');
-    if (chat.projectId !== body.projectId) throw new StorageError('The Ask response is outside this project.', 'PERMISSION_DENIED');
+    if (chat.projectId !== body.projectId) throw new StorageError('The Ask response is outside this workspace.', 'PERMISSION_DENIED');
 
     const isQuestionAction = body.action === 'use_as_answer';
     const isDecisionAction = body.action === 'use_as_decision';

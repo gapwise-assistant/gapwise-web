@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadProjectForScope } from '@/lib/storage';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
@@ -51,11 +52,14 @@ export async function POST(request: Request) {
   }
 
   const { project, scope } = await loadProjectForScope(userId, parsed.data.projectId);
+  const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+  const durableMemories = await loadDurableMemories(userId, profile);
   const contextPack = await buildContextPackForUser({
     userId,
     query: parsed.data.query,
     project,
-    profile: DEFAULT_USER_PROFILE,
+    profile,
+    durableMemories,
     scope,
     includeBroadContext: parsed.data.includeBroadContext,
     excludeMessageId: parsed.data.excludeMessageId,

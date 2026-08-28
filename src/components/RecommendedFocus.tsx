@@ -3,6 +3,7 @@
 import React from 'react';
 import { ArrowRight, GitBranch, Target } from 'lucide-react';
 import type { GapGuidance } from '@/types/clarity';
+import { Button } from '@/components/ui/Button';
 
 interface RecommendedFocusProps {
   guidance: GapGuidance;
@@ -26,22 +27,19 @@ export function RecommendedFocus({ guidance, onResolve, onDecide, onViewDecision
         {(onResolve || onDecide || onViewDecisionMap) && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {onResolve && (
-              <button type="button" onClick={onResolve} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal-700/80 bg-teal-950/40 px-2.5 text-xs font-semibold text-teal-100 hover:border-teal-500 hover:bg-teal-900/50">
+              <Button variant="primary" onClick={onResolve} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
                 Resolve question
-                <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
+              </Button>
             )}
             {onDecide && (
-              <button type="button" onClick={onDecide} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal-700/80 bg-teal-950/40 px-2.5 text-xs font-semibold text-teal-100 hover:border-teal-500 hover:bg-teal-900/50">
+              <Button variant="primary" onClick={onDecide} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
                 Decide
-                <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
+              </Button>
             )}
             {onViewDecisionMap && (
-              <button type="button" onClick={onViewDecisionMap} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-400 hover:border-slate-600 hover:text-slate-200">
-                <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
+              <Button variant="ghost" onClick={onViewDecisionMap} icon={<GitBranch className="h-3.5 w-3.5" aria-hidden="true" />}>
                 View in Decision Map
-              </button>
+              </Button>
             )}
           </div>
         )}

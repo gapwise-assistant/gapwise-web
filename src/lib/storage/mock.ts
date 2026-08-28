@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { Project } from '@/types/clarity';
+import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -39,6 +39,7 @@ interface MockDatabase {
     ProjectCollections & {
       activeProjectId?: string;
       appScope?: AppScope;
+      profile?: UserMemoryProfile;
       feedback: FirestoreFeedback[];
       events: FirestoreEvent[];
       memories: Array<DurableMemory & { userId: string }>;
@@ -65,6 +66,7 @@ const EMPTY_USER = {
   conversations: [],
   activeProjectId: undefined,
   appScope: undefined,
+  profile: undefined,
   feedback: [],
   events: [],
   memories: [],
@@ -435,6 +437,18 @@ export class MockStorageProvider implements StorageProvider {
     await this.writeDb(db);
   }
 
+  async getUserMemoryProfile(userId: string): Promise<UserMemoryProfile | null> {
+    return (await this.getUser(userId)).profile ?? null;
+  }
+
+  async saveUserMemoryProfile(userId: string, profile: UserMemoryProfile): Promise<void> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    user.profile = { ...profile };
+    db.users[userId] = user;
+    await this.writeDb(db);
+  }
+
   async logEvent(userId: string, event: FirestoreEvent): Promise<void> {
     await this.upsert(userId, 'events', { ...event, userId });
   }
@@ -449,6 +463,7 @@ export class MockStorageProvider implements StorageProvider {
       conversations: [],
       activeProjectId: undefined,
       appScope: undefined,
+      profile: undefined,
       feedback: [],
       events: [],
       memories: [],
@@ -468,7 +483,7 @@ export class MockStorageProvider implements StorageProvider {
   async resetDemoData(userId: string): Promise<void> {
     const demo = createGoldenDemoProject();
     await this.saveProject(userId, demo);
-    await this.setAppScope(userId, EVERYTHING_SCOPE);
+    await this.setAppScope(userId, { type: 'project', projectId: demo.id });
   }
 
   private async getUser(userId: string): Promise<MockDatabase['users'][string]> {
@@ -559,7 +574,7 @@ export class MockStorageProvider implements StorageProvider {
     return {
       ...memory,
       userId,
-      status: memory.forgotten_at ? 'forgotten' : 'active',
+      status: memory.forgotten_at || memory.status === 'forgotten' ? 'forgotten' : 'active',
       createdAt: memory.created_at,
       updatedAt: memory.updated_at,
       lastConfirmedAt: memory.last_confirmed_at,

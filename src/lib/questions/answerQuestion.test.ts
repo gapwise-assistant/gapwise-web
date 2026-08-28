@@ -9,6 +9,9 @@ vi.mock('@/lib/storage', () => ({
   loadGeneralContext: vi.fn(),
   saveProject: vi.fn(),
   saveGeneralContext: vi.fn(),
+  getStorageProvider: vi.fn(() => ({
+    getUserMemoryProfile: vi.fn(async () => null),
+  })),
 }));
 
 describe('answerQuestion', () => {

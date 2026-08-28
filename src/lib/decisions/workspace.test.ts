@@ -79,6 +79,38 @@ describe('decision workspace', () => {
     expect(decisionQuestionForDisplay(updated, decision!)).toBe('Build Gapwise: Find the question that unlocks the next decision');
   });
 
+  it('prefers the recorded outcome and updates the same decision history entry when edited', () => {
+    const project = createGoldenDemoProject();
+    const decision = project.nodes.find((node) => node.id === 'node_decision_track')!;
+    decision.decision_outcome = 'Build the first workflow.';
+    project.history = [{
+      question: decision.text,
+      answer: 'Build the first workflow.',
+      timestamp: '2026-08-20T10:00:00.000Z',
+      graph_diff_summary: 'Decision confirmed.',
+      nodeId: decision.id,
+      projectId: project.id,
+    }];
+
+    const updated = confirmDecision(project, {
+      decisionNodeId: decision.id,
+      customDecision: 'Build the focused partner workflow.',
+      historyTimestamp: '2026-08-20T10:00:00.000Z',
+    });
+
+    expect(updated.nodes.find((node) => node.id === decision.id)).toMatchObject({
+      text: decision.text,
+      decision_outcome: 'Build the focused partner workflow.',
+      status: 'RESOLVED',
+    });
+    expect(updated.history).toHaveLength(1);
+    expect(updated.history[0]).toMatchObject({
+      nodeId: decision.id,
+      projectId: project.id,
+      answer: 'Build the focused partner workflow.',
+    });
+  });
+
   it('closes a NEXT_ACTION whose explicitly linked decision is confirmed', () => {
     const project = createGoldenDemoProject();
     const decision = project.nodes.find((node) => node.id === 'node_decision_track')!;

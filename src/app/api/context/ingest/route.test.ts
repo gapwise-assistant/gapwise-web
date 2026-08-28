@@ -11,6 +11,9 @@ vi.mock('@/lib/context/contextAnalysis', () => ({
   processContextSource: vi.fn(),
 }));
 vi.mock('@/lib/storage', () => ({
+  getStorageProvider: vi.fn(() => ({
+    getUserMemoryProfile: vi.fn().mockResolvedValue(null),
+  })),
   listProjects: vi.fn(),
   loadGeneralContext: vi.fn(),
   saveGeneralContext: vi.fn(),

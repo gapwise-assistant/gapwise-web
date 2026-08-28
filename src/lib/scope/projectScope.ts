@@ -1,5 +1,5 @@
 import { Project } from '@/types/clarity';
-import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { AppScope, WorkspaceScope } from '@/types/scope';
 import { relevanceScore } from '@/lib/retrieval/relevance';
 import { projectForReasoning } from '@/lib/context/sourceState';
 
@@ -58,19 +58,35 @@ export function mergeProjectsForEverything(projects: Project[], generalContext?:
   };
 }
 
-export function resolveScope(scope: AppScope | null | undefined, projects: Project[]): AppScope {
-  if (scope?.type === 'project' && projects.some((project) => project.id === scope.projectId && project.status !== 'archived')) {
-    return scope;
+export function resolveScope(
+  scope: AppScope | null | undefined,
+  projects: Project[],
+  preferredProjectId?: string | null,
+): WorkspaceScope | null {
+  const activeProjects = projects.filter((project) => project.status !== 'archived');
+  const preferredIds = [
+    scope?.type === 'project' ? scope.projectId : undefined,
+    preferredProjectId ?? undefined,
+  ].filter((id): id is string => Boolean(id));
+
+  for (const projectId of preferredIds) {
+    const project = activeProjects.find((candidate) => candidate.id === projectId);
+    if (project) return { type: 'project', projectId: project.id };
   }
-  return EVERYTHING_SCOPE;
+
+  const firstActiveProject = activeProjects[0];
+  return firstActiveProject
+    ? { type: 'project', projectId: firstActiveProject.id }
+    : null;
 }
 
-export function projectForScope(scope: AppScope, projects: Project[], generalContext?: Project): Project {
-  if (scope.type === 'project') {
+export function projectForScope(scope: AppScope | null | undefined, projects: Project[], generalContext?: Project): Project {
+  if (scope?.type === 'project') {
     const selected = projects.find((project) => project.id === scope.projectId);
     if (selected) return selected;
   }
-  return mergeProjectsForEverything(projects, generalContext);
+  if (scope?.type === 'everything') return mergeProjectsForEverything(projects, generalContext);
+  return generalContext ?? emptyGeneralContext();
 }
 
 export function contextTargetForScope(

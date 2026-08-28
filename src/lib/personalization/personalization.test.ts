@@ -4,10 +4,32 @@ import { generateDailyBrief, clearBriefStoreForTests } from '@/lib/attention/gen
 import { createDurableMemory } from '@/lib/memory/policy';
 import { applyCorrectionToMemories, createFeedbackEvent } from '@/lib/personalization/applyFeedback';
 import { runPartnerAgent } from '@/lib/agents/partnerAgent';
+import { buildPromptProfile } from '@/lib/personalization/promptProfile';
 import { AttentionAgentOutput, GapAgentOutput } from '@/lib/agents/schemas';
 
 describe('feedback-driven personalization', () => {
   beforeEach(() => clearBriefStoreForTests());
+
+  it('builds different prompt behavior from saved preferences and excludes forgotten memories', () => {
+    const memory = createDurableMemory('Remember that I prefer decisions supported by measurements.')!;
+    const forgottenMemory = createDurableMemory('Remember that I keep archived project notes.')!;
+    const forgotten = { ...forgottenMemory, status: 'forgotten' as const, forgotten_at: '2026-08-10T12:00:00Z' };
+    const concise = buildPromptProfile(DEFAULT_USER_PROFILE, [memory, forgotten]);
+    const detailed = buildPromptProfile({
+      ...DEFAULT_USER_PROFILE,
+      answer_density: 'detailed',
+      question_frequency: 'high',
+      challenge_level: 'low',
+      evidence_preference: 'strict_data',
+    }, [memory, forgotten]);
+
+    expect(concise.memoryReasons).toEqual([expect.objectContaining({ id: memory.id })]);
+    expect(concise.memoryReasons).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: forgotten.id })]));
+    expect(detailed.answerDensity).not.toBe(concise.answerDensity);
+    expect(detailed.questionPriorityThreshold).not.toBe(concise.questionPriorityThreshold);
+    expect(detailed.challengeInstruction).not.toBe(concise.challengeInstruction);
+    expect(detailed.citationLimit).not.toBe(concise.citationLimit);
+  });
 
   it('priority change from startup growth to financial stability reranks Today', () => {
     const project = createGoldenDemoProject();

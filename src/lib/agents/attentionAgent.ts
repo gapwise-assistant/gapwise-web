@@ -1,4 +1,5 @@
-import { Project } from '@/types/clarity';
+import { Project, UserMemoryProfile } from '@/types/clarity';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import {
   agentNames,
   attentionAgentOutputSchema,
@@ -33,8 +34,11 @@ function scoreRecommendation(gapPriority: number, actionability: number, effort:
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 
-export function runAttentionAgent(project: Project): AttentionAgentOutput {
-  const recommendations: AttentionRecommendation[] = rankGaps(project)
+export function runAttentionAgent(
+  project: Project,
+  profile: UserMemoryProfile = DEFAULT_USER_PROFILE,
+): AttentionAgentOutput {
+  const recommendations: AttentionRecommendation[] = rankGaps(project, profile)
     .slice(0, 5)
     .map((gap, index) => ({
       id: `rec_${gap.node_id}`,

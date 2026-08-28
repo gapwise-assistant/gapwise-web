@@ -221,6 +221,7 @@ export async function generateFocusAssessment(
     userId: contextPack.id || 'focus-assessment',
     project,
     memories: contextPack.userPreferences,
+    profile,
     contextPack,
   }).filter((candidate) => candidate.status === 'active' && candidate.kind !== 'risk');
   const assessments = stored.map((candidate) => fromAttentionCandidate(candidate, project));

@@ -75,7 +75,7 @@ export async function POST(request: Request) {
     return errorResponse(new StorageError('This proposal belongs to another chat.', 'PERMISSION_DENIED'), 403);
   }
   if ((chat.projectId ?? undefined) !== (parsed.data.projectId ?? undefined)) {
-    return errorResponse(new StorageError('This proposal belongs to another project scope.', 'PERMISSION_DENIED'), 403);
+    return errorResponse(new StorageError('This proposal belongs to another workspace scope.', 'PERMISSION_DENIED'), 403);
   }
 
   const storedProposals = normalizeAskContextProposals(message.contextProposals ?? message.proposals);

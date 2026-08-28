@@ -9,6 +9,7 @@ import {
 } from '@/lib/overview/projectOverviewCache';
 import { loadProjectForScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export const runtime = 'nodejs';
 
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json(
-      { error: 'Invalid project overview request.' },
+      { error: 'Invalid workspace overview request.' },
       { status: 400 },
     );
   }
@@ -35,12 +36,15 @@ export async function POST(request: Request) {
       userId,
       parsed.data.projectId,
     );
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const durableMemories = await loadDurableMemories(userId, profile);
 
     const contextPack = await buildContextPackForUser({
       userId,
       query: 'What is the current strategic state of this project?',
       project,
-      profile: DEFAULT_USER_PROFILE,
+      profile,
+      durableMemories,
       scope,
       includeBroadContext: true,
     });
@@ -51,7 +55,7 @@ export async function POST(request: Request) {
         userId,
         project,
         contextPack,
-        DEFAULT_USER_PROFILE,
+        profile,
       );
     } catch {
       // Overview can still be assessed without the tactical Focus input.
@@ -63,6 +67,7 @@ export async function POST(request: Request) {
       project.historyEvents ?? [],
       focusAssessment,
       contextPack,
+      { profile },
     );
 
     return NextResponse.json(result);

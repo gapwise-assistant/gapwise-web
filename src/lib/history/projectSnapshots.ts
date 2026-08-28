@@ -24,6 +24,7 @@ import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { listTraces } from '@/lib/observability/trace';
 import { getStorageProvider } from '@/lib/storage';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { StorageError } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
 import { boundedId } from '@/lib/ids/boundedId';
@@ -425,23 +426,26 @@ function assertBranchRemappingIsUnambiguous(project: Project, ask: MaterializedP
 
 async function persistedAssessments(userId: string, project: Project): Promise<ProjectSnapshotV2['assessments']> {
   const storage = getStorageProvider();
+  const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+  const memories = await storage.getMemories(userId);
   const contextPack = await buildContextPackForUser({
     userId,
     query: 'What is the current strategic state of this project?',
     project,
-    profile: DEFAULT_USER_PROFILE,
+    profile,
+    durableMemories: memories,
     scope: { type: 'project', projectId: project.id },
     includeBroadContext: true,
   }, { listMemories: async () => storage.getMemories(userId) });
-  const focusVersion = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
+  const focusVersion = await focusProjectStateVersion(project, contextPack, profile);
   const focusRecord = await storage.getFocusAssessment(userId, focusAssessmentCacheId(project.id, focusVersion));
   const focus = focusRecord?.assessment ?? null;
-  const overviewVersion = await overviewProjectStateVersion(project, project.historyEvents ?? [], focus, contextPack);
+  const overviewVersion = await overviewProjectStateVersion(project, project.historyEvents ?? [], focus, contextPack, profile);
   const overviewRecord = await storage.getProjectOverviewAssessment(userId, projectOverviewAssessmentCacheId(project.id, overviewVersion));
   const fullBrief = generateDailyBrief({
     userId,
     project,
-    memories: await storage.getMemories(userId),
+    memories,
     contextPack,
     force: false,
   });
@@ -678,7 +682,19 @@ export async function branchProjectFromSnapshot(params: {
   for (const item of ask.research) await storage.saveAskResearch(params.userId, item);
   const focus = materialized.assessments.focus ? remapFocusAssessment(materialized.assessments.focus, remapped.maps) : null;
   const overview = materialized.assessments.overview ? remapOverviewAssessment(materialized.assessments.overview, remapped.maps) : null;
-  const focusVersion = await focusProjectStateVersion(remapped.project);
+  const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
+  const memories = await storage.getMemories(params.userId);
+  const branchContextPack = await buildContextPackForUser({
+    userId: params.userId,
+    query: 'What needs my attention today?',
+    project: remapped.project,
+    profile,
+    durableMemories: memories,
+    scope: { type: 'project', projectId: remapped.project.id },
+    includeBroadContext: true,
+    reasoningMode: 'focus',
+  });
+  const focusVersion = await focusProjectStateVersion(remapped.project, branchContextPack, profile);
   const now = new Date().toISOString();
   await storage.saveFocusAssessment(params.userId, {
     id: focusAssessmentCacheId(remapped.project.id, focusVersion),
@@ -695,11 +711,12 @@ export async function branchProjectFromSnapshot(params: {
       userId: params.userId,
       query: 'What is the current strategic state of this project?',
       project: remapped.project,
-      profile: DEFAULT_USER_PROFILE,
+      profile,
+      durableMemories: memories,
       scope: { type: 'project', projectId: remapped.project.id },
       includeBroadContext: true,
     }, { listMemories: async () => storage.getMemories(params.userId) });
-    const overviewVersion = await overviewProjectStateVersion(remapped.project, remapped.project.historyEvents ?? [], focus, contextPack);
+    const overviewVersion = await overviewProjectStateVersion(remapped.project, remapped.project.historyEvents ?? [], focus, contextPack, profile);
     await storage.saveProjectOverviewAssessment(params.userId, {
       id: projectOverviewAssessmentCacheId(remapped.project.id, overviewVersion),
       userId: params.userId,

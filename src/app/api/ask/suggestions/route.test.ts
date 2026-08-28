@@ -19,6 +19,9 @@ vi.mock('@/lib/storage', () => ({
 
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 const storage = {
+  getUserMemoryProfile: vi.fn(),
+  getMemories: vi.fn(),
+  replaceMemories: vi.fn(),
   getAskSuggestionsCache: vi.fn(),
   saveAskSuggestionsCache: vi.fn(),
 };
@@ -39,6 +42,9 @@ describe('POST /api/ask/suggestions', () => {
     if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
     else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
     vi.mocked(getStorageProvider).mockReturnValue(storage as unknown as StorageProvider);
+    storage.getUserMemoryProfile.mockResolvedValue(null);
+    storage.getMemories.mockResolvedValue([]);
+    storage.replaceMemories.mockResolvedValue(undefined);
     vi.mocked(loadProjectForScope).mockImplementation(async (_userId, projectId) => ({
       project: {
         id: projectId ?? '__everything__',

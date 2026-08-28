@@ -26,6 +26,7 @@ describe('RecommendedFocus', () => {
     expect(html).not.toContain(guidance.nextStep);
     expect(html).not.toContain(guidance.whatCouldChange);
     expect(html).toContain('Resolve question');
+    expect(html).toContain('data-variant="primary"');
     expect(html).toContain('View in Decision Map');
     expect(html).not.toContain('unknown_role_fit');
     expect(html).not.toContain('priority');

@@ -22,7 +22,7 @@ export const DemoLoadingState: React.FC<DemoLoadingStateProps> = ({ label }) => 
         </span>
         <div>
           <p className="text-sm font-bold text-slate-100">Loading {label}</p>
-          <p className="mt-1 text-xs text-slate-400">Replacing project data and refreshing your briefing…</p>
+          <p className="mt-1 text-xs text-slate-400">Replacing workspace data and refreshing your briefing…</p>
         </div>
       </div>
 

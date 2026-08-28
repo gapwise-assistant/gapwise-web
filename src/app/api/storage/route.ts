@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!body.project || typeof body.project !== 'object') {
-      throw new StorageError('Missing project payload.', 'VALIDATION_ERROR');
+      throw new StorageError('Missing workspace payload.', 'VALIDATION_ERROR');
     }
 
     const requestedProject = body.project as Parameters<typeof saveProject>[1];

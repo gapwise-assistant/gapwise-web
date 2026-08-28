@@ -1,4 +1,4 @@
-import { CandidateGap, Project } from '@/types/clarity';
+import { CandidateGap, Project, UserMemoryProfile } from '@/types/clarity';
 import { agentNames, gapAgentOutputSchema, GapAgentOutput, validateStructuredOutput } from '@/lib/agents/schemas';
 import { retrieveRelevantSources } from '@/lib/tools/contextTools';
 import { rankGaps } from '@/lib/tools/graphTools';
@@ -59,8 +59,8 @@ export function assessGapEscalation(project: Project, candidates: CandidateGap[]
   };
 }
 
-export function runGapAgent(project: Project): GapAgentOutput {
-  const [topGap] = rankGaps(project);
+export function runGapAgent(project: Project, profile?: UserMemoryProfile): GapAgentOutput {
+  const [topGap] = rankGaps(project, profile);
   if (!topGap) {
     return validateStructuredOutput(gapAgentOutputSchema, {
       selectedGapNodeId: null,

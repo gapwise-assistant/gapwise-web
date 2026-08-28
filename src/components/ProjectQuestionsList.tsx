@@ -1,19 +1,22 @@
 import { Check, Eye, EyeOff, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ClarityNode } from '@/types/clarity';
-import type { AnsweredQuestion } from '@/lib/questions/history';
+import { resolvedGapMatchesHistory } from '@/lib/questions/history';
+import type { AnsweredQuestion, ResolvedGapRecord } from '@/lib/questions/history';
 import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 
 interface ProjectQuestionsListProps {
   openQuestions: ClarityNode[];
   answeredQuestions: AnsweredQuestion[];
   openDecisions: ClarityNode[];
-  resolvedDecisions: ClarityNode[];
+  resolvedDecisions?: ClarityNode[];
+  resolvedGaps?: ResolvedGapRecord[];
   projectId: string;
   sourceContents?: string[];
   onAnswerQuestion: (node: ClarityNode, intent?: 'confirm' | 'correct') => void;
   onEditAnsweredQuestion: (item: AnsweredQuestion, projectId: string) => void;
   onReviewDecision: (nodeId: string) => void;
+  onOpenResolvedGap?: (record: ResolvedGapRecord) => void;
   initialStatusFilter?: GapStatusFilter;
 }
 
@@ -28,6 +31,7 @@ interface GapRow {
   question?: ClarityNode;
   answeredQuestion?: AnsweredQuestion;
   node?: ClarityNode;
+  resolvedGap?: ResolvedGapRecord;
 }
 
 function rowKey(item: AnsweredQuestion): string {
@@ -64,12 +68,14 @@ export function ProjectQuestionsList({
   openQuestions,
   answeredQuestions,
   openDecisions,
-  resolvedDecisions,
+  resolvedDecisions = [],
+  resolvedGaps = [],
   projectId,
   sourceContents = [],
   onAnswerQuestion,
   onEditAnsweredQuestion,
   onReviewDecision,
+  onOpenResolvedGap,
   initialStatusFilter,
 }: ProjectQuestionsListProps) {
   const [query, setQuery] = useState('');
@@ -80,40 +86,59 @@ export function ProjectQuestionsList({
     if (initialStatusFilter) setStatusFilter(initialStatusFilter);
   }, [initialStatusFilter]);
 
-  const gaps = useMemo<GapRow[]>(() => [
-    ...openQuestions.map((node) => ({
-      id: node.id,
-      text: node.text,
-      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
-      status: 'open' as const,
-      kind: 'question' as const,
-      question: node,
-    })),
-    ...openDecisions.map((node) => ({
-      id: node.id,
-      text: node.text,
-      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
-      status: 'open' as const,
-      kind: 'decision' as const,
-      node,
-    })),
-    ...answeredQuestions.map((item) => ({
-      id: rowKey(item),
-      text: item.question,
-      displayText: normalizeQuestionGrammar(resolveQuestionReferences(item.question, sourceContents.join('\n'))),
-      status: 'resolved' as const,
-      kind: 'question' as const,
-      answeredQuestion: item,
-    })),
-    ...resolvedDecisions.map((node) => ({
-      id: node.id,
-      text: node.text,
-      displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
-      status: 'resolved' as const,
-      kind: 'decision' as const,
-      node,
-    })),
-  ].sort(sortGaps), [answeredQuestions, openDecisions, openQuestions, resolvedDecisions, sourceContents]);
+  const gaps = useMemo<GapRow[]>(() => {
+    const coveredHistory = (item: AnsweredQuestion) => resolvedGaps.some((record) =>
+      resolvedGapMatchesHistory(record, item),
+    );
+    const resolvedHistoryFallback = answeredQuestions
+      .filter((item) => !coveredHistory(item))
+      .map((item) => ({
+        id: rowKey(item),
+        text: item.question,
+        displayText: normalizeQuestionGrammar(resolveQuestionReferences(item.question, sourceContents.join('\n'))),
+        status: 'resolved' as const,
+        kind: 'question' as const,
+        answeredQuestion: item,
+      }));
+    const legacyDecisionFallback = resolvedGaps.length === 0
+      ? resolvedDecisions.map((node) => ({
+        id: node.id,
+        text: node.text,
+        displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+        status: 'resolved' as const,
+        kind: 'decision' as const,
+        node,
+      }))
+      : [];
+    return [
+      ...openQuestions.map((node) => ({
+        id: node.id,
+        text: node.text,
+        displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+        status: 'open' as const,
+        kind: 'question' as const,
+        question: node,
+      })),
+      ...openDecisions.map((node) => ({
+        id: node.id,
+        text: node.text,
+        displayText: normalizeQuestionGrammar(resolveQuestionReferences(node.text, sourceContents.join('\n'))),
+        status: 'open' as const,
+        kind: 'decision' as const,
+        node,
+      })),
+      ...resolvedGaps.map((record) => ({
+        id: `resolved:${record.nodeId}`,
+        text: record.prompt,
+        displayText: normalizeQuestionGrammar(resolveQuestionReferences(record.prompt, sourceContents.join('\n'))),
+        status: 'resolved' as const,
+        kind: record.kind === 'decision' ? 'decision' as const : 'question' as const,
+        resolvedGap: record,
+      })),
+      ...resolvedHistoryFallback,
+      ...legacyDecisionFallback,
+    ].sort(sortGaps);
+  }, [answeredQuestions, openDecisions, openQuestions, resolvedDecisions, resolvedGaps, sourceContents]);
 
   const filteredGaps = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -125,9 +150,13 @@ export function ProjectQuestionsList({
   }, [gaps, hideResolved, query, statusFilter]);
 
   const openGaps = filteredGaps.filter((gap) => gap.status === 'open');
-  const resolvedGaps = filteredGaps.filter((gap) => gap.status === 'resolved');
+  const visibleResolvedGaps = filteredGaps.filter((gap) => gap.status === 'resolved');
 
   const openGap = (gap: GapRow) => {
+    if (gap.resolvedGap && onOpenResolvedGap) {
+      onOpenResolvedGap(gap.resolvedGap);
+      return;
+    }
     if (gap.kind === 'decision' && gap.node) {
       onReviewDecision(gap.node.id);
       return;
@@ -142,9 +171,9 @@ export function ProjectQuestionsList({
   };
 
   const renderSection = (title: string, items: GapRow[], emptyText: string) => (
-    <section aria-labelledby={`project-${title.toLocaleLowerCase()}-gaps-heading`} className="space-y-2">
+    <section aria-labelledby={`workspace-${title.toLocaleLowerCase()}-gaps-heading`} className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <h2 id={`project-${title.toLocaleLowerCase()}-gaps-heading`} className={`text-sm font-extrabold ${title === 'Resolved' ? 'text-slate-500' : 'text-slate-100'}`}>
+        <h2 id={`workspace-${title.toLocaleLowerCase()}-gaps-heading`} className={`text-sm font-extrabold ${title === 'Resolved' ? 'text-slate-500' : 'text-slate-100'}`}>
           {title}
         </h2>
         {title === 'Resolved' && (
@@ -171,7 +200,7 @@ export function ProjectQuestionsList({
     <div className="space-y-5">
       <header>
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">GAPS</p>
-        <h2 className="mt-2 text-xl font-extrabold text-slate-100">Project gaps</h2>
+        <h2 className="mt-2 text-xl font-extrabold text-slate-100">Workspace gaps</h2>
         <p className="mt-1 text-sm text-slate-500">Open uncertainties and resolved items in one place.</p>
       </header>
 
@@ -212,7 +241,7 @@ export function ProjectQuestionsList({
         </button>
       )}
       {statusFilter !== 'resolved' && renderSection('Open', openGaps, 'No open gaps match this view.')}
-      {statusFilter !== 'open' && !hideResolved && renderSection('Resolved', resolvedGaps, 'No resolved gaps match this view.')}
+      {statusFilter !== 'open' && !hideResolved && renderSection('Resolved', visibleResolvedGaps, 'No resolved gaps match this view.')}
     </div>
   );
 }

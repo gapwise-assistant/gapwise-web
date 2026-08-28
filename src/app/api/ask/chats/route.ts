@@ -122,17 +122,17 @@ export async function POST(request: Request) {
     const storage = getStorageProvider();
     const existingChat = (await storage.getAskChats(userId)).find((candidate) => candidate.id === body.chat.id);
     if (body.chat.scopeType === 'project' ? !body.chat.projectId : Boolean(body.chat.projectId)) {
-      throw new StorageError('Ask chat scope and projectId must agree.', 'VALIDATION_ERROR');
+      throw new StorageError('Ask chat scope and workspace ID must agree.', 'VALIDATION_ERROR');
     }
     if (existingChat) {
       if (existingChat.scopeType !== body.chat.scopeType || existingChat.projectId !== body.chat.projectId) {
-        throw new StorageError('The Ask chat is bound to a different project scope.', 'PERMISSION_DENIED');
+      throw new StorageError('The Ask chat is bound to a different workspace scope.', 'PERMISSION_DENIED');
       }
       if (existingChat.adkSessionId && body.chat.adkSessionId && existingChat.adkSessionId !== body.chat.adkSessionId) {
         throw new StorageError('The Ask chat is bound to a different ADK session.', 'PERMISSION_DENIED');
       }
       if (existingChat.target && body.chat.target && (existingChat.target.type !== body.chat.target.type || existingChat.target.id !== body.chat.target.id)) {
-        throw new StorageError('The Ask chat is bound to a different project target.', 'PERMISSION_DENIED');
+      throw new StorageError('The Ask chat is bound to a different workspace target.', 'PERMISSION_DENIED');
       }
     }
     const chat = {

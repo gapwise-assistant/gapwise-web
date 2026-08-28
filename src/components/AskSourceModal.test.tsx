@@ -28,7 +28,7 @@ describe('AskSourceModal', () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain('Source context');
-    expect(html).toContain('Project context');
+    expect(html).toContain('Workspace context');
     expect(html).toContain('The first line of relevant context.');
     expect(html).toContain('The second line stays readable.');
     expect(html).toContain('Why it was used');

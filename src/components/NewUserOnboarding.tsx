@@ -71,7 +71,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
               className="h-auto w-full"
             />
           </div>
-          <h1 className="mt-5 text-2xl font-extrabold">No projects yet</h1>
+          <h1 className="mt-5 text-2xl font-extrabold">No workspaces yet</h1>
           <p className="mt-2 text-sm leading-6 text-slate-400">
             Start with a clean workspace, or load a reusable Gapwise demo into your account.
           </p>
@@ -94,7 +94,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
           className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-cyan-700/70 bg-cyan-500/10 p-4 text-left transition hover:border-cyan-400 hover:bg-cyan-500/15"
         >
           <FolderPlus className="h-5 w-5 text-cyan-300" />
-          <span className="text-sm font-bold text-slate-100">Create project</span>
+          <span className="text-sm font-bold text-slate-100">Create workspace</span>
         </button>
         <button
           type="button"
@@ -168,7 +168,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             type="button"
             onClick={onLoadBakeryJourneyDemo}
             disabled={isLoadingBakeryJourneyDemo}
-            title="Replay the multi-step bakery project journey"
+            title="Replay the multi-step bakery workspace journey"
             className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-emerald-800/80 bg-emerald-950/20 p-4 text-left transition hover:border-emerald-500 hover:bg-emerald-950/30 disabled:cursor-wait disabled:opacity-60"
           >
             <PlayCircle className="h-5 w-5 text-emerald-300" />
@@ -182,7 +182,7 @@ export const NewUserOnboarding: React.FC<NewUserOnboardingProps> = ({
             type="button"
             onClick={onLoadNorthstarPilotDemo}
             disabled={isLoadingNorthstarPilotDemo}
-            title="Replay the evolving Northstar Logistics pilot project"
+            title="Replay the evolving Northstar Logistics pilot workspace"
             className="flex min-h-28 flex-col items-start justify-between rounded-xl border border-violet-800/80 bg-violet-950/20 p-4 text-left transition hover:border-violet-500 hover:bg-violet-950/30 disabled:cursor-wait disabled:opacity-60"
           >
             <PlayCircle className="h-5 w-5 text-violet-300" />

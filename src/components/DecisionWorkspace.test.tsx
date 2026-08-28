@@ -6,9 +6,11 @@ import { createGoldenDemoProject } from '@/lib/demo/seed';
 
 describe('DecisionWorkspace presentation', () => {
   it('keeps the decision review compact and preserves the decision controls', () => {
+    const project = createGoldenDemoProject();
+    project.nodes.find((node) => node.id === 'node_decision_track')!.decision_outcome = 'Build the four-minute persona demo.';
     const html = renderToStaticMarkup(
       <DecisionWorkspace
-        project={createGoldenDemoProject()}
+        project={project}
         targetNodeId="unknown_target_user"
         onClose={vi.fn()}
         onConfirm={vi.fn()}
@@ -28,9 +30,28 @@ describe('DecisionWorkspace presentation', () => {
     expect(html).not.toContain('Needs answer');
     expect(html).toContain('Resolved decision');
     expect(html).toContain('Previous decision');
+    expect(html).toContain('Recorded decision');
+    expect(html).toContain('Build the four-minute persona demo.');
     expect(html).toContain('Edit previous decision');
     expect(html).toContain('Update decision');
+    expect(html).toContain('data-variant="primary"');
     expect(html).toContain('View in Decision Map');
     expect(html).not.toContain('No explicit options are recorded yet');
+  });
+
+  it('does not open a resolved decision with an empty editor when its outcome is missing', () => {
+    const project = createGoldenDemoProject();
+    const html = renderToStaticMarkup(
+      <DecisionWorkspace
+        project={project}
+        targetNodeId="node_decision_track"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('The recorded resolution is unavailable.');
+    expect(html).toContain('Record replacement resolution');
+    expect(html).not.toContain('id="custom-decision"');
   });
 });

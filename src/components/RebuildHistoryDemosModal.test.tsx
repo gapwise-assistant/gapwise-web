@@ -52,7 +52,7 @@ describe('RebuildHistoryDemosModal', () => {
     expect(html).toContain('Creating Riverside…');
     expect(html).toContain('Deleting old data…');
     expect(html).toContain('Creating Harbor…');
-    expect(html).toContain('Preparing project history…');
+    expect(html).toContain('Preparing workspace history…');
     expect(html).toContain('Complete');
   });
 });

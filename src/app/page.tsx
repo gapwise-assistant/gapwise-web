@@ -17,7 +17,7 @@ import type { AskTarget, PendingAskHandoff } from '@/types/ask';
 import { FeedbackEvent } from '@/types/feedback';
 import { DEMO_USER_ID, GOLDEN_DEMO_PROJECT, DEFAULT_USER_PROFILE } from '@/lib/store';
 import { processIdontKnowStrategy } from '@/lib/questions/idontKnowStrategies';
-import { loadMemoriesFromBrowser, memoriesFromProfile, saveMemoriesToBrowser } from '@/lib/memory/store';
+import { memoriesFromProfile } from '@/lib/memory/store';
 import { appendFeedbackEvent, loadFeedbackEvents, saveFeedbackEvents } from '@/lib/personalization/feedbackStore';
 import { createFeedbackEvent } from '@/lib/personalization/applyFeedback';
 import {
@@ -32,7 +32,7 @@ import { BAKERY_DEMO_ID } from '@/lib/demo/bakery';
 import { BAKERY_JOURNEY_DEMO_ID } from '@/lib/demo/bakeryJourney';
 import { NORTHSTAR_PILOT_DEMO_ID } from '@/lib/demo/northstarPilot';
 import type { CreateProjectInput } from '@/lib/projects/createProject';
-import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
+import { AppScope, WorkspaceScope } from '@/types/scope';
 import type { TodayQuestion } from '@/lib/today/sections';
 import { localQuestionPresentation } from '@/lib/today/questionPlans';
 import { emptyGeneralContext, GENERAL_CONTEXT_ID, projectForScope, resolveScope } from '@/lib/scope/projectScope';
@@ -48,20 +48,25 @@ import { DecisionWorkspace } from '@/components/DecisionWorkspace';
 import { AppDestination } from '@/lib/navigation';
 import { buildQuestionWhyExplanation } from '@/lib/questions/whyQuestion';
 import { buildDecisionWorkspace, decisionQuestionForDisplay, findDecisionForNode } from '@/lib/decisions/workspace';
+import type { ResolvedGapRecord } from '@/lib/questions/history';
 import { calculateGapPriority } from '@/lib/prioritization';
 import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 
 type AppTab = AppDestination;
 
-async function loadProjectsFromAPI(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: AppScope }> {
+function workspaceScopeForProject(project: Project): WorkspaceScope {
+  return { type: 'project', projectId: project.id };
+}
+
+async function loadProjectsFromAPI(userId: string): Promise<{ projects: Project[]; activeProjectId: string | null; scope: WorkspaceScope | null }> {
   const res = await authFetch(`/api/projects?userId=${encodeURIComponent(userId)}`);
-  if (!res.ok) throw new Error('Projects API is not available');
+  if (!res.ok) throw new Error('Workspaces API is not available');
   const data = await res.json();
   return {
     projects: data.projects as Project[],
     activeProjectId: typeof data.activeProjectId === 'string' ? data.activeProjectId : null,
-    scope: data.scope as AppScope ?? EVERYTHING_SCOPE,
+    scope: data.scope?.type === 'project' ? data.scope as WorkspaceScope : null,
   };
 }
 
@@ -111,7 +116,7 @@ async function createProjectViaAPI(userId: string, input: CreateProjectInput): P
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? 'Project creation failed.');
+    throw new Error(body.error ?? 'Workspace creation failed.');
   }
   return (await res.json()) as { project: Project; projects: Project[] };
 }
@@ -400,13 +405,13 @@ async function cleanupLocalUserDataViaAPI(): Promise<{
 }
 
 interface ScopePersistenceResult {
-  scope?: AppScope;
+  scope?: WorkspaceScope;
   activeProjectId?: string;
   project?: Project;
   projects?: Project[];
 }
 
-async function persistScopeToAPI(userId: string, scope: AppScope): Promise<ScopePersistenceResult | null> {
+async function persistScopeToAPI(userId: string, scope: WorkspaceScope): Promise<ScopePersistenceResult | null> {
   try {
     const res = await authFetch('/api/projects', {
       method: 'PATCH',
@@ -431,46 +436,38 @@ function reportDemoFailure(label: string, caught: unknown): void {
   });
 }
 
-async function loadMemoriesFromAPI(userId: string, profile: UserMemoryProfile): Promise<DurableMemory[]> {
+async function loadMemorySettingsFromAPI(userId: string): Promise<{ profile: UserMemoryProfile; memories: DurableMemory[] } | null> {
   try {
     const res = await authFetch(`/api/memory?userId=${encodeURIComponent(userId)}`);
-    if (!res.ok) throw new Error('Durable memory API is not available');
+    if (!res.ok) throw new Error(`Memory settings request failed (${res.status})`);
     const data = await res.json();
-    return data.memories as DurableMemory[];
-  } catch {
-    return loadMemoriesFromBrowser(userId, profile);
+    return {
+      profile: { ...DEFAULT_USER_PROFILE, ...(data.profile ?? {}) },
+      memories: Array.isArray(data.memories) ? data.memories as DurableMemory[] : [],
+    };
+  } catch (error) {
+    console.error('[Gapwise settings] Failed to load memory settings', error);
+    return null;
   }
 }
 
-async function persistMemoriesToAPI(userId: string, memories: DurableMemory[]): Promise<boolean> {
+async function persistMemorySettingsToAPI(
+  userId: string,
+  profile: UserMemoryProfile,
+  memories: DurableMemory[],
+): Promise<boolean> {
   try {
     const res = await authFetch('/api/memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, memories }),
+      body: JSON.stringify({ userId, profile, memories }),
     });
-    if (!res.ok) throw new Error('Durable memory API write failed');
+    if (!res.ok) throw new Error(`Memory settings write failed (${res.status})`);
     return true;
-  } catch {
-    saveMemoriesToBrowser(userId, memories);
+  } catch (error) {
+    console.error('[Gapwise settings] Failed to save memory settings', error);
     return false;
   }
-}
-
-function loadProfileFromLocalStorage(userId: string): UserMemoryProfile {
-  if (typeof window === 'undefined') return DEFAULT_USER_PROFILE;
-  const stored = localStorage.getItem(`gapwise_profile_${userId}`);
-  if (!stored) return DEFAULT_USER_PROFILE;
-  try {
-    return { ...DEFAULT_USER_PROFILE, ...JSON.parse(stored) };
-  } catch {
-    return DEFAULT_USER_PROFILE;
-  }
-}
-
-function persistProfileToLocalStorage(userId: string, profile: UserMemoryProfile): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(`gapwise_profile_${userId}`, JSON.stringify(profile));
 }
 
 function clearLegacyProjectBrowserState(userId: string): void {
@@ -504,7 +501,7 @@ export default function Home() {
   const userId = auth.userId ?? DEMO_USER_ID;
   const [project, setProject] = useState<Project>(() => emptyGeneralContext());
   const [projects, setProjects] = useState<Project[]>([]);
-  const [scope, setScope] = useState<AppScope>(EVERYTHING_SCOPE);
+  const [scope, setScope] = useState<WorkspaceScope | null>(null);
   const [projectRefreshVersion, setProjectRefreshVersion] = useState(0);
   const [generalContext, setGeneralContext] = useState<Project>(() => emptyGeneralContext());
   const [profile, setProfile] = useState<UserMemoryProfile>(DEFAULT_USER_PROFILE);
@@ -543,7 +540,12 @@ export default function Home() {
   const [contextEntry, setContextEntry] = useState<ContextEntry | null>(null);
   const [reasoningPathRequest, setReasoningPathRequest] = useState<{ projectId: string; nodeId: string } | null>(null);
   const [gapsNavigationRequest, setGapsNavigationRequest] = useState<{ status: 'resolved'; key: number } | null>(null);
-  const [decisionTarget, setDecisionTarget] = useState<{ projectId: string; nodeId: string } | null>(null);
+  const [decisionTarget, setDecisionTarget] = useState<{
+    projectId: string;
+    nodeId: string;
+    initialOutcome?: string;
+    historyTimestamp?: string;
+  } | null>(null);
   const demoMode = auth.demoMode;
   useEffect(() => {
     setIsLocalhostDeveloper(isLocalhostBrowser());
@@ -586,15 +588,19 @@ export default function Home() {
     if (!auth.isReady || !auth.userId) return;
     setIsLoading(true);
     setStorageMessage('');
-    const loadedProfile = loadProfileFromLocalStorage(userId);
-    setProfile(loadedProfile);
+    let active = true;
     setFeedbackEvents(loadFeedbackEvents(userId));
-    loadMemoriesFromAPI(userId, loadedProfile).then(setMemories);
+    void loadMemorySettingsFromAPI(userId).then((settings) => {
+      if (!active || !settings) return;
+      setProfile(settings.profile);
+      setMemories(settings.memories);
+    });
     Promise.all([loadProjectsFromAPI(userId), loadGeneralContextFromAPI(userId)]).then(([loaded, loadedGeneralContext]) => {
+      if (!active) return;
       const nextProjects = loaded.projects;
-      const nextScope = resolveScope(loaded.scope, nextProjects);
+      const nextScope = resolveScope(loaded.scope, nextProjects, loaded.activeProjectId);
       const selectedProject =
-        (nextScope.type === 'project' ? nextProjects.find((item) => item.id === nextScope.projectId) : undefined) ??
+        (nextScope ? nextProjects.find((item) => item.id === nextScope.projectId) : undefined) ??
         nextProjects.find((item) => item.id === loaded.activeProjectId && item.status !== 'archived') ??
         nextProjects.find((item) => item.status !== 'archived') ??
         nextProjects[0] ??
@@ -608,6 +614,9 @@ export default function Home() {
       console.error('[Gapwise project state load failed]', error);
       setIsLoading(false);
     });
+    return () => {
+      active = false;
+    };
   }, [auth.isReady, auth.userId]);
 
   const scopedProject = useMemo(
@@ -656,13 +665,13 @@ export default function Home() {
       ? nextProjects.find((item) => item.id === preferredProjectId)
       : undefined;
     if (preferredProjectId && !preferredProject) {
-      throw new Error('The newly created project was not returned by persistent storage.');
+      throw new Error('The newly created workspace was not returned by persistent storage.');
     }
     const nextScope = preferredProject
       ? { type: 'project' as const, projectId: preferredProject.id }
-      : resolveScope(loaded.scope, nextProjects);
+      : resolveScope(loaded.scope, nextProjects, loaded.activeProjectId);
     const nextProject = preferredProject
-      ?? (nextScope.type === 'project'
+      ?? (nextScope
         ? nextProjects.find((item) => item.id === nextScope.projectId)
         : undefined)
       ?? nextProjects.find((item) => item.id === loaded.activeProjectId && item.status !== 'archived')
@@ -680,13 +689,13 @@ export default function Home() {
   const handleSelectProject = useCallback(async (projectId: string): Promise<{ success: boolean }> => {
     const selected = projects.find((item) => item.id === projectId);
     if (!selected) {
-      setStorageMessage('The requested project could not be found.');
+      setStorageMessage('The requested workspace could not be found.');
       return { success: false };
     }
     const nextScope: AppScope = { type: 'project', projectId: selected.id };
     const persisted = await persistScopeToAPI(userId, nextScope);
     if (!persisted?.scope || persisted.scope.type !== 'project') {
-      setStorageMessage('Project selection could not be saved to persistent storage.');
+      setStorageMessage('Workspace selection could not be saved to persistent storage.');
       return { success: false };
     }
     if (persisted.projects) setProjects(persisted.projects);
@@ -696,17 +705,12 @@ export default function Home() {
     return { success: true };
   }, [projects, userId]);
 
-  const handleSelectEverything = useCallback(async (): Promise<{ success: boolean }> => {
-    const persisted = await persistScopeToAPI(userId, EVERYTHING_SCOPE);
-    if (!persisted?.scope || persisted.scope.type !== 'everything') {
-      setStorageMessage('Everything selection could not be saved to persistent storage.');
-      return { success: false };
-    }
-    if (persisted.projects) setProjects(persisted.projects);
-    setScope(persisted.scope);
-    setStorageMessage('');
-    return { success: true };
-  }, [userId]);
+  const handleNoActiveWorkspace = useCallback(() => {
+    setScope(null);
+    setProject(emptyGeneralContext());
+    setActiveTab('scope');
+    setProjectFocusKey((current) => current + 1);
+  }, []);
 
   const openResolvedGaps = useCallback(() => {
     setGapsNavigationRequest({ status: 'resolved', key: Date.now() });
@@ -744,7 +748,7 @@ export default function Home() {
       const result = await loadGoldenDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setProjectFocusKey((current) => current + 1);
       setActiveTab('today');
     } catch (caught) {
@@ -760,12 +764,11 @@ export default function Home() {
       const result = await loadCareerConflictDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -793,12 +796,11 @@ export default function Home() {
       const result = await loadHackathonDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -826,12 +828,11 @@ export default function Home() {
       const result = await loadKintaGenDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -859,12 +860,11 @@ export default function Home() {
       const result = await loadBakeryDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -892,12 +892,11 @@ export default function Home() {
       const result = await loadBakeryJourneyDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -925,12 +924,11 @@ export default function Home() {
       const result = await loadNorthstarPilotDemoViaAPI(userId);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories(result.memories);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, result.memories);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, result.memories);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -961,12 +959,11 @@ export default function Home() {
       const result = await loadHarborHotelsCheckpointViaAPI(userId, checkpoint);
       setProjects(result.projects);
       setProject(result.project);
-      setScope(result.scope);
+      setScope(workspaceScopeForProject(result.project));
       setMemories([]);
       setProfile(DEFAULT_USER_PROFILE);
       clearDemoBrowserState(userId);
-      persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-      saveMemoriesToBrowser(userId, []);
+      void persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, []);
       setFeedbackEvents([]);
       saveFeedbackEvents(userId, []);
       setGeneralContext(emptyGeneralContext());
@@ -1008,7 +1005,7 @@ export default function Home() {
       setStorageMessage('');
     } catch (caught) {
       try {
-        await reloadProjectListFromFirestore(scope.type === 'project' ? scope.projectId : undefined);
+        await reloadProjectListFromFirestore(scope?.projectId);
       } catch (reloadError) {
         reportDemoFailure('Harbor history project reload after failure', reloadError);
       }
@@ -1026,7 +1023,7 @@ export default function Home() {
       setStorageMessage('');
     } catch (caught) {
       try {
-        await reloadProjectListFromFirestore(scope.type === 'project' ? scope.projectId : undefined);
+        await reloadProjectListFromFirestore(scope?.projectId);
       } catch (reloadError) {
         reportDemoFailure('Riverside history project reload after failure', reloadError);
       }
@@ -1058,7 +1055,7 @@ export default function Home() {
       setProjects(loaded.projects);
       setProject(emptyGeneralContext());
       setGeneralContext(loadedGeneralContext);
-      setScope(EVERYTHING_SCOPE);
+      setScope(null);
       setMemories([]);
       setFeedbackEvents([]);
       setContextEntry(null);
@@ -1101,13 +1098,12 @@ export default function Home() {
     const seedMemories = memoriesFromProfile(DEFAULT_USER_PROFILE);
     setProject(fresh);
     setProjects([fresh]);
-    setScope(EVERYTHING_SCOPE);
+    setScope(workspaceScopeForProject(fresh));
     setGeneralContext(emptyGeneralContext());
     setProfile(DEFAULT_USER_PROFILE);
     setMemories(seedMemories);
     setFeedbackEvents([]);
-    persistProfileToLocalStorage(userId, DEFAULT_USER_PROFILE);
-    await persistMemoriesToAPI(userId, seedMemories);
+    await persistMemorySettingsToAPI(userId, DEFAULT_USER_PROFILE, seedMemories);
     saveFeedbackEvents(userId, []);
     setActiveTab('today');
   };
@@ -1292,6 +1288,63 @@ export default function Home() {
     });
   }, [generalContext, project, projects]);
 
+  const openResolvedGap = useCallback((record: ResolvedGapRecord) => {
+    const requestedProjectId = record.projectId;
+    const owner = requestedProjectId === GENERAL_CONTEXT_ID
+      ? generalContext
+      : projects.find((candidate) => candidate.id === requestedProjectId)
+        ?? (project.id === requestedProjectId ? project : undefined);
+    const node = owner?.nodes.find((candidate) => candidate.id === record.nodeId);
+
+    if (!owner || !node) {
+      setAnswerTarget(null);
+      setDecisionTarget(null);
+      setAnswerTargetError('The recorded resolution is unavailable.');
+      if (typeof window !== 'undefined') {
+        console.warn('[Resolved gap] recorded resolution unavailable', {
+          projectId: requestedProjectId,
+          nodeId: record.nodeId,
+          kind: record.kind,
+        });
+      }
+      return;
+    }
+
+    setAnswerTargetError('');
+    if (record.kind === 'decision') {
+      setDecisionTarget({
+        projectId: owner.id,
+        nodeId: node.id,
+        initialOutcome: record.resolution,
+        historyTimestamp: record.timestamp,
+      });
+      return;
+    }
+
+    if (!record.resolution.trim()) {
+      setAnswerTarget(null);
+      setDecisionTarget(null);
+      setAnswerTargetError('The recorded resolution is unavailable.');
+      if (typeof window !== 'undefined') {
+        console.warn('[Resolved gap] recorded resolution unavailable', {
+          projectId: requestedProjectId,
+          nodeId: record.nodeId,
+          kind: record.kind,
+        });
+      }
+      return;
+    }
+
+    openAnsweredQuestion({
+      nodeId: node.id,
+      projectId: owner.id,
+      question: record.prompt,
+      answer: record.resolution,
+      timestamp: record.timestamp ?? node.updated_at,
+      graph_diff_summary: '',
+    }, owner.id);
+  }, [generalContext, openAnsweredQuestion, project, projects]);
+
   const reopenAnsweredQuestion = useCallback(async (question: TodayQuestion) => {
     const owner = projects.find((candidate) => candidate.nodes.some((node) => question.sourceNodeIds.includes(node.id)))
       ?? (generalContext.nodes.some((node) => question.sourceNodeIds.includes(node.id)) ? generalContext : undefined);
@@ -1342,7 +1395,7 @@ export default function Home() {
     };
     setAskNewChatPrompt(handoff);
     const selection = isGeneralContext
-      ? await handleSelectEverything()
+      ? { success: Boolean(scope) }
       : await handleSelectProject(ownerProjectId);
     if (!selection.success) {
       setAskNewChatPrompt(null);
@@ -1350,7 +1403,7 @@ export default function Home() {
     }
     setActiveTab('ask');
     return true;
-  }, [handleSelectEverything, handleSelectProject]);
+  }, [handleSelectProject, scope]);
 
   const openDontKnowHelp = useCallback(() => {
     if (!idontKnowGap) return;
@@ -1424,21 +1477,23 @@ export default function Home() {
       setFeedbackEvents((current) => appendFeedbackEvent(userId, current, feedbackEvent));
       const updatedMemories = updateCareerConflictMemories(memories, answer);
       setMemories(updatedMemories);
-      persistMemoriesToAPI(userId, updatedMemories).then((savedToApi) => {
-        setStorageMessage(savedToApi ? '' : 'Saved memory locally. Persistent memory API was unavailable.');
+      persistMemorySettingsToAPI(userId, profile, updatedMemories).then((savedToApi) => {
+        setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; your current view is unchanged.');
       });
     }
-  }, [answerTarget, memories, userId]);
+  }, [answerTarget, memories, profile, userId]);
 
   const handleUpdateProfile = (updated: UserMemoryProfile) => {
     setProfile(updated);
-    persistProfileToLocalStorage(userId, updated);
+    void persistMemorySettingsToAPI(userId, updated, memories).then((savedToApi) => {
+      setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; your current view is unchanged.');
+    });
   };
 
   const handleUpdateMemories = (updated: DurableMemory[]) => {
     setMemories(updated);
-    persistMemoriesToAPI(userId, updated).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Saved memory locally. Persistent memory API was unavailable.');
+    void persistMemorySettingsToAPI(userId, profile, updated).then((savedToApi) => {
+      setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; your current view is unchanged.');
     });
   };
 
@@ -1487,7 +1542,7 @@ export default function Home() {
           <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center animate-pulse">
             <span className="text-white font-bold text-lg">G</span>
           </div>
-          <p className="text-slate-400 text-sm">Loading persistent project state...</p>
+          <p className="text-slate-400 text-sm">Loading persistent workspace state...</p>
         </div>
       </div>
     );
@@ -1495,7 +1550,7 @@ export default function Home() {
 
   // Keep the localhost developer menu available after a cleanup leaves the
   // account empty. Non-local users retain the dedicated onboarding surface.
-  if (!demoMode && projects.length === 0 && !isLocalhostDeveloper) {
+  if (!scope || !projects.some((item) => item.status !== 'archived')) {
     return (
       <>
         <NewUserOnboarding
@@ -1552,7 +1607,6 @@ export default function Home() {
         onCleanupLocalData={isLocalhostDeveloper ? handleOpenCleanupLocalData : undefined}
         isCleaningUpLocalData={isCleaningUpLocalData}
         onSelectProject={handleSelectProject}
-        onSelectEverything={handleSelectEverything}
         onOpenNewProject={() => setIsNewProjectOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         isSettingsOpen={isSettingsOpen}
@@ -1632,10 +1686,11 @@ export default function Home() {
         )}
         {activeTab === 'ask' && (
           <AskGapswise
-            key={`${scope.type === 'project' ? scope.projectId : 'everything'}-${projectFocusKey}`}
+            key={`${scope.projectId}-${projectFocusKey}`}
             userId={userId}
             scope={scope}
-            scopeLabel={scope.type === 'project' ? projectTitlePresentation(project.title).title : 'Everything'}
+            scopeLabel={projectTitlePresentation(project.title).title}
+            profile={profile}
             initialPrompt={askInitialPrompt}
             autoSendInitialPrompt
             onInitialPromptSent={() => setAskInitialPrompt('')}
@@ -1658,7 +1713,6 @@ export default function Home() {
             memories={memories}
             contextEntry={contextEntry ?? undefined}
             onSelectProject={handleSelectProject}
-            onSelectEverything={handleSelectEverything}
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
             onUpdateGeneralContext={(updated) => {
@@ -1670,11 +1724,13 @@ export default function Home() {
             onAnswerQuestion={openGraphQuestion}
             onReviewDecision={openDecisionWorkspace}
             onEditAnsweredQuestion={openAnsweredQuestion}
+            onOpenResolvedGap={openResolvedGap}
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });
             }}
             onViewToday={() => setActiveTab('today')}
             onProjectBranched={handleProjectBranched}
+            onNoActiveWorkspace={handleNoActiveWorkspace}
             gapsNavigationRequest={gapsNavigationRequest}
             onGapsNavigationHandled={() => setGapsNavigationRequest(null)}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
@@ -1740,6 +1796,8 @@ export default function Home() {
         <DecisionWorkspace
           project={decisionProject}
           targetNodeId={decisionTarget.nodeId}
+          initialOutcome={decisionTarget.initialOutcome}
+          historyTimestamp={decisionTarget.historyTimestamp}
           onClose={() => setDecisionTarget(null)}
           onConfirm={saveDecision}
           onStartChat={(prompt, target) => {
@@ -1755,7 +1813,7 @@ export default function Home() {
           onDontKnow={handleDecisionDontKnow}
         />
       )}
-      <TracePanel userId={userId} />
+      {isLocalhostDeveloper && <TracePanel userId={userId} />}
       {isNewProjectOpen && (
         <NewProjectModal
           onCreateProject={async (input) => {

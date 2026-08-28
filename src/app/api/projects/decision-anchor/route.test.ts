@@ -10,6 +10,9 @@ import { POST } from './route';
 vi.mock('@/lib/storage', () => ({
   listProjects: vi.fn(),
   saveProject: vi.fn(),
+  getStorageProvider: vi.fn(() => ({
+    getUserMemoryProfile: vi.fn(async () => null),
+  })),
 }));
 vi.mock('@/lib/agents/gapRuntime', () => ({
   refreshProjectGapRuntime: vi.fn(),

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   saveProject: vi.fn(),
   loadGeneralContext: vi.fn(),
   saveGeneralContext: vi.fn(),
+  getStorageProvider: vi.fn(),
   ingestContextSource: vi.fn(),
   processContextSource: vi.fn(),
   changedProjectNodeIds: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('@/lib/storage', () => ({
   saveProject: mocks.saveProject,
   loadGeneralContext: mocks.loadGeneralContext,
   saveGeneralContext: mocks.saveGeneralContext,
+  getStorageProvider: mocks.getStorageProvider,
 }));
 
 vi.mock('@/lib/context/ingestion', () => ({ ingestContextSource: mocks.ingestContextSource }));
@@ -105,6 +107,9 @@ describe('persistAskProposal relationship completion trace', () => {
     });
     mocks.loadGeneralContext.mockResolvedValue(projectWith());
     mocks.saveGeneralContext.mockResolvedValue(undefined);
+    mocks.getStorageProvider.mockReturnValue({
+      getUserMemoryProfile: vi.fn(async () => null),
+    });
     mocks.processContextSource.mockResolvedValue({ project: storedProject, skipped: false });
     mocks.changedProjectNodeIds.mockReturnValue(['proposal-node']);
     mocks.ingestContextSource.mockImplementation(async (current: Project, input: { sourceId?: string; filename: string; content: string }) =>

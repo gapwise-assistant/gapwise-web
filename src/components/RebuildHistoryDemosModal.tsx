@@ -16,7 +16,7 @@ export type HistoryRebuildPhase =
   | 'Deleting old data…'
   | 'Creating Harbor…'
   | 'Creating Riverside…'
-  | 'Preparing project history…'
+  | 'Preparing workspace history…'
   | 'Complete';
 
 interface RebuildHistoryDemosModalProps {
@@ -35,7 +35,7 @@ const PHASES: HistoryRebuildPhase[] = [
   'Deleting old data…',
   'Creating Harbor…',
   'Creating Riverside…',
-  'Preparing project history…',
+  'Preparing workspace history…',
   'Complete',
 ];
 
@@ -94,7 +94,7 @@ export function RebuildHistoryDemosModal({
           <>
             <div className="mt-5 flex gap-3 rounded-xl border border-rose-900/70 bg-rose-950/30 p-4 text-sm text-rose-100">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-300" aria-hidden="true" />
-              <p>This permanently deletes the current authenticated local user’s projects, history, snapshots, Ask data, and uploaded demo PDFs before creating two fresh demos.</p>
+              <p>This permanently deletes the current authenticated local user’s workspaces, history, snapshots, Ask data, and uploaded demo PDFs before creating two fresh demos.</p>
             </div>
             {isLoadingPreview ? (
               <div className="mt-5 h-24 animate-pulse rounded-xl bg-slate-950/70" aria-label="Loading reset preview" />

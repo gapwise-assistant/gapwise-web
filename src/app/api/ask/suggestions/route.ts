@@ -8,6 +8,8 @@ import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
 import { loadProjectForScope } from '@/lib/storage';
 import { getCachedAskSuggestions } from '@/lib/ask/suggestionsCache';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 
 export const runtime = 'nodejs';
 
@@ -52,6 +54,8 @@ export async function POST(request: Request) {
 
   try {
     const loaded = await loadProjectForScope(userId, parsed.data.projectId);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const memories = await loadDurableMemories(userId, profile);
     const scopeKey = loaded.scope.type === 'project'
       ? `project:${loaded.scope.projectId}`
       : 'everything';
@@ -60,6 +64,8 @@ export async function POST(request: Request) {
       project: loaded.project,
       ...(loaded.scope.type === 'project' ? { projectId: loaded.scope.projectId } : {}),
       scopeKey,
+      profile,
+      memories,
       generate: async () => {
         if (isDemoMode() || parsed.data.projectId === CAREER_CONFLICT_DEMO_ID) {
           const groups = await generateLocalAskSuggestions({

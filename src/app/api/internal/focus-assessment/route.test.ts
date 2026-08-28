@@ -7,7 +7,10 @@ import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessm
 import { createBakeryDemoProject } from '@/lib/demo/bakery';
 
 vi.mock('@/lib/auth/server', () => ({ requireAuthenticatedUserId: vi.fn() }));
-vi.mock('@/lib/storage', () => ({ getStorageProvider: vi.fn(), loadProjectForScope: vi.fn() }));
+vi.mock('@/lib/storage', () => ({
+  getStorageProvider: vi.fn(),
+  loadProjectForScope: vi.fn(),
+}));
 vi.mock('@/lib/focus/focusCache', () => ({
   focusAssessmentCacheId: vi.fn(),
   focusProjectStateVersion: vi.fn(),
@@ -33,7 +36,12 @@ describe('GET /api/internal/focus-assessment', () => {
     vi.mocked(focusProjectStateVersion).mockResolvedValue('project-state-version');
     vi.mocked(focusAssessmentCacheId).mockReturnValue('focus-cache-id');
     const getFocusAssessment = vi.fn().mockResolvedValue({ assessment });
-    vi.mocked(getStorageProvider).mockReturnValue({ getFocusAssessment } as unknown as ReturnType<typeof getStorageProvider>);
+    vi.mocked(getStorageProvider).mockReturnValue({
+      getUserMemoryProfile: vi.fn().mockResolvedValue(null),
+      getMemories: vi.fn().mockResolvedValue([]),
+      replaceMemories: vi.fn().mockResolvedValue(undefined),
+      getFocusAssessment,
+    } as unknown as ReturnType<typeof getStorageProvider>);
 
     const response = await GET(new NextRequest(`http://localhost/api/internal/focus-assessment?userId=focus-user&projectId=${project.id}`));
 

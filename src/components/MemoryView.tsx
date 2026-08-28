@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Brain, CheckCircle2, Eye, Plus, Save, Sliders, Trash2 } from 'lucide-react';
 import { DurableMemory, MemoryCategory } from '@/types/contextPack';
 import { UserMemoryProfile } from '@/types/clarity';
@@ -32,6 +32,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [savedMessage, setSavedMessage] = useState('');
+
+  useEffect(() => {
+    setFormData(profile);
+  }, [profile]);
 
   const visibleMemories = activeMemories(memories);
   const promptProfile = buildPromptProfile(profile, memories);

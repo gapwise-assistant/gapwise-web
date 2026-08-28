@@ -8,17 +8,18 @@ import type { ProjectHistoryEvent } from '@/types/clarity';
 import type { ProjectSnapshotSummary } from '@/types/projectSnapshot';
 
 describe('ProjectHistory', () => {
-  it('shows the project start marker for a newly created project', () => {
+  it('shows the workspace start marker for a newly created workspace', () => {
     const html = renderToStaticMarkup(
       <ProjectHistory project={createProjectFromInput({ name: 'Empty', goal: 'Start carefully.' })} />,
     );
 
-    expect(html).toContain('Project start');
-    expect(html).toContain('Project started');
-    expect(html).toContain('Created this project with its initial goal.');
+    expect(html).toContain('Workspace start');
+    expect(html).toContain('Workspace started');
+    expect(html).toContain('Created this workspace with its initial goal.');
+    expect(html).not.toContain('Project started');
   });
 
-  it('synthesizes a display-only project start for older projects', () => {
+  it('synthesizes a display-only workspace start for older workspaces', () => {
     const project = createProjectFromInput({ name: 'Legacy', goal: 'Keep the work safe.' }, '2026-08-20T12:00:00.000Z');
     project.historyEvents = [{
       id: 'legacy_event',
@@ -31,7 +32,7 @@ describe('ProjectHistory', () => {
 
     const html = renderToStaticMarkup(<ProjectHistory project={project} />);
 
-    expect(html.indexOf('Project started')).toBeLessThan(html.indexOf('Context added'));
+    expect(html.indexOf('Workspace started')).toBeLessThan(html.indexOf('Context added'));
     expect(html).toContain(`dateTime="${project.created_at}"`);
   });
 
@@ -92,8 +93,8 @@ describe('ProjectHistory', () => {
 
     expect(groupStart).toBeGreaterThan(-1);
     expect(actions).toContain('aria-haspopup="menu"');
-    expect(actions).not.toContain('Open project at this moment');
-    expect(actions).not.toContain('Create a new project from here');
+    expect(actions).not.toContain('Open workspace at this moment');
+    expect(actions).not.toContain('Create a new workspace from here');
     expect(actions).toContain('h-8');
     expect(actions).toContain('focus-visible:ring-2');
   });
@@ -153,9 +154,9 @@ describe('ProjectHistory', () => {
     );
 
     expect(html).toContain('role="dialog"');
-    expect(html).toContain('Project at this moment');
-    expect(html).toContain('Loading historical project state');
-    expect(html).toContain('Create a new project from here');
+    expect(html).toContain('Workspace at this moment');
+    expect(html).toContain('Loading historical workspace state');
+    expect(html).toContain('Create a new workspace from here');
     expect(html).toContain('disabled=""');
   });
 

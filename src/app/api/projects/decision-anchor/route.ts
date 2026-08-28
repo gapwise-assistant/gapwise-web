@@ -8,7 +8,8 @@ import { recordTrace } from '@/lib/observability/trace';
 import { listProjects, saveProject } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import type { Project, UserMemoryProfile } from '@/types/clarity';
+import type { Project } from '@/types/clarity';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export const runtime = 'nodejs';
 
@@ -59,10 +60,6 @@ function normalizedTitle(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-function profileForRequest(value: z.infer<typeof requestSchema>['profile']): UserMemoryProfile {
-  return { ...DEFAULT_USER_PROFILE, ...(value ?? {}) };
-}
-
 export async function POST(request: Request) {
   const started = Date.now();
   let userId = 'unknown';
@@ -70,14 +67,13 @@ export async function POST(request: Request) {
     const parsed = requestSchema.safeParse(await request.json());
     if (!parsed.success) throw new StorageError('Invalid decision anchor request.', 'VALIDATION_ERROR');
     userId = await requireAuthenticatedUserId(request, parsed.data.userId);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
     const project = (await listProjects(userId)).find((candidate) => candidate.id === parsed.data.projectId);
-    if (!project) throw new StorageError('The requested project was not found for this user.', 'PERMISSION_DENIED');
+    if (!project) throw new StorageError('The requested workspace was not found for this user.', 'PERMISSION_DENIED');
     const questionNodeIds = parsed.data.questionNodeIds.filter((id) => project.nodes.some((node) =>
       node.id === id && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && node.status === 'OPEN'
     ));
-    if (questionNodeIds.length === 0) throw new StorageError('Select at least one open question from this project.', 'VALIDATION_ERROR');
-    const profile = profileForRequest(parsed.data.profile);
-
+    if (questionNodeIds.length === 0) throw new StorageError('Select at least one open question from this workspace.', 'VALIDATION_ERROR');
     const anchored = anchorProjectDecision(
       project,
       parsed.data.title,

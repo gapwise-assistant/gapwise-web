@@ -1,17 +1,20 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronRight, FileText, HelpCircle, Loader2, Map, X } from 'lucide-react';
+import { CheckCircle2, ChevronRight, FileText, HelpCircle, Map, X } from 'lucide-react';
 import { Project } from '@/types/clarity';
 import type { AskTarget } from '@/types/ask';
 import { buildDecisionWorkspace, confirmDecision, decisionQuestionForDisplay } from '@/lib/decisions/workspace';
 import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/questions/presentation';
 import { relevantSourceExcerpt } from '@/lib/questions/whyQuestion';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { Button } from '@/components/ui/Button';
 
 interface DecisionWorkspaceProps {
   project: Project;
   targetNodeId: string;
+  initialOutcome?: string;
+  historyTimestamp?: string;
   onClose: () => void;
   onConfirm: (updated: Project) => Promise<void> | void;
   onNavigateToSource?: (sourceId: string) => void;
@@ -34,7 +37,7 @@ function DecisionHelp({
   return (
     <section className="space-y-4" aria-labelledby="decision-help-title">
       <div>
-        <button type="button" onClick={onBack} className="mb-3 text-sm font-semibold text-slate-400 hover:text-slate-200">Back</button>
+        <Button variant="ghost" onClick={onBack} className="mb-3">Back</Button>
         <h3 id="decision-help-title" className="text-lg font-bold text-slate-100">What would help?</h3>
       </div>
       <button type="button" onClick={onTalkThrough} className="w-full rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-left transition hover:border-cyan-500/50 hover:bg-slate-800/40">
@@ -56,6 +59,8 @@ function DecisionHelp({
 export function DecisionWorkspace({
   project,
   targetNodeId,
+  initialOutcome,
+  historyTimestamp,
   onClose,
   onConfirm,
   onNavigateToSource,
@@ -64,7 +69,8 @@ export function DecisionWorkspace({
   onDontKnow,
 }: DecisionWorkspaceProps) {
   const model = useMemo(() => buildDecisionWorkspace(project, targetNodeId), [project, targetNodeId]);
-  const [customDecision, setCustomDecision] = useState('');
+  const initialRecordedOutcome = model?.decision.decision_outcome?.trim() || initialOutcome?.trim() || '';
+  const [customDecision, setCustomDecision] = useState(initialRecordedOutcome);
   const [reason, setReason] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -73,6 +79,7 @@ export function DecisionWorkspace({
   const [showOrigin, setShowOrigin] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [showUnknownHelp, setShowUnknownHelp] = useState(false);
+  const [allowMissingResolutionEdit, setAllowMissingResolutionEdit] = useState(false);
   const [expandedSourceIds, setExpandedSourceIds] = useState<string[]>([]);
   const emptyDialogRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -81,7 +88,7 @@ export function DecisionWorkspace({
   useDismissibleModal(onClose, dialogRef, Boolean(model));
 
   useEffect(() => {
-    setCustomDecision('');
+    setCustomDecision(initialRecordedOutcome);
     setReason('');
     setIsSaving(false);
     setSaved(false);
@@ -90,8 +97,9 @@ export function DecisionWorkspace({
     setShowOrigin(false);
     setShowSources(false);
     setShowUnknownHelp(false);
+    setAllowMissingResolutionEdit(false);
     setExpandedSourceIds([]);
-  }, [targetNodeId]);
+  }, [initialOutcome, initialRecordedOutcome, targetNodeId]);
 
   if (!model) {
     return (
@@ -106,13 +114,15 @@ export function DecisionWorkspace({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <p className="mt-4 text-sm leading-relaxed text-slate-400">The project understanding changed. Close this view and review the current questions.</p>
+          <p className="mt-4 text-sm leading-relaxed text-slate-400">The workspace understanding changed. Close this view and review the current questions.</p>
         </div>
       </div>
     );
   }
 
   const isResolved = model.decision.status === 'RESOLVED';
+  const recordedOutcome = model.decision.decision_outcome?.trim() || initialOutcome?.trim() || '';
+  const canEditResolvedDecision = !isResolved || Boolean(recordedOutcome) || allowMissingResolutionEdit;
   const finalDecision = customDecision.trim();
   const decisionTitle = normalizeQuestionGrammar(resolveQuestionReferences(
     decisionQuestionForDisplay(project, model.decision),
@@ -134,6 +144,7 @@ export function DecisionWorkspace({
         decisionNodeId: model.decision.id,
         customDecision,
         reason,
+        historyTimestamp,
       });
       await onConfirm(updated);
       setSaved(true);
@@ -179,7 +190,15 @@ export function DecisionWorkspace({
             <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-3" aria-labelledby="previous-decision-heading">
               <h3 id="previous-decision-heading" className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-500">Previous decision</h3>
               <p className="mt-2 text-xs font-semibold leading-relaxed text-slate-300" title={model.decision.text}>{model.decision.text}</p>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">This decision is already recorded. Enter new wording below only if you want to update it.</p>
+              {recordedOutcome ? (
+                <>
+                  <p className="mt-3 text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-500">Recorded decision</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{recordedOutcome}</p>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500">This decision is already recorded. Edit it below only if the decision has changed.</p>
+                </>
+              ) : (
+                <p className="mt-3 text-sm font-bold text-rose-200" role="alert">The recorded resolution is unavailable.</p>
+              )}
             </section>
           )}
 
@@ -258,26 +277,54 @@ export function DecisionWorkspace({
           </section>
 
           {onViewGraph && (
-            <button type="button" onClick={() => { onViewGraph(model.decision.id); onClose(); }} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-cyan-200">
-              <Map className="h-3.5 w-3.5" /> View in Decision Map <ChevronRight className="h-3.5 w-3.5" />
-            </button>
+            <Button
+              variant="ghost"
+              onClick={() => { onViewGraph(model.decision.id); onClose(); }}
+              icon={<Map className="h-3.5 w-3.5" aria-hidden="true" />}
+            >
+              View in Decision Map
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
           )}
 
-          {!saved && !showUnknownHelp && (
+          {isResolved && !recordedOutcome && !allowMissingResolutionEdit && !saved && (
+            <section className="border-t border-slate-800 pt-5">
+              <p className="text-xs leading-relaxed text-slate-400">The original decision is resolved, but its recorded outcome was not available. You can deliberately record a replacement resolution.</p>
+              <Button variant="secondary" className="mt-4" onClick={() => setAllowMissingResolutionEdit(true)}>
+                Record replacement resolution
+              </Button>
+            </section>
+          )}
+
+          {canEditResolvedDecision && !saved && !showUnknownHelp && (
             <section className="border-t border-slate-800 pt-5">
               <h3 className="text-sm font-extrabold text-slate-100">{isResolved ? 'Edit previous decision' : 'Your decision'}</h3>
-              <p className="mt-1 text-xs text-slate-500">{isResolved ? 'You are editing a decision already saved in this project. Enter the updated wording only if the decision has changed.' : 'Record what you decided and why.'}</p>
+              <p className="mt-1 text-xs text-slate-500">{isResolved ? 'You are editing a decision already saved in this workspace. Enter the updated wording only if the decision has changed.' : 'Record what you decided and why.'}</p>
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="custom-decision">{isResolved ? 'Updated decision' : 'Your decision'}</label>
               <textarea id="custom-decision" value={customDecision} onChange={(event) => setCustomDecision(event.target.value)} rows={3} placeholder={isResolved ? 'Enter the updated decision' : 'Write your decision…'} className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="decision-reason">Reason <span className="font-normal text-slate-500">(optional)</span></label>
               <input id="decision-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Add a short reason" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               {(!isResolved || !onDontKnow) && (
-                <button type="button" onClick={() => onDontKnow ? onDontKnow() : setShowUnknownHelp(true)} className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200"><HelpCircle className="h-3.5 w-3.5" /> I don&apos;t know yet</button>
+                <Button
+                  variant="ghost"
+                  onClick={() => onDontKnow ? onDontKnow() : setShowUnknownHelp(true)}
+                  className="mt-4"
+                  icon={<HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />}
+                >
+                  I don&apos;t know yet
+                </Button>
               )}
               {error && <p className="mt-3 text-xs text-rose-300" role="alert">{error}</p>}
-              <button type="button" onClick={() => void handleConfirm()} disabled={!finalDecision || isSaving} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
-                {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {isResolved ? 'Update decision' : 'Make decision'}
-              </button>
+              <Button
+                variant="primary"
+                size="md"
+                className="mt-4 w-full"
+                loading={isSaving}
+                disabled={!finalDecision}
+                onClick={() => void handleConfirm()}
+              >
+                {isResolved ? 'Update decision' : 'Make decision'}
+              </Button>
             </section>
           )}
 

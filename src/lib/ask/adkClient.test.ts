@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { askGapswise, determineAskRoute, isFocusQuestion } from './adkClient';
+import { resetStorageProviderForTests } from '@/lib/storage';
+
+const originalUseFirestore = process.env.USE_FIRESTORE;
 
 describe('isFocusQuestion', () => {
   it('recognizes narrow prioritization intent without classifying unrelated questions', () => {
@@ -23,11 +26,20 @@ function textResponse(text: string, init?: ResponseInit): Response {
   });
 }
 
-describe('determineAskRoute', () => {
-  beforeEach(() => {
-    vi.unstubAllGlobals();
-  });
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  process.env.USE_FIRESTORE = 'false';
+  resetStorageProviderForTests();
+});
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalUseFirestore === undefined) delete process.env.USE_FIRESTORE;
+  else process.env.USE_FIRESTORE = originalUseFirestore;
+  resetStorageProviderForTests();
+});
+
+describe('determineAskRoute', () => {
   it('uses the structured ADK routing decision for explicit and unfamiliar questions', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toContain('/internal/ask-route');

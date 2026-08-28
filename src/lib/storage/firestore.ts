@@ -1,5 +1,5 @@
 import { FieldValue, Firestore } from 'firebase-admin/firestore';
-import type { ContextProcessingLog, Project } from '@/types/clarity';
+import type { ContextProcessingLog, Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
@@ -558,6 +558,38 @@ export class FirestoreStorageProvider implements StorageProvider {
     await batch.commit();
   }
 
+  async getUserMemoryProfile(userId: string): Promise<UserMemoryProfile | null> {
+    try {
+      const snapshot = await this.db.collection('users').doc(userId).collection('preferences').doc('profile').get();
+      if (!snapshot.exists) return null;
+      const data = this.fromFirestore<Record<string, unknown>>(snapshot.data() ?? {});
+      const profile = { ...data } as Partial<UserMemoryProfile>;
+      delete (profile as { id?: unknown }).id;
+      delete (profile as { userId?: unknown }).userId;
+      delete (profile as { updatedAt?: unknown }).updatedAt;
+      delete (profile as { serverUpdatedAt?: unknown }).serverUpdatedAt;
+      return profile as UserMemoryProfile;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveUserMemoryProfile(userId: string, profile: UserMemoryProfile): Promise<void> {
+    try {
+      await this.db.collection('users').doc(userId).collection('preferences').doc('profile').set(
+        firestoreSafeRecord(this.withServerUpdatedAt({
+          id: 'profile',
+          userId,
+          ...profile,
+          updatedAt: new Date().toISOString(),
+        })),
+        { merge: true },
+      );
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
   async logEvent(userId: string, event: FirestoreEvent): Promise<void> {
     await this.save(userId, 'events', event);
   }
@@ -591,12 +623,13 @@ export class FirestoreStorageProvider implements StorageProvider {
       }
     }
     await this.db.collection('users').doc(userId).collection('preferences').doc('app').delete();
+    await this.db.collection('users').doc(userId).collection('preferences').doc('profile').delete();
   }
 
   async resetDemoData(userId: string): Promise<void> {
     const demo = createGoldenDemoProject();
     await this.saveProject(userId, demo);
-    await this.setAppScope(userId, EVERYTHING_SCOPE);
+    await this.setAppScope(userId, { type: 'project', projectId: demo.id });
   }
 
   private collection(userId: string, collection: CollectionName) {
@@ -655,7 +688,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     return {
       ...memory,
       userId,
-      status: memory.forgotten_at ? 'forgotten' : 'active',
+      status: memory.forgotten_at || memory.status === 'forgotten' ? 'forgotten' : 'active',
       createdAt: memory.created_at,
       updatedAt: memory.updated_at,
       lastConfirmedAt: memory.last_confirmed_at,

@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
-import { Project } from '@/types/clarity';
+import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
 import { FeedbackEvent } from '@/types/feedback';
@@ -29,6 +29,7 @@ import { isNextActionSatisfied } from '@/lib/actions/completion';
 import { focusAssessmentToGuidance } from '@/lib/focus/presentation';
 import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 import { formatDateOnly } from '@/lib/datetime/displayDateTime';
+import { Button } from '@/components/ui/Button';
 
 interface TodayProps {
   userId: string;
@@ -58,6 +59,7 @@ function todayProjectStateKey(
   project: Project,
   memories: DurableMemory[],
   scope: AppScope,
+  profile?: UserMemoryProfile,
 ): string {
   return JSON.stringify({
     scope: todayScopeKey(scope),
@@ -91,6 +93,17 @@ function todayProjectStateKey(
         status: memory.status ?? 'active',
       }))
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    profile: profile
+      ? {
+        answer_density: profile.answer_density,
+        question_frequency: profile.question_frequency,
+        challenge_level: profile.challenge_level,
+        evidence_preference: profile.evidence_preference,
+        brainstorm_style: profile.brainstorm_style,
+        uncertainty_style: profile.uncertainty_style,
+        durable_notes: [...(profile.durable_notes ?? [])].sort(),
+      }
+      : null,
   });
 }
 
@@ -193,7 +206,7 @@ function answeredQuestionItems(project: Project): OpenQuestionRowItem[] {
       return [{
         id: `answered:${node.id}`,
         question,
-        context: 'Answered and saved to project context.',
+        context: 'Answered and saved to workspace context.',
         decisionNodeId: decisionForQuestion(project, node.id),
         answered: true,
         answer: historyItem.answer,
@@ -204,7 +217,7 @@ function answeredQuestionItems(project: Project): OpenQuestionRowItem[] {
 function questionSectionSummary(items: OpenQuestionRowItem[], project: Project): string {
   const decisionId = items.find((item) => !item.answered)?.decisionNodeId;
   const decision = decisionId ? project.nodes.find((node) => node.id === decisionId) : undefined;
-  if (!decision) return 'Resolve these before the next important project decision.';
+  if (!decision) return 'Resolve these before the next important workspace decision.';
   if (/interview/i.test(decision.text)) return 'Resolve these before continuing the interview process.';
   if (project.deadline) {
     const deadline = new Date(`${project.deadline}T12:00:00`);
@@ -212,11 +225,11 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
       const readableDate = formatDateOnly(deadline, { locale: 'en-US' });
       const decisionKind = /go\s*\/\s*no[- ]go|launch|pilot/i.test(decision.text)
         ? 'go/no-go decision'
-        : 'project decision';
+        : 'workspace decision';
       return `Resolve these before the ${readableDate} ${decisionKind}.`;
     }
   }
-  return 'Resolve these before the next important project decision.';
+  return 'Resolve these before the next important workspace decision.';
 }
 
 export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
@@ -235,8 +248,8 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const [hiddenQuestionsExpanded, setHiddenQuestionsExpanded] = useState(false);
 
   const requestStateKey = useMemo(
-    () => todayProjectStateKey(project, memories, scope),
-    [project, memories, scope],
+    () => todayProjectStateKey(project, memories, scope, profile),
+    [project, memories, profile, scope],
   );
   const requestKey = `${userId}:${requestStateKey}:refresh:${refreshCounter}`;
   const emptyBrief = useMemo<DailyBrief>(() => ({
@@ -417,7 +430,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
   const questionPlanRequest = useMemo(() => normalizeQuestionPlanRequest({
     userId,
     ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
-    scopeLabel: scope.type === 'project' ? project.title : 'Everything',
+    scopeLabel: scope.type === 'project' ? project.title : 'General context',
     questions: feedQuestions.map(({ id, question, reason, provenance, presentationContext }) => ({ id, question, reason, provenance, presentationContext })),
   }), [feedQuestions, project.title, scope, userId]);
   const questionPlanKey = JSON.stringify(questionPlanRequest);
@@ -542,14 +555,13 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                   <p className="truncate text-sm font-semibold text-slate-300">{entry.title}</p>
                   <p className="mt-0.5 truncate text-xs text-slate-500">{entry.description}</p>
                 </div>
-                <button
-                  type="button"
+                <Button
+                  variant="secondary"
                   onClick={entry.restore}
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700 bg-transparent px-2.5 text-xs font-semibold text-slate-300 hover:border-cyan-700 hover:bg-cyan-950/30 hover:text-cyan-100"
+                  icon={<RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />}
                 >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                   Restore
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -620,17 +632,17 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                 <div className="min-w-0">
                   <p className="text-sm font-bold leading-snug text-slate-100">{decision.text}</p>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    {decision.why_it_matters?.[0] ?? 'This project choice is still open and needs a recorded decision.'}
+                    {decision.why_it_matters?.[0] ?? 'This workspace choice is still open and needs a recorded decision.'}
                   </p>
                 </div>
                 {onReviewDecision && (
-                  <button
-                    type="button"
+                <Button
+                    variant="primary"
+                    size="sm"
                     onClick={() => onReviewDecision(decision.id)}
-                    className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-indigo-700/80 bg-indigo-950/40 px-3 py-2 text-xs font-bold text-indigo-200 hover:border-indigo-500 hover:bg-indigo-900/40"
                   >
                     Decide
-                  </button>
+                  </Button>
                 )}
               </article>
             ))}
@@ -648,13 +660,13 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       )}
 
       {hasResolvedGaps && onViewResolvedGaps && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           onClick={onViewResolvedGaps}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:border-cyan-800 hover:text-cyan-200"
+          icon={<ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
         >
-          View resolved gaps <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+          View resolved gaps
+        </Button>
       )}
 
       {renderHiddenQuestionSection()}

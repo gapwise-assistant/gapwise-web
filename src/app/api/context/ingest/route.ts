@@ -10,12 +10,13 @@ import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } fro
 import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
 import { StorageError } from '@/lib/storage/types';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
-import { Project, UserMemoryProfile } from '@/types/clarity';
+import { Project } from '@/types/clarity';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export const runtime = 'nodejs';
 
@@ -72,18 +73,13 @@ async function loadTarget(userId: string, projectId: string): Promise<{ project:
     return { project: await loadGeneralContext(userId), isGeneral: true };
   }
   const project = (await listProjects(userId)).find((item) => item.id === projectId);
-  if (!project) throw new StorageError('The requested project was not found for this user.', 'PERMISSION_DENIED');
+  if (!project) throw new StorageError('The requested workspace was not found for this user.', 'PERMISSION_DENIED');
   return { project, isGeneral: false };
 }
 
 async function saveTarget(userId: string, project: Project, isGeneral: boolean): Promise<void> {
   if (isGeneral) await saveGeneralContext(userId, project);
   else await saveProject(userId, project);
-}
-
-function parseProfile(value: unknown): UserMemoryProfile {
-  const parsed = profileSchema.safeParse(value);
-  return parsed.success ? { ...DEFAULT_USER_PROFILE, ...parsed.data } : DEFAULT_USER_PROFILE;
 }
 
 async function parseRequest(request: Request): Promise<{
@@ -140,6 +136,7 @@ export async function POST(request: Request) {
 
   const userId = await requireAuthenticatedUserId(request, parsed.source.userId);
   const source = { ...parsed.source, userId };
+  const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
   let target: { project: Project; isGeneral: boolean };
   try {
     target = await loadTarget(source.userId, source.projectId);
@@ -187,7 +184,7 @@ export async function POST(request: Request) {
         storageUrl,
         processingStatus: 'failed',
         errorMessage: error instanceof Error ? error.message : 'PDF upload failed.',
-      }, parseProfile(source.profile));
+      }, profile);
       await saveTarget(source.userId, failed, target.isGeneral);
       return jsonError(error, statusForError(error), { project: failed });
     }
@@ -210,7 +207,7 @@ export async function POST(request: Request) {
     input.derivedNodes = DEMO_PDF_EXTRACTION.nodes;
   }
 
-  const result = await processContextSource(target.project, input, parseProfile(source.profile), {
+  const result = await processContextSource(target.project, input, profile, {
     forceReprocess,
     captureProcessingLog: isLocalhostRequest(request),
   });
@@ -218,7 +215,7 @@ export async function POST(request: Request) {
     const refreshed = await refreshProjectGapRuntime({
       userId: source.userId,
       project: result.project,
-      profile: parseProfile(source.profile),
+      profile,
       route: '/api/context/ingest',
       label: 'Gap Agent after context ingestion',
     });
@@ -309,7 +306,7 @@ export async function POST(request: Request) {
         contextCount: result.analysis?.nodes.length ?? 0,
       }, {
         name: 'Update Decision Map data',
-        summary: 'Stored the extracted nodes and relationships for the project graph.',
+        summary: 'Stored the extracted nodes and relationships for the workspace graph.',
         execution: 'deterministic',
         contextCount: result.project.nodes.length,
       }],

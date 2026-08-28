@@ -25,7 +25,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!name.trim() || !goal.trim()) {
-      setError('Project name and goal are required.');
+      setError('Workspace name and goal are required.');
       return;
     }
 
@@ -39,7 +39,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
         ...(deadline.trim() ? { deadline: deadline.trim() } : {}),
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Project creation failed.');
+      setError(caught instanceof Error ? caught.message : 'Workspace creation failed.');
       setIsCreating(false);
     }
   };
@@ -53,8 +53,8 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">New project</p>
-            <h2 className="mt-2 text-lg font-extrabold text-slate-100">Create project</h2>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">New workspace</p>
+            <h2 className="mt-2 text-lg font-extrabold text-slate-100">Create workspace</h2>
           </div>
           <button
             type="button"
@@ -68,7 +68,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
 
         <div className="mt-5 space-y-4">
           <label className="block">
-            <span className="text-xs font-bold text-slate-300">Project name *</span>
+            <span className="text-xs font-bold text-slate-300">Workspace name *</span>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -139,7 +139,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ onCreateProjec
             disabled={isCreating}
             className="rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isCreating ? 'Creating...' : 'Create project'}
+            {isCreating ? 'Creating...' : 'Create workspace'}
           </button>
         </div>
       </form>

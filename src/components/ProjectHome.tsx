@@ -102,7 +102,7 @@ export const ProjectHome: React.FC<ProjectHomeProps> = ({
                 {projectTitlePresentation(project.title).title}
               </h1>
               <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/80">
-                Active Project
+                Active Workspace
               </span>
             </div>
             <p className="text-sm text-slate-400">

@@ -7,6 +7,7 @@ import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { getStorageProvider, loadProjectForScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export const runtime = 'nodejs';
 
@@ -21,16 +22,19 @@ export async function POST(request: Request) {
   try {
     const userId = await requireAuthenticatedUserId(request, parsed.data.userId);
     const { project, scope } = await loadProjectForScope(userId, parsed.data.projectId);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const durableMemories = await loadDurableMemories(userId, profile);
     const contextPack = await buildContextPackForUser({
       userId,
       query: 'What needs my attention today?',
       project,
-      profile: DEFAULT_USER_PROFILE,
+      profile,
+      durableMemories,
       scope,
       includeBroadContext: true,
       reasoningMode: 'focus',
     });
-    const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE);
+    const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, profile);
     return NextResponse.json({ focusAssessment });
   } catch (error) {
     const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED' ? 403 : 400;
@@ -49,7 +53,18 @@ export async function GET(request: Request) {
   try {
     const userId = await requireAuthenticatedUserId(request, parsed.data.userId);
     const { project } = await loadProjectForScope(userId, parsed.data.projectId);
-    const projectStateVersion = await focusProjectStateVersion(project);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const durableMemories = await loadDurableMemories(userId, profile);
+    const contextPack = await buildContextPackForUser({
+      userId,
+      query: 'What needs my attention today?',
+      project,
+      profile,
+      durableMemories,
+      includeBroadContext: true,
+      reasoningMode: 'focus',
+    });
+    const projectStateVersion = await focusProjectStateVersion(project, contextPack, profile);
     const cacheId = focusAssessmentCacheId(project.id, projectStateVersion);
     const cached = await getStorageProvider().getFocusAssessment(userId, cacheId);
     return NextResponse.json({

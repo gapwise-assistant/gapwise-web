@@ -16,13 +16,13 @@ function sourceKindLabel(kind: AskSource['kind']): string {
     case 'web':
       return 'Web source';
     case 'graph':
-      return 'Project graph';
+      return 'Workspace graph';
     case 'memory':
       return 'Saved memory';
     case 'calendar':
       return 'Calendar context';
     default:
-      return 'Project context';
+      return 'Workspace context';
   }
 }
 

@@ -8,6 +8,8 @@ import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { resolveScope } from '@/lib/scope/projectScope';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
 export const runtime = 'nodejs';
 
@@ -44,11 +46,11 @@ function jsonError(error: unknown) {
   }
 
   if (error instanceof z.ZodError) {
-    return NextResponse.json({ error: 'Invalid project request.', issues: error.issues }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid workspace request.', issues: error.issues }, { status: 400 });
   }
 
   return NextResponse.json(
-    { error: error instanceof Error ? error.message : 'Project request failed.', code: 'UNAVAILABLE' },
+    { error: error instanceof Error ? error.message : 'Workspace request failed.', code: 'UNAVAILABLE' },
     { status: 500 }
   );
 }
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = createProjectSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
     let project = createProjectFromInput(body);
     if (body.description) {
       // Persist the goal-only state first so the creation snapshot is a true
@@ -95,7 +98,7 @@ export async function POST(request: NextRequest) {
         content: body.description,
         type: 'note',
         origin: 'user',
-      }, DEFAULT_USER_PROFILE, {
+      }, profile, {
         captureProcessingLog: isLocalhostRequest(request),
       });
       project = processed.project;
@@ -125,7 +128,7 @@ export async function POST(request: NextRequest) {
             historyEventId: project.historyEvents?.at(-1)?.id,
           },
           label: 'Initial context processed',
-          summary: 'The initial context was processed into the project understanding.',
+            summary: 'The initial context was processed into the workspace understanding.',
         });
       } catch (error) {
         console.warn('[Project snapshots] context snapshot unavailable', error);
@@ -145,16 +148,29 @@ export async function PATCH(request: NextRequest) {
     const body = updateActiveProjectSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const projects = await listProjects(userId);
-    const requestedScope = body.scope ?? { type: 'project' as const, projectId: body.activeProjectId! };
-    if (requestedScope.type === 'everything') {
-      await setAppScope(userId, requestedScope);
-      return NextResponse.json({ scope: requestedScope, projects });
+    const requestedProjectId = body.activeProjectId
+      ?? (body.scope?.type === 'project' ? body.scope.projectId : undefined);
+    const scopedProject = requestedProjectId
+      ? projects.find((project) => project.id === requestedProjectId && project.status !== 'archived')
+      : undefined;
+    const normalizedScope = scopedProject
+      ? { type: 'project' as const, projectId: scopedProject.id }
+      : resolveScope(body.scope, projects);
+
+    if (!normalizedScope) {
+      throw new StorageError('No active workspace is available.', 'VALIDATION_ERROR');
     }
-    const scopedProject = projects.find((project) => project.id === requestedScope.projectId);
-    if (!scopedProject) throw new StorageError('Project does not exist for this user.', 'VALIDATION_ERROR');
-    await setAppScope(userId, requestedScope);
-    await setActiveProjectId(userId, requestedScope.projectId);
-    return NextResponse.json({ scope: requestedScope, activeProjectId: requestedScope.projectId, project: scopedProject, projects });
+
+    const selectedProject = projects.find((project) => project.id === normalizedScope.projectId);
+    if (!selectedProject || selectedProject.status === 'archived') {
+      throw new StorageError('Workspace does not exist for this user.', 'VALIDATION_ERROR');
+    }
+
+    // Legacy `{ type: 'everything' }` requests are normalized to a concrete
+    // project instead of being persisted as a new aggregate scope.
+    await setAppScope(userId, normalizedScope);
+    await setActiveProjectId(userId, normalizedScope.projectId);
+    return NextResponse.json({ scope: normalizedScope, activeProjectId: normalizedScope.projectId, project: selectedProject, projects });
   } catch (error) {
     return jsonError(error);
   }

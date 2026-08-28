@@ -55,7 +55,7 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
             <div>
               <h1 className="text-2xl font-extrabold text-slate-100">My World</h1>
               <p className="text-xs text-slate-400">
-                Cross-context map of domains, projects, sources, risks, preferences, and unresolved gaps.
+                Cross-context map of domains, workspaces, sources, risks, preferences, and unresolved gaps.
               </p>
             </div>
           </div>
@@ -200,7 +200,7 @@ export const MyWorldView: React.FC<MyWorldViewProps> = ({
               onClick={onNavigateToProjectGraph}
               className="rounded-xl border border-cyan-800 bg-cyan-950/60 px-3 py-3 text-xs font-semibold text-cyan-200 hover:bg-cyan-950"
             >
-              Project Graph
+              Workspace Graph
             </button>
             <button
               onClick={onNavigateToInbox}

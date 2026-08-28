@@ -25,6 +25,7 @@ describe('AnswerQuestionModal', () => {
     expect(html).toContain('Decide if the Northstar role is worth pursuing');
     expect(html).toContain('The role may be 70–80% frontend, which conflicts with your direction.');
     expect(html).toContain('Your answer');
+    expect(html).toContain('data-variant="primary"');
     expect(html).not.toContain('Discuss with Gapswise');
     expect(html).not.toContain('Suggested from your context');
     expect(html).not.toContain('Use suggestion');

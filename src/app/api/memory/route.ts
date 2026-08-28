@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
-import { loadDurableMemories, replaceDurableMemories } from '@/lib/memory/serverStore';
+import { loadDurableMemories, loadUserMemoryProfile, replaceDurableMemories, saveUserMemoryProfile } from '@/lib/memory/serverStore';
 import { StorageError } from '@/lib/storage/types';
 import { DurableMemory } from '@/types/contextPack';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
@@ -29,9 +29,20 @@ const memorySchema = z.object({
   provenance: z.string().optional(),
 });
 
+const profileSchema = z.object({
+  answer_density: z.enum(['concise', 'balanced', 'detailed']),
+  question_frequency: z.enum(['low', 'moderate', 'high']),
+  challenge_level: z.enum(['low', 'moderate', 'high']),
+  evidence_preference: z.enum(['research_first', 'intuition_allowed', 'strict_data']),
+  brainstorm_style: z.enum(['diverge_then_converge', 'direct_to_solution']),
+  uncertainty_style: z.enum(['explicit', 'implicit']),
+  durable_notes: z.array(z.string()),
+});
+
 const replaceRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   memories: z.array(memorySchema),
+  profile: profileSchema.partial().optional(),
 });
 
 function jsonError(error: unknown) {
@@ -65,8 +76,9 @@ async function readUserId(request: NextRequest): Promise<string> {
 export async function GET(request: NextRequest) {
   try {
     const userId = await readUserId(request);
-    const memories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);
-    return NextResponse.json({ memories });
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const memories = await loadDurableMemories(userId, profile);
+    return NextResponse.json({ profile, memories });
   } catch (error) {
     return jsonError(error);
   }
@@ -76,8 +88,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = replaceRequestSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
+    const currentProfile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const profile = body.profile
+      ? await saveUserMemoryProfile(userId, { ...currentProfile, ...body.profile })
+      : currentProfile;
     const memories = await replaceDurableMemories(userId, body.memories as DurableMemory[]);
-    return NextResponse.json({ memories });
+    return NextResponse.json({ profile, memories });
   } catch (error) {
     return jsonError(error);
   }

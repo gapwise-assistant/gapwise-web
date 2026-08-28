@@ -39,7 +39,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError })
         </div>
         <h1 className="mt-5 text-2xl font-extrabold">Your context, connected.</h1>
         <p className="mt-3 text-sm leading-6 text-slate-400">
-          Sign in to load your projects, memories, documents, and priorities.
+          Sign in to load your workspaces, memories, documents, and priorities.
         </p>
         <button
           type="button"

@@ -47,14 +47,14 @@ function statusFor(error: unknown): number {
 
 function errorResponse(error: unknown) {
   return NextResponse.json({
-    error: error instanceof Error ? error.message : 'Project snapshot request failed.',
+    error: error instanceof Error ? error.message : 'Workspace snapshot request failed.',
     ...(error instanceof StorageError ? { code: error.code } : {}),
   }, { status: statusFor(error) });
 }
 
 async function assertProjectAccess(userId: string, projectId: string, storage = requireFirestoreStorage()): Promise<void> {
   const project = await storage.getProject(userId, projectId);
-  if (!project) throw new StorageError('The project does not exist.', 'NOT_FOUND');
+  if (!project) throw new StorageError('The workspace does not exist.', 'NOT_FOUND');
 }
 
 export async function GET(
@@ -93,7 +93,7 @@ export async function POST(
     return NextResponse.json({ snapshot }, { status: 201 });
   } catch (error) {
     return error instanceof z.ZodError
-      ? NextResponse.json({ error: 'Invalid project snapshot request.', issues: error.issues }, { status: 400 })
+      ? NextResponse.json({ error: 'Invalid workspace snapshot request.', issues: error.issues }, { status: 400 })
       : errorResponse(error);
   }
 }

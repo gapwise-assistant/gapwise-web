@@ -18,6 +18,10 @@ import type {
 import { normalizeAskContextProposals } from '@/types/ask';
 import { focusAssessmentPromptSection, type FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectReasoningMode } from '@/lib/retrieval/projectReasoningContext';
+import type { UserMemoryProfile } from '@/types/clarity';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
+import { buildPromptProfile } from '@/lib/personalization/promptProfile';
 
 export type { AskSource } from '@/types/ask';
 
@@ -1072,11 +1076,13 @@ function contextPromptForAgent(
   structuredResponse = true,
   focusAssessment: FocusAssessment | null = null,
   focusIntent = false,
+  profile: UserMemoryProfile = DEFAULT_USER_PROFILE,
 ): string {
   const availableQuestions = availableOpenQuestions(contextPack, openQuestions);
   const responseInstructions = structuredResponse ? structuredAskResponseInstructions(availableQuestions) : '';
   if (!contextPack) return responseInstructions ? `${message}\n\n${responseInstructions}` : message;
   const sections: string[] = [];
+  const promptProfile = buildPromptProfile(profile, contextPack.userPreferences);
   const addSection = (label: string, values: string[]) => {
     const items = values.filter(Boolean).slice(0, 8);
     if (items.length) sections.push(`${label}:\n${items.map((item) => `- ${item}`).join('\n')}`);
@@ -1117,6 +1123,13 @@ function contextPromptForAgent(
   }
 
   addSection('Upcoming commitments', contextPack.upcomingCommitments.map((commitment) => compactContextText(commitment.text)));
+  sections.push([
+    'PERSONALIZATION',
+    `Answer style: ${promptProfile.answerInstruction}`,
+    `Question surfacing threshold: ${promptProfile.questionPriorityThreshold.toFixed(2)}.`,
+    `Assumption challenge: ${promptProfile.challengeInstruction}`,
+    `Evidence preference: ${promptProfile.evidenceInstruction}`,
+  ].join('\n'));
   const focusSection = focusAssessmentPromptSection(focusAssessment, focusIntent);
   if (focusSection) sections.push(focusSection);
   const sharedReasoningSection = reasoningContextPromptSection(contextPack);
@@ -1416,6 +1429,7 @@ export async function askGapswise(params: {
   );
   let sources = initialContext.sources;
   let contextPack = initialContext.contextPack;
+  let profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
 
   const routing = await determineAskRoute(params.userId, params.message, contextPack, sources);
   logAskDebug('route-selected', {
@@ -1508,6 +1522,7 @@ export async function askGapswise(params: {
     params.structuredResponse !== false,
     focusAssessment,
     focusIntent,
+    profile,
   );
   const adkTurn = await runAdkTurn(
     params.userId,

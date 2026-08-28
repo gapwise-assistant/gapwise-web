@@ -97,15 +97,15 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
       <button type="submit" className="mt-5 rounded-lg bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950">
         Save changes
       </button>
-      {saved && <p className="mt-3 text-xs font-semibold text-emerald-300">Project settings saved.</p>}
+      {saved && <p className="mt-3 text-xs font-semibold text-emerald-300">Workspace settings saved.</p>}
     </form>
   );
 
   const archive = (
     <aside className={mode === 'modal' ? 'border-t border-slate-800 pt-5' : 'rounded-xl border border-slate-800 bg-slate-900 p-5'}>
-      <h3 className="text-sm font-extrabold text-slate-100">Archive project</h3>
+      <h3 className="text-sm font-extrabold text-slate-100">Archive workspace</h3>
       <p className="mt-2 text-sm text-slate-400">
-        Move this project out of active work. Its graph, questions, and sources stay available.
+        Move this workspace out of active work. Its graph, questions, and sources stay available.
       </p>
       <button
         type="button"
@@ -118,7 +118,7 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
         className="mt-5 inline-flex items-center gap-2 rounded-lg border border-amber-800 bg-amber-950 px-4 py-2 text-xs font-bold text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <Archive className="h-4 w-4" />
-        {project.status === 'archived' ? 'Archived' : 'Archive project'}
+        {project.status === 'archived' ? 'Archived' : 'Archive workspace'}
       </button>
     </aside>
   );
@@ -130,13 +130,13 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace</p>
-              <h2 className="mt-2 text-lg font-extrabold text-slate-100">Edit project</h2>
+              <h2 className="mt-2 text-lg font-extrabold text-slate-100">Edit workspace</h2>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="min-h-11 min-w-11 rounded-lg border border-slate-700 bg-slate-800 p-2 text-slate-300 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
-              aria-label="Close edit project"
+              aria-label="Close edit workspace"
             >
               <X className="h-4 w-4" />
             </button>
@@ -151,9 +151,9 @@ export const ProjectSettingsPanel: React.FC<ProjectSettingsPanelProps> = ({
   return (
     <section className="space-y-4">
       <div>
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">PROJECT SETTINGS</p>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">WORKSPACE SETTINGS</p>
         <h2 className="mt-2 text-xl font-extrabold text-slate-100">{projectTitlePresentation(project.title).title}</h2>
-        <p className="mt-1 text-sm text-slate-400">Update the project details Gapwise uses in this workspace.</p>
+        <p className="mt-1 text-sm text-slate-400">Update the workspace details Gapwise uses here.</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]">

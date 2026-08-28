@@ -25,17 +25,33 @@ function addSource(project: ReturnType<typeof createGoldenDemoProject>, id: stri
 }
 
 describe('global context scope', () => {
-  it('defaults invalid or deleted project scope to Everything', () => {
+  it('defaults missing or invalid scope to the first active workspace', () => {
     const projects = [createGoldenDemoProject()];
-    expect(resolveScope(undefined, projects)).toEqual({ type: 'everything' });
-    expect(resolveScope({ type: 'project', projectId: 'deleted' }, projects)).toEqual({ type: 'everything' });
+    expect(resolveScope(undefined, projects)).toEqual({ type: 'project', projectId: projects[0].id });
+    expect(resolveScope({ type: 'project', projectId: 'deleted' }, projects)).toEqual({
+      type: 'project',
+      projectId: projects[0].id,
+    });
+  });
+
+  it('normalizes a legacy Everything scope to the first active workspace', () => {
+    const first = createGoldenDemoProject();
+    const second = createProjectFromInput(
+      { name: 'Second workspace', goal: 'Keep a separate project context.' },
+      '2026-08-13T10:00:00Z'
+    );
+
+    expect(resolveScope({ type: 'everything' }, [first, second])).toEqual({
+      type: 'project',
+      projectId: first.id,
+    });
   });
 
   it('does not restore an archived project as the active scope', () => {
     const archived = createGoldenDemoProject();
     archived.status = 'archived';
 
-    expect(resolveScope({ type: 'project', projectId: archived.id }, [archived])).toEqual({ type: 'everything' });
+    expect(resolveScope({ type: 'project', projectId: archived.id }, [archived])).toBeNull();
   });
 
   it('retrieves across projects in Everything and excludes unrelated projects when focused', () => {
@@ -100,7 +116,7 @@ describe('global context scope', () => {
     expect(brief.recommendations.map((item) => item.id)).not.toContain('rec_recruiter_src_recruiter_other_project');
   });
 
-  it('assigns project-scoped context automatically and lets Everything choose project or general', () => {
+  it('assigns project-scoped context automatically while retaining legacy general-context helpers', () => {
     const hackathon = createGoldenDemoProject();
     const jobSearch = createProjectFromInput(
       { name: 'Job Search', goal: 'Find a backend AI role.' },

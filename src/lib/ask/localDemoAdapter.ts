@@ -8,6 +8,7 @@ import { createKintaGenDemoMemories, createKintaGenDemoProject } from '@/lib/dem
 import { createLocalDemoProjects, demoCalendarEvents, demoCareerConflictCalendarEvents, demoKintaGenCalendarEvents } from '@/lib/demo/localFixtures';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { memoriesFromProfile } from '@/lib/memory/store';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { loadProjectForScope } from '@/lib/storage';
 import { contextualSuggestionsFromPack } from '@/lib/ask/suggestions';
 import { CAREER_CONFLICT_DEMO_ID } from '@/lib/demo/careerConflict';
@@ -35,14 +36,15 @@ async function loadLocalAskContext(params: {
 }): Promise<{ project: { id: string; title: string; goal: string }; pack: ContextPack }> {
   try {
     const loaded = await loadProjectForScope(params.userId, params.projectId);
-    const memories = memoriesFromProfile(DEFAULT_USER_PROFILE);
+    const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
+    const memories = await loadDurableMemories(params.userId, profile);
     return {
       project: loaded.project,
       pack: await buildContextPackForUser({
         userId: params.userId,
         query: params.query,
         project: loaded.project,
-        profile: DEFAULT_USER_PROFILE,
+        profile,
         durableMemories: memories,
         includeBroadContext: params.includeBroadContext,
         scope: loaded.scope,
@@ -53,11 +55,12 @@ async function loadLocalAskContext(params: {
   } catch (error) {
     const fixtures = [...createLocalDemoProjects(), createCareerConflictDemoProject(), createKintaGenDemoProject()];
     const project = fixtures.find((item) => item.id === params.projectId) ?? fixtures[0];
+    const fallbackProfile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE).catch(() => DEFAULT_USER_PROFILE);
     const fallbackMemories = project.id === CAREER_CONFLICT_DEMO_ID
       ? createCareerConflictDemoMemories()
       : project.id === KINTAGEN_DEMO_ID
         ? createKintaGenDemoMemories()
-        : memoriesFromProfile(DEFAULT_USER_PROFILE);
+        : memoriesFromProfile(fallbackProfile);
     const now = new Date();
     const fallbackCalendarEvents = project.id === CAREER_CONFLICT_DEMO_ID
       ? demoCareerConflictCalendarEvents(now)
@@ -75,7 +78,7 @@ async function loadLocalAskContext(params: {
         userId: params.userId,
         query: params.query,
         project,
-        profile: DEFAULT_USER_PROFILE,
+        profile: fallbackProfile,
         durableMemories: fallbackMemories,
         includeBroadContext: params.includeBroadContext,
         calendarCommitments: calendarEventsToCommitmentNodes(fallbackCalendarEvents, now, 10),

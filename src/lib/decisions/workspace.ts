@@ -57,6 +57,7 @@ export interface ConfirmDecisionInput {
   customDecision?: string;
   reason?: string;
   resolveQuestionIds?: string[];
+  historyTimestamp?: string;
 }
 
 /**
@@ -361,12 +362,31 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
   const reason = input.reason?.trim();
   const completedActionIds = resolveSatisfiedNextActions(updated, now);
   appendNextActionCompletionHistory(updated, completedActionIds, now);
-  updated.history.push({
-    question: previousText,
-    answer: finalText,
-    timestamp: now,
-    graph_diff_summary: reason ? `Decision confirmed: "${finalText}". Reason: ${reason}` : `Decision confirmed: "${finalText}"`,
-  });
+  const historySummary = reason
+    ? `Decision confirmed: "${finalText}". Reason: ${reason}`
+    : `Decision confirmed: "${finalText}"`;
+  const existingHistory = input.historyTimestamp
+    ? updated.history.find((entry) =>
+      entry.timestamp === input.historyTimestamp
+      && (entry.nodeId === decision.id || (!entry.nodeId && entry.question === previousText)),
+    )
+    : undefined;
+  if (existingHistory) {
+    existingHistory.answer = finalText;
+    existingHistory.question = previousText;
+    existingHistory.graph_diff_summary = historySummary;
+    existingHistory.nodeId = decision.id;
+    existingHistory.projectId = updated.id;
+  } else {
+    updated.history.push({
+      question: previousText,
+      answer: finalText,
+      timestamp: now,
+      graph_diff_summary: historySummary,
+      nodeId: decision.id,
+      projectId: updated.id,
+    });
+  }
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
   updated.updated_at = now;

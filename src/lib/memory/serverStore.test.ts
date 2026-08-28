@@ -21,6 +21,21 @@ afterEach(async () => {
 });
 
 describe('server durable memory store', () => {
+  it('persists the user memory profile across provider reloads', async () => {
+    const filePath = await makeStorageFile();
+    const firstProvider = new MockStorageProvider(filePath);
+    const profile = {
+      ...DEFAULT_USER_PROFILE,
+      answer_density: 'detailed' as const,
+      question_frequency: 'high' as const,
+    };
+
+    await firstProvider.saveUserMemoryProfile('demo-user', profile);
+    const reloadedProvider = new MockStorageProvider(filePath);
+
+    await expect(reloadedProvider.getUserMemoryProfile('demo-user')).resolves.toEqual(profile);
+  });
+
   it('persists created memory across provider reloads', async () => {
     const filePath = await makeStorageFile();
     const firstProvider = new MockStorageProvider(filePath);

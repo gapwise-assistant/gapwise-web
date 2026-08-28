@@ -3,7 +3,7 @@ import { validateGapAssessmentAgainstProject, type GapAssessmentV1 } from '@/lib
 import { getAgentModelConfig, type AgentModelConfig } from '@/lib/agents/modelPolicy';
 import { GapRemoteError, requestGapAssessment, type GapRemoteMetadata } from '@/lib/agents/gapRemote';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
-import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { rankGaps } from '@/lib/tools/graphTools';
@@ -45,9 +45,9 @@ function selectedNodeId(assessment: GapAssessmentV1): string | null {
   return selected?.sourceUnknownNodeIds[0] ?? null;
 }
 
-function compatibilityNodeId(project: Project, assessment: GapAssessmentV1): string | null {
+function compatibilityNodeId(project: Project, assessment: GapAssessmentV1, profile?: UserMemoryProfile): string | null {
   if (hasLiveDecision(project) || assessment.selectedGapId) return null;
-  return rankGaps(project)[0]?.node_id ?? null;
+  return rankGaps(project, profile)[0]?.node_id ?? null;
 }
 
 function failureReason(error: unknown): TraceGapComparison['failureReason'] {
@@ -67,6 +67,7 @@ export async function evaluateGapRuntime(params: {
   project: Project;
   contextPack: ContextPack;
   memories: DurableMemory[];
+  profile?: UserMemoryProfile;
   mode?: GapAgentRuntimeMode;
   evaluationConfig?: AgentModelConfig;
 }): Promise<GapRuntimeResult> {
@@ -75,11 +76,12 @@ export async function evaluateGapRuntime(params: {
     project: params.project,
     contextPack: params.contextPack,
     memories: params.memories,
+    profile: params.profile,
   });
   const deterministicGapNodeId = selectedNodeId(deterministicAssessment)
-    ?? compatibilityNodeId(params.project, deterministicAssessment);
+    ?? compatibilityNodeId(params.project, deterministicAssessment, params.profile);
   const deterministicGuidance = deterministicGapNodeId
-    ? rankGaps(params.project).find((gap) => gap.node_id === deterministicGapNodeId)?.guidance ?? null
+    ? rankGaps(params.project, params.profile).find((gap) => gap.node_id === deterministicGapNodeId)?.guidance ?? null
     : null;
   const deterministicResult = (reason?: TraceGapComparison['failureReason']): GapRuntimeResult => ({
     mode,
@@ -144,9 +146,14 @@ export async function evaluateGapRuntime(params: {
   }
 }
 
-function applyEffectiveSelection(project: Project, nodeId: string | null, guidance: GapGuidance | null): Project {
+function applyEffectiveSelection(
+  project: Project,
+  nodeId: string | null,
+  guidance: GapGuidance | null,
+  profile?: UserMemoryProfile,
+): Project {
   const updated = JSON.parse(JSON.stringify(project)) as Project;
-  const candidate = nodeId ? rankGaps(updated).find((gap) => gap.node_id === nodeId) ?? null : null;
+  const candidate = nodeId ? rankGaps(updated, profile).find((gap) => gap.node_id === nodeId) ?? null : null;
   if (candidate && guidance) candidate.guidance = guidance;
   updated.active_question = candidate;
   return updated;
@@ -160,11 +167,12 @@ function recordGapRuntimeTrace(params: {
   contextPack: ContextPack;
   result: GapRuntimeResult;
   started: number;
+  profile?: UserMemoryProfile;
 }): void {
   const config = getAgentModelConfig('gap');
   const metadata = params.result.metadata;
   const assessment = params.result.agentAssessment ?? params.result.deterministicAssessment;
-  const gapByNode = new Map(rankGaps(params.project).map((gap) => [gap.node_id, gap]));
+  const gapByNode = new Map(rankGaps(params.project, params.profile).map((gap) => [gap.node_id, gap]));
   const selected = assessment.candidates.find((candidate) => candidate.gapId === assessment.selectedGapId);
   recordTrace({
     userId: params.userId,
@@ -266,7 +274,7 @@ export async function refreshProjectGapRuntime(params: {
 }): Promise<{ project: Project; runtime: GapRuntimeResult | null }> {
   const mode = configuredMode();
   const started = Date.now();
-  const profile = params.profile ?? DEFAULT_USER_PROFILE;
+  const profile = params.profile ?? await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
   let memories = params.memories;
   if (!memories) {
     try {
@@ -288,6 +296,7 @@ export async function refreshProjectGapRuntime(params: {
     project: params.project,
     contextPack,
     memories,
+    profile,
     mode,
   });
   // Deterministic and shadow modes still produce a real, inspectable
@@ -295,7 +304,7 @@ export async function refreshProjectGapRuntime(params: {
   // sanitized trace should not disappear just because local AI is offline.
   const project = !hasLiveDecision(params.project) && !runtime.deterministicAssessment.selectedGapId
     ? params.project
-    : applyEffectiveSelection(params.project, runtime.effectiveGapNodeId, runtime.effectiveGuidance);
+    : applyEffectiveSelection(params.project, runtime.effectiveGapNodeId, runtime.effectiveGuidance, profile);
   recordGapRuntimeTrace({
     userId: params.userId,
     route: params.route,
@@ -304,6 +313,7 @@ export async function refreshProjectGapRuntime(params: {
     contextPack,
     result: runtime,
     started,
+    profile,
   });
   return { project, runtime };
 }

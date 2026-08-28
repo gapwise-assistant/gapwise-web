@@ -23,7 +23,7 @@ export function runPartnerAgent(
 ): PartnerAgentOutput {
   const threshold = questionPriorityThreshold(profile);
   const selectedGap = gapOutput.selectedGapNodeId
-    ? rankGaps(project).find((gap) => gap.node_id === gapOutput.selectedGapNodeId)
+    ? rankGaps(project, profile).find((gap) => gap.node_id === gapOutput.selectedGapNodeId)
     : undefined;
   const decisionValueLevel = selectedGap?.decision_value?.level;
   const decisionValueAllowsQuestion = decisionValueLevel === 'high'

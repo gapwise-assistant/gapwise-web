@@ -8,7 +8,7 @@ describe('DemoLoadingState', () => {
     const html = renderToStaticMarkup(<DemoLoadingState label="Scientific AI assistant" />);
 
     expect(html).toContain('Loading Scientific AI assistant');
-    expect(html).toContain('Replacing project data and refreshing your briefing');
+    expect(html).toContain('Replacing workspace data and refreshing your briefing');
     expect(html).toContain('aria-busy="true"');
     expect((html.match(/animate-pulse/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });

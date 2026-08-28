@@ -4,7 +4,7 @@ import React, { useRef, useState } from 'react';
 import NextImage from 'next/image';
 import { LoaderCircle, PlayCircle, RefreshCw, Settings2 } from 'lucide-react';
 import { Project } from '@/types/clarity';
-import { AppScope } from '@/types/scope';
+import { WorkspaceScope } from '@/types/scope';
 import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
 import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
 import { formatCompactDateTime, formatDateTime } from '@/lib/datetime/displayDateTime';
@@ -14,7 +14,7 @@ type AppTab = AppDestination;
 
 interface HeaderProps {
   projects: Project[];
-  scope: AppScope;
+  scope: WorkspaceScope | null;
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
   onResetDemo: () => void;
@@ -25,7 +25,6 @@ interface HeaderProps {
   onCleanupLocalData?: () => void;
   isCleaningUpLocalData?: boolean;
   onSelectProject: (projectId: string) => void;
-  onSelectEverything: () => void;
   onOpenNewProject: () => void;
   onOpenSettings: () => void;
   isSettingsOpen: boolean;
@@ -48,7 +47,6 @@ export const Header: React.FC<HeaderProps> = ({
   onCleanupLocalData,
   isCleaningUpLocalData = false,
   onSelectProject,
-  onSelectEverything,
   onOpenNewProject,
   onOpenSettings,
   isSettingsOpen,
@@ -60,27 +58,20 @@ export const Header: React.FC<HeaderProps> = ({
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
   const isAnyDemoLoading = isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isCleaningUpLocalData;
-  const selectedScopeValue = scope.type === 'project' && selectableProjects.some((item) => item.id === scope.projectId)
+  const selectedScopeValue = scope && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
-    : '__everything__';
-  const selectedProject = selectedScopeValue === '__everything__'
-    ? undefined
-    : selectableProjects.find((item) => item.id === selectedScopeValue);
-  const selectedProjectTitle = selectedScopeValue === '__everything__'
-    ? 'Everything'
-    : selectedProject
+    : '';
+  const selectedProject = selectableProjects.find((item) => item.id === selectedScopeValue);
+  const selectedProjectTitle = selectedProject
       ? `${projectTitlePresentation(selectedProject.title).title} · ${formatCompactDateTime(projectTitlePresentation(selectedProject.title).legacyCreatedAt ?? selectedProject.created_at)}`
-      : 'Select project';
+      : 'Select workspace';
 
   const handleProjectSelect = (value: string) => {
     if (value === '__new_project__') {
       onOpenNewProject();
       return;
     }
-    if (value === '__everything__') {
-      onSelectEverything();
-      return;
-    }
+    if (!value) return;
     onSelectProject(value);
   };
 
@@ -121,8 +112,8 @@ export const Header: React.FC<HeaderProps> = ({
             aria-label="Workspace selector"
             title={selectedProject ? `Created ${formatDateTime(projectTitlePresentation(selectedProject.title).legacyCreatedAt ?? selectedProject.created_at)}` : selectedProjectTitle}
           >
-            <option value="__everything__" className="bg-slate-900">Everything</option>
-            <optgroup label="Projects">
+            <option value="" disabled className="bg-slate-900">Select workspace</option>
+            <optgroup label="Workspaces">
               {selectableProjects.map((item) => (
                 <option
                   key={item.id}
@@ -138,7 +129,7 @@ export const Header: React.FC<HeaderProps> = ({
               ─────────────
             </option>
             <option value="__new_project__" className="bg-slate-900">
-              + New project
+              + New workspace
             </option>
           </select>
         </div>

@@ -10,6 +10,9 @@ vi.mock('@/lib/storage', () => ({
   saveProject: vi.fn(),
   setActiveProjectId: vi.fn(),
   setAppScope: vi.fn(),
+  getStorageProvider: vi.fn(() => ({
+    getUserMemoryProfile: vi.fn(async () => null),
+  })),
 }));
 
 function jsonRequest(body: unknown): NextRequest {
@@ -27,7 +30,7 @@ describe('/api/projects', () => {
 
   it('lists projects for the requested user', async () => {
     const project = createGoldenDemoProject();
-    vi.mocked(loadProjectState).mockResolvedValue({ projects: [project], activeProjectId: project.id, scope: { type: 'everything' } });
+    vi.mocked(loadProjectState).mockResolvedValue({ projects: [project], activeProjectId: project.id, scope: { type: 'project', projectId: project.id } });
 
     const response = await GET(new NextRequest('http://localhost/api/projects?userId=demo-user'));
 
@@ -39,11 +42,11 @@ describe('/api/projects', () => {
     });
   });
 
-  it('returns an empty Everything state for a new authenticated user', async () => {
+  it('returns an empty workspace state for a new authenticated user', async () => {
     vi.mocked(loadProjectState).mockResolvedValue({
       projects: [],
       activeProjectId: null,
-      scope: { type: 'everything' },
+      scope: null,
     });
 
     const response = await GET(new NextRequest('http://localhost/api/projects?userId=new-user'));
@@ -52,7 +55,7 @@ describe('/api/projects', () => {
     await expect(response.json()).resolves.toEqual({
       projects: [],
       activeProjectId: null,
-      scope: { type: 'everything' },
+      scope: null,
     });
   });
 
@@ -157,8 +160,9 @@ describe('/api/projects', () => {
     });
   });
 
-  it('switches back to Everything scope', async () => {
-    vi.mocked(listProjects).mockResolvedValue([createGoldenDemoProject()]);
+  it('normalizes a legacy Everything request to the first active workspace', async () => {
+    const project = createGoldenDemoProject();
+    vi.mocked(listProjects).mockResolvedValue([project]);
     vi.mocked(setAppScope).mockResolvedValue(undefined);
 
     const response = await PATCH(
@@ -170,7 +174,10 @@ describe('/api/projects', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(setAppScope).toHaveBeenCalledWith('demo-user', { type: 'everything' });
-    await expect(response.json()).resolves.toMatchObject({ scope: { type: 'everything' } });
+    expect(setAppScope).toHaveBeenCalledWith('demo-user', { type: 'project', projectId: project.id });
+    await expect(response.json()).resolves.toMatchObject({
+      scope: { type: 'project', projectId: project.id },
+      activeProjectId: project.id,
+    });
   });
 });

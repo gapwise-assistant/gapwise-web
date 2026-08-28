@@ -90,10 +90,10 @@ export function resolveGap(
   });
 }
 
-export function rankGaps(project: Project) {
+export function rankGaps(project: Project, profile: UserMemoryProfile = DEFAULT_USER_PROFILE) {
   const reasoningProject = projectForReasoning(project);
   return reasoningProject.nodes
     .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && node.status === 'OPEN')
-    .map((node) => calculateGapPriority(node, reasoningProject, DEFAULT_USER_PROFILE))
+    .map((node) => calculateGapPriority(node, reasoningProject, profile))
     .sort((a, b) => b.priority - a.priority || a.node_id.localeCompare(b.node_id));
 }

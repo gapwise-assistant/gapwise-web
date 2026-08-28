@@ -1,8 +1,10 @@
-import type { Project } from '@/types/clarity';
+import type { Project, UserMemoryProfile } from '@/types/clarity';
+import type { DurableMemory } from '@/types/contextPack';
 import type { SuggestedQuestionGroups } from '@/lib/ask/suggestions';
 import type { StorageProvider } from '@/lib/storage/types';
 import { getStorageProvider } from '@/lib/storage';
 import { hashText } from '@/lib/context/ingestion';
+import { activeMemories } from '@/lib/memory/store';
 
 const ASK_SUGGESTIONS_CACHE_SCHEMA_VERSION = 2;
 const inFlight = new Map<string, Promise<CachedAskSuggestions>>();
@@ -61,11 +63,16 @@ function stableHistoryEvent(event: NonNullable<Project['historyEvents']>[number]
   };
 }
 
-function semanticProjectState(project: Project) {
+function isAskConversationSource(source: Project['sources'][number]): boolean {
+  return /^ask\s/i.test(source.filename.trim());
+}
+
+function semanticProjectState(
+  project: Project,
+  profile?: UserMemoryProfile,
+  memories: DurableMemory[] = [],
+) {
   const activeNodes = project.nodes.filter((node) => node.status !== 'DEPRECATED');
-  const meaningfulSourceIds = new Set(
-    activeNodes.flatMap((node) => node.source_refs ?? []),
-  );
 
   return {
     id: project.id,
@@ -95,7 +102,10 @@ function semanticProjectState(project: Project) {
     ),
     sources: [...new Set(
       project.sources
-        .filter((source) => meaningfulSourceIds.has(source.id))
+        // Content from a source that already has derived canonical nodes is
+        // represented by those nodes. Only retain source content when it is
+        // the remaining semantic state for an unrepresented source.
+        .filter((source) => source.derived_node_ids.length === 0 && !isAskConversationSource(source))
         .map((source) => source.content),
     )].sort((left, right) => left.localeCompare(right)),
     history: sorted(
@@ -110,11 +120,35 @@ function semanticProjectState(project: Project) {
       (project.historyEvents ?? []).map(stableHistoryEvent),
       (event) => JSON.stringify(event),
     ),
+    profile: profile
+      ? {
+        answer_density: profile.answer_density,
+        question_frequency: profile.question_frequency,
+        challenge_level: profile.challenge_level,
+        evidence_preference: profile.evidence_preference,
+        brainstorm_style: profile.brainstorm_style,
+        uncertainty_style: profile.uncertainty_style,
+        durable_notes: [...(profile.durable_notes ?? [])].sort(),
+      }
+      : null,
+    memories: activeMemories(memories)
+      .map((memory) => ({
+        category: memory.category,
+        text: memory.text,
+        source: memory.source,
+        confidence: memory.confidence,
+        why_remembered: memory.why_remembered,
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   };
 }
 
-export async function askSuggestionsProjectStateVersion(project: Project): Promise<string> {
-  return hashText(JSON.stringify(semanticProjectState(project)));
+export async function askSuggestionsProjectStateVersion(
+  project: Project,
+  profile?: UserMemoryProfile,
+  memories: DurableMemory[] = [],
+): Promise<string> {
+  return hashText(JSON.stringify(semanticProjectState(project, profile, memories)));
 }
 
 export function askSuggestionsCacheId(scopeKey: string, projectStateVersion: string): string {
@@ -128,12 +162,18 @@ export async function getCachedAskSuggestions(
     project: Project;
     projectId?: string;
     scopeKey: string;
+    profile?: UserMemoryProfile;
+    memories?: DurableMemory[];
     generate: () => Promise<AskSuggestionsGeneration>;
   },
   deps: { storage?: StorageProvider } = {},
 ): Promise<CachedAskSuggestions> {
   const storage = deps.storage ?? getStorageProvider();
-  const projectStateVersion = await askSuggestionsProjectStateVersion(params.project);
+  const projectStateVersion = await askSuggestionsProjectStateVersion(
+    params.project,
+    params.profile,
+    params.memories,
+  );
   const cacheId = askSuggestionsCacheId(params.scopeKey, projectStateVersion);
   const requestKey = `${params.userId}:${cacheId}`;
   const existingRequest = inFlight.get(requestKey);

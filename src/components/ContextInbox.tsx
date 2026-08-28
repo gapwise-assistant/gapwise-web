@@ -304,8 +304,8 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         <div className="flex items-center gap-2">
           {src.relevance === 'possibly_not_relevant' && (
             <span
-              aria-label="Is this relevant to this project?"
-              title="Is this relevant to this project?"
+              aria-label="Is this relevant to this workspace?"
+              title="Is this relevant to this workspace?"
               className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-700/70 bg-amber-950/60 text-amber-300"
             >
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -566,7 +566,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
               onChange={(event) => setTargetProjectId(event.target.value)}
               className="min-h-11 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 outline-none focus:border-cyan-500 sm:min-h-0"
             >
-              <option value={GENERAL_CONTEXT_ID}>General / no project</option>
+              <option value={GENERAL_CONTEXT_ID}>General / no workspace</option>
               {projects.filter((item) => item.status !== 'archived').map((item) => (
                 <option key={item.id} value={item.id}>{projectTitlePresentation(item.title).title}</option>
               ))}
@@ -693,7 +693,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
           Information and sources Gapwise can use.
           </p>
           <p className="mt-2 text-xs font-semibold text-cyan-300">
-            {scope.type === 'project' ? `Focused on: ${projectTitlePresentation(project.title).title}` : 'Focused on: Everything'}
+            {scope.type === 'project' ? `Focused on: ${projectTitlePresentation(project.title).title}` : 'Focused on: General context'}
           </p>
         </div>
         <button

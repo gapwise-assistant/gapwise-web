@@ -7,7 +7,7 @@ function withUser(userId: string, memory: DurableMemory): DurableMemory {
   return {
     ...memory,
     userId,
-    status: memory.forgotten_at ? 'forgotten' : 'active',
+    status: memory.forgotten_at || memory.status === 'forgotten' ? 'forgotten' : 'active',
     createdAt: memory.created_at,
     updatedAt: memory.updated_at,
     lastConfirmedAt: memory.last_confirmed_at,
@@ -23,6 +23,23 @@ export async function loadDurableMemories(userId: string, profile: UserMemoryPro
   const seeded = memoriesFromProfile(profile).map((memory) => withUser(userId, memory));
   await storage.replaceMemories(userId, seeded);
   return seeded;
+}
+
+export async function loadUserMemoryProfile(
+  userId: string,
+  fallback: UserMemoryProfile,
+): Promise<UserMemoryProfile> {
+  const stored = await getStorageProvider().getUserMemoryProfile(userId);
+  return stored ? { ...fallback, ...stored } : { ...fallback };
+}
+
+export async function saveUserMemoryProfile(
+  userId: string,
+  profile: UserMemoryProfile,
+): Promise<UserMemoryProfile> {
+  const saved = { ...profile };
+  await getStorageProvider().saveUserMemoryProfile(userId, saved);
+  return saved;
 }
 
 export async function saveDurableMemory(userId: string, memory: DurableMemory): Promise<DurableMemory> {

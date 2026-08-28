@@ -7,7 +7,7 @@ import { generateFocusAssessment, type FocusAssessment } from '@/lib/focus/focus
 import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 
 const inFlight = new Map<string, Promise<FocusAssessment | null>>();
-const FOCUS_CACHE_SCHEMA_VERSION = 6;
+const FOCUS_CACHE_SCHEMA_VERSION = 7;
 const FOCUS_NODE_TYPES = new Set([
   'GOAL',
   'DECISION',
@@ -23,8 +23,8 @@ const FOCUS_NODE_TYPES = new Set([
 
 export async function focusProjectStateVersion(
   project: Project,
-  _contextPack?: ContextPack,
-  _profile?: UserMemoryProfile,
+  contextPack?: ContextPack,
+  profile?: UserMemoryProfile,
 ): Promise<string> {
   const focusState = {
     goal: project.goal,
@@ -53,6 +53,26 @@ export async function focusProjectStateVersion(
           `${right.source}\u0000${right.target}\u0000${right.type}\u0000${right.confidence ?? ''}`,
         )
       ),
+    profile: profile
+      ? {
+        answer_density: profile.answer_density,
+        question_frequency: profile.question_frequency,
+        challenge_level: profile.challenge_level,
+        evidence_preference: profile.evidence_preference,
+        brainstorm_style: profile.brainstorm_style,
+        uncertainty_style: profile.uncertainty_style,
+        durable_notes: [...(profile.durable_notes ?? [])].sort(),
+      }
+      : null,
+    memories: (contextPack?.userPreferences ?? [])
+      .map((memory) => ({
+        category: memory.category,
+        text: memory.text,
+        source: memory.source,
+        confidence: memory.confidence,
+        why_remembered: memory.why_remembered,
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   };
 
   return hashText(JSON.stringify(focusState));

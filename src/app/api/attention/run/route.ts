@@ -5,7 +5,7 @@ import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
-import { loadDurableMemories } from '@/lib/memory/serverStore';
+import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { getCachedFocusAssessment } from '@/lib/focus/focusCache';
@@ -31,13 +31,14 @@ export async function POST(request: Request) {
     }
 
     const { project, scope } = await loadProjectForScope(userId, body.projectId?.trim() || undefined);
-    const memories = await loadDurableMemories(userId, DEFAULT_USER_PROFILE);
+    const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+    const memories = await loadDurableMemories(userId, profile);
     const now = new Date();
     const contextPack = await buildContextPackForUser({
       userId,
       query: 'What needs my attention today?',
       project,
-      profile: DEFAULT_USER_PROFILE,
+      profile,
       durableMemories: memories,
       scope,
       reasoningMode: 'focus',
@@ -46,12 +47,13 @@ export async function POST(request: Request) {
       userId,
       project,
       memories,
+      profile,
       period: body.period,
       force: body.force,
       contextPack,
       now,
     });
-    const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE);
+    const focusAssessment = await getCachedFocusAssessment(userId, project, contextPack, profile);
 
     recordTrace({
       userId,

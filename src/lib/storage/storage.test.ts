@@ -64,7 +64,7 @@ describe('Project bootstrap', () => {
     await expect(loadProjectState('firebase-user')).resolves.toEqual({
       projects: [],
       activeProjectId: null,
-      scope: { type: 'everything' },
+      scope: null,
     });
     await expect(storage.listProjects('firebase-user')).resolves.toEqual([]);
   });
@@ -77,7 +77,7 @@ describe('Project bootstrap', () => {
     await expect(loadProjectState('firebase-user')).resolves.toMatchObject({
       projects: [],
       activeProjectId: null,
-      scope: { type: 'everything' },
+      scope: null,
     });
 
     const firstLoad = await loadGoldenDemoForUser('firebase-user');
@@ -95,6 +95,33 @@ describe('Project bootstrap', () => {
       projectId: 'hackathon_demo',
     });
     await expect(storage.listProjects('demo-user')).resolves.toEqual([]);
+  });
+
+  it('normalizes a legacy Everything preference when loading available workspaces', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    const storage = await useIsolatedMockStorage();
+    const first = createProjectFromInput(
+      { name: 'First workspace', goal: 'Prepare the first workspace.' },
+      '2026-08-12T12:00:00.000Z'
+    );
+    const second = createProjectFromInput(
+      { name: 'Second workspace', goal: 'Prepare the second workspace.' },
+      '2026-08-13T12:00:00.000Z'
+    );
+
+    await storage.saveProject('firebase-user', first);
+    await storage.saveProject('firebase-user', second);
+    await storage.setAppScope('firebase-user', { type: 'everything' });
+    await storage.setActiveProjectId('firebase-user', second.id);
+
+    await expect(loadProjectState('firebase-user')).resolves.toMatchObject({
+      activeProjectId: second.id,
+      scope: { type: 'project', projectId: second.id },
+    });
+    await expect(storage.getAppScope('firebase-user')).resolves.toEqual({
+      type: 'project',
+      projectId: second.id,
+    });
   });
 });
 
@@ -271,7 +298,7 @@ describe('MockStorageProvider', () => {
     });
   });
 
-  it('defaults scope to Everything and persists project scope across a provider restart', async () => {
+  it('keeps legacy scope reads compatible and persists project scope across a provider restart', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'gapwise-storage-'));
     tempDirs.push(dir);
     const filePath = path.join(dir, 'db.json');

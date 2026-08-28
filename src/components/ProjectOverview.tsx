@@ -58,7 +58,7 @@ function overviewProjectStateKey(project: Project): string {
 
 function OverviewSkeleton() {
   return (
-    <div className="space-y-5" aria-busy="true" aria-label="Loading project overview">
+    <div className="space-y-5" aria-busy="true" aria-label="Loading workspace overview">
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-3">
@@ -183,7 +183,7 @@ export function ProjectOverview({
   if (hasCurrentError || !assessment) {
     return (
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Project assessment</p>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace assessment</p>
         <h2 className="mt-2 text-lg font-extrabold text-slate-100">Overview is being updated.</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">
           The current overview is unavailable. Try again shortly.
@@ -200,7 +200,7 @@ export function ProjectOverview({
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Project assessment</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace assessment</p>
             <h2 className="mt-2 text-xl font-extrabold text-slate-100">Where things stand</h2>
           </div>
           <span className="inline-flex w-fit rounded-full border border-cyan-800/80 bg-cyan-950/40 px-3 py-1.5 text-xs font-extrabold text-cyan-200">

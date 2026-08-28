@@ -1,5 +1,5 @@
 import type { ContextPack } from '@/types/contextPack';
-import type { Project, ProjectHistoryEvent } from '@/types/clarity';
+import type { Project, ProjectHistoryEvent, UserMemoryProfile } from '@/types/clarity';
 import type { StorageProvider } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
@@ -20,7 +20,7 @@ export interface ProjectOverviewAssessmentCacheResult {
 }
 
 const inFlight = new Map<string, Promise<ProjectOverviewAssessmentCacheResult>>();
-const OVERVIEW_CACHE_SCHEMA_VERSION = 3;
+const OVERVIEW_CACHE_SCHEMA_VERSION = 4;
 
 function sortedStrings(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).filter(Boolean))].sort((left, right) => left.localeCompare(right));
@@ -66,6 +66,7 @@ export async function overviewProjectStateVersion(
   history: ProjectHistoryEvent[] = project.historyEvents ?? [],
   focusAssessment: FocusAssessment | null = null,
   contextPack?: ContextPack,
+  profile?: UserMemoryProfile,
 ): Promise<string> {
   const meaningfulHistory = history
     .filter((event) => Boolean(event.changes?.length || event.affectedNodeIds?.length || event.primaryNodeId))
@@ -120,6 +121,26 @@ export async function overviewProjectStateVersion(
     commitments: (contextPack?.upcomingCommitments ?? [])
       .map((node) => ({ type: node.type, text: node.text, status: node.status }))
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    profile: profile
+      ? {
+        answer_density: profile.answer_density,
+        question_frequency: profile.question_frequency,
+        challenge_level: profile.challenge_level,
+        evidence_preference: profile.evidence_preference,
+        brainstorm_style: profile.brainstorm_style,
+        uncertainty_style: profile.uncertainty_style,
+        durable_notes: [...(profile.durable_notes ?? [])].sort(),
+      }
+      : null,
+    memories: (contextPack?.userPreferences ?? [])
+      .map((memory) => ({
+        category: memory.category,
+        text: memory.text,
+        source: memory.source,
+        confidence: memory.confidence,
+        why_remembered: memory.why_remembered,
+      }))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   }));
 }
 
@@ -139,6 +160,7 @@ export async function getCachedProjectOverviewAssessment(
   deps: {
     storage?: StorageProvider;
     generate?: typeof generateProjectOverviewAssessment;
+    profile?: UserMemoryProfile;
   } = {},
 ): Promise<ProjectOverviewAssessment> {
   const result = await getProjectOverviewAssessmentWithMetadata(
@@ -161,6 +183,7 @@ export async function getProjectOverviewAssessmentWithMetadata(
   deps: {
     storage?: StorageProvider;
     generate?: typeof generateProjectOverviewAssessment;
+    profile?: UserMemoryProfile;
   } = {},
 ): Promise<ProjectOverviewAssessmentCacheResult> {
   const storage = deps.storage ?? getStorageProvider();
@@ -170,6 +193,7 @@ export async function getProjectOverviewAssessmentWithMetadata(
     history,
     focusAssessment,
     contextPack,
+    deps.profile,
   );
   const cacheId = projectOverviewAssessmentCacheId(project.id, projectStateVersion);
   const requestKey = `${userId}:${cacheId}`;

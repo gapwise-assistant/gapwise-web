@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import type { MaterializedProjectSnapshot, ProjectSnapshotSummary } from '@/types/projectSnapshot';
 import { formatDateTime } from '@/lib/datetime/displayDateTime';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
+import { workspaceCopy } from '@/lib/ui/workspaceCopy';
 
 interface ProjectSnapshotModalProps {
   snapshot: MaterializedProjectSnapshot | null;
@@ -24,7 +25,7 @@ function countNodes(project: MaterializedProjectSnapshot['project'], type: strin
 
 function SnapshotSkeleton() {
   return (
-    <div className="space-y-5" aria-label="Loading historical project state">
+    <div className="space-y-5" aria-label="Loading historical workspace state">
       <div className="space-y-2">
         <div className="h-4 w-2/5 animate-pulse rounded bg-slate-800" />
         <div className="h-3 w-4/5 animate-pulse rounded bg-slate-900" />
@@ -58,15 +59,15 @@ function SnapshotContent({ materialized }: { materialized: MaterializedProjectSn
 
   return (
     <>
-      {snapshot.summary && <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{snapshot.summary}</p>}
+      {snapshot.summary && <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">{workspaceCopy(snapshot.summary)}</p>}
 
       <section>
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Project state</p>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Workspace state</p>
         <p className="mt-2 text-base font-bold text-slate-100">{projectTitlePresentation(project.title).title}</p>
         <p className="mt-1 text-sm leading-relaxed text-slate-400">{project.goal}</p>
         {project.branch?.snapshotCreatedAt && (
           <p className="mt-2 text-xs text-slate-500">
-            Branched from the source project at {formatDateTime(project.branch.snapshotCreatedAt)}.
+            Branched from the source workspace at {formatDateTime(project.branch.snapshotCreatedAt)}.
           </p>
         )}
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -92,7 +93,7 @@ function SnapshotContent({ materialized }: { materialized: MaterializedProjectSn
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-500">Ask activity</p>
           <p className="mt-2 text-sm text-slate-300">{ask.chats.length} chat{ask.chats.length === 1 ? '' : 's'} · {ask.messages.length} message{ask.messages.length === 1 ? '' : 's'}</p>
-          <p className="mt-1 text-xs text-slate-500">{pendingProposals.length} pending project update{pendingProposals.length === 1 ? '' : 's'}</p>
+          <p className="mt-1 text-xs text-slate-500">{pendingProposals.length} pending workspace update{pendingProposals.length === 1 ? '' : 's'}</p>
         </div>
       </section>
 
@@ -132,10 +133,10 @@ export function ProjectSnapshotModal({ snapshot: materialized, summary, isLoadin
       >
         <header className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4 sm:px-6">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Project history</p>
-            <h2 id="project-snapshot-title" className="mt-1 text-lg font-extrabold text-slate-100">Project at this moment</h2>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace history</p>
+            <h2 id="project-snapshot-title" className="mt-1 text-lg font-extrabold text-slate-100">Workspace at this moment</h2>
             <p className="mt-1 text-xs text-slate-500">
-              {snapshotMeta ? `${formatDateTime(snapshotMeta.createdAt)} · ${snapshotMeta.label}` : 'Loading historical state…'}
+              {snapshotMeta ? `${formatDateTime(snapshotMeta.createdAt)} · ${workspaceCopy(snapshotMeta.label)}` : 'Loading historical state…'}
             </p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg p-2 text-slate-500 hover:bg-slate-900 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80">
@@ -145,7 +146,7 @@ export function ProjectSnapshotModal({ snapshot: materialized, summary, isLoadin
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
           <p className="text-sm leading-relaxed text-slate-400">
-            This shows the project, conversations, decisions, and context as they existed at this point in its history.
+            This shows the workspace, conversations, decisions, and context as they existed at this point in its history.
           </p>
           {materialized ? <SnapshotContent materialized={materialized} /> : isLoading ? <SnapshotSkeleton /> : null}
           {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
@@ -158,7 +159,7 @@ export function ProjectSnapshotModal({ snapshot: materialized, summary, isLoadin
             <button type="button" onClick={onRetry} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-bold text-slate-300 hover:border-slate-500 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80">Retry</button>
           )}
           <button type="button" onClick={onBranch} disabled={isBranching || isLoading || !materialized} className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-wait disabled:opacity-60">
-            {isBranching ? 'Creating project…' : 'Create a new project from here'}
+            {isBranching ? 'Creating workspace…' : 'Create a new workspace from here'}
           </button>
         </footer>
       </section>
