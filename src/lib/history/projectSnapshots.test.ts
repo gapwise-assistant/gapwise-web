@@ -20,6 +20,7 @@ import {
 } from '@/types/projectSnapshot';
 import type { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import type { Project } from '@/types/clarity';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 const userId = 'snapshot-test-user';
 let storagePath = '';
@@ -57,6 +58,7 @@ function makeProject(title: string, time: string) {
   project.nodes.push(node('question_old', 'Which plan should we use?'));
   project.nodes.push(node('decision_old', 'Choose the pilot plan.', 'DECISION'));
   project.edges.push({ id: 'edge_old', source: 'question_old', target: 'decision_old', type: 'informs', confidence: 0.9 });
+  project.semantic_version = semanticProjectVersion(project);
   return project;
 }
 

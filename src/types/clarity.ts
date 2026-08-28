@@ -202,6 +202,8 @@ export interface ContextSource {
   model_used?: string;
   extraction_hash?: string;
   relevance?: 'relevant' | 'possibly_not_relevant';
+  /** False when processing confirmed this source added no project understanding. */
+  semantic_contribution?: boolean;
   discarded_at?: string;
   reconciliation_summary?: QuestionReconciliationSummary;
   /** Full context-processing trace. Captured only for localhost development requests. */
@@ -432,6 +434,8 @@ export interface Project {
   };
   created_at: string;
   updated_at: string;
+  /** Stable revision of the persisted semantic project state. */
+  semantic_version?: string;
 }
 
 export type WorldDomainType =

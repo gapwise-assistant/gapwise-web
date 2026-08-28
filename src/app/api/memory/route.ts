@@ -5,6 +5,8 @@ import { loadDurableMemories, loadUserMemoryProfile, replaceDurableMemories, sav
 import { StorageError } from '@/lib/storage/types';
 import { DurableMemory } from '@/types/contextPack';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { listProjects } from '@/lib/storage';
+import { refreshAskSuggestionsForProjects } from '@/lib/ask/suggestionsRefresh';
 
 export const runtime = 'nodejs';
 
@@ -93,6 +95,12 @@ export async function POST(request: NextRequest) {
       ? await saveUserMemoryProfile(userId, { ...currentProfile, ...body.profile })
       : currentProfile;
     const memories = await replaceDurableMemories(userId, body.memories as DurableMemory[]);
+    await refreshAskSuggestionsForProjects({
+      userId,
+      projects: await listProjects(userId),
+      profile,
+      memories,
+    });
     return NextResponse.json({ profile, memories });
   } catch (error) {
     return jsonError(error);

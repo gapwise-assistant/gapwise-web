@@ -4,6 +4,8 @@ import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import type { Project } from '@/types/clarity';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export const runtime = 'nodejs';
 
@@ -94,6 +96,9 @@ export async function POST(request: NextRequest) {
     const requestedProject = body.project as Parameters<typeof saveProject>[1];
     const before = await getStorageProvider().getProject(userId, requestedProject.id);
     const project = await saveProject(userId, requestedProject);
+    if (!before || semanticProjectVersion(before) !== semanticProjectVersion(project)) {
+      await refreshAskSuggestionsForProject({ userId, project });
+    }
     const trigger = snapshotTrigger(before, project);
     if (trigger) {
       try {

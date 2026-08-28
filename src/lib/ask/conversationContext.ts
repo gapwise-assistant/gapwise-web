@@ -22,6 +22,8 @@ import type { ContextProcessingLog } from '@/types/clarity';
 import { boundedId } from '@/lib/ids/boundedId';
 import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export function askSourceId(chatId: string, messageId: string): string {
   return boundedId('ask', `${chatId}_${messageId}`);
@@ -92,6 +94,7 @@ export async function persistAskProposal(params: {
   projectId?: string;
   assistantMessageId: string;
   proposal: AskContextProposal;
+  refreshSuggestions?: boolean;
 }): Promise<Project> {
   const target = await loadTarget(params.userId, params.projectId);
   const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
@@ -200,6 +203,9 @@ export async function persistAskProposal(params: {
     appendNextActionCompletionHistory(updated, completedActionIds);
   }
   await saveTarget(params.userId, updated, target.isGeneral);
+  if (!target.isGeneral && params.refreshSuggestions !== false && semanticProjectVersion(target.project) !== semanticProjectVersion(updated)) {
+    await refreshAskSuggestionsForProject({ userId: params.userId, project: updated, profile });
+  }
   return updated;
 }
 
@@ -214,6 +220,7 @@ export async function persistAskConversationContext(params: {
   text: string;
   projectId?: string;
   captureProcessingLog?: boolean;
+  refreshSuggestions?: boolean;
 }): Promise<{
   sourceId: string;
   historyEventId?: string;
@@ -234,7 +241,11 @@ export async function persistAskConversationContext(params: {
     captureProcessingLog: params.captureProcessingLog,
   });
 
+  const semanticStateChanged = semanticProjectVersion(target.project) !== semanticProjectVersion(result.project);
   if (!result.skipped) await saveTarget(params.userId, result.project, target.isGeneral);
+  if (!target.isGeneral && semanticStateChanged && !result.skipped && params.refreshSuggestions !== false) {
+    await refreshAskSuggestionsForProject({ userId: params.userId, project: result.project, profile });
+  }
 
   const source = result.project.sources.find((candidate) => candidate.id === sourceId);
   const historyEventId = [...(result.project.historyEvents ?? [])]

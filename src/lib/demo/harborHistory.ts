@@ -11,6 +11,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { getStorageProvider } from '@/lib/storage';
 import { persistAskConversationContext, persistAskProposal } from '@/lib/ask/conversationContext';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 import { askGapswise } from '@/lib/ask/adkClient';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
@@ -1057,6 +1058,7 @@ async function runHarborAskTurn(params: {
     text: params.message,
     projectId: params.project.id,
       captureProcessingLog: true,
+      refreshSuggestions: false,
     }),
   );
   const projectAfterContext = await recordDeveloperGenerationStep(
@@ -1292,6 +1294,7 @@ async function transitionHarborProposal(params: {
           projectId: project.id,
           assistantMessageId: message.id,
           proposal: nextProposal,
+          refreshSuggestions: false,
         }),
       );
       if (params.anchorKey) {
@@ -1589,6 +1592,11 @@ export async function createHarborHistoryDemoForUser(params: {
     summary: 'Confirmed the final pilot pricing outcome.',
   });
   project = await processDocument(params.userId, project, HARBOR_HISTORY_DOCUMENTS[4], recorder);
+  await refreshAskSuggestionsForProject({
+    userId: params.userId,
+    project,
+    storage,
+  });
 
   HARBOR_HISTORY_DOCUMENTS.forEach((document) => {
     const source = project.sources.find((candidate) => candidate.id === sourceIdFor(project.id, document));

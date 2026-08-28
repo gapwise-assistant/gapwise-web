@@ -594,6 +594,7 @@ async function runAsk(
       text: scenario.query,
       projectId: state.project.id,
       captureProcessingLog: true,
+      refreshSuggestions: false,
     });
   } catch (error) {
     throw new Error(`ask-context-agent: ${error instanceof Error ? error.message : 'Ask message ingestion failed.'}`);

@@ -7,6 +7,7 @@ import {
   FirestoreNode,
   FirestoreSource,
 } from '@/lib/storage/types';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export interface ProjectCollections {
   contexts: FirestoreContext[];
@@ -45,6 +46,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
         active_question: project.active_question ?? null,
         historyEvents: project.historyEvents ?? [],
         branch: project.branch,
+        semantic_version: semanticProjectVersion(project),
         status: project.status === 'archived' ? 'ARCHIVED' : 'ACTIVE',
         createdAt: project.created_at,
         updatedAt,
@@ -112,6 +114,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       model_used: source.model_used,
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
+      semantic_contribution: source.semantic_contribution,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
       processing_log: source.processing_log,
@@ -171,6 +174,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
     branch: context.branch,
     created_at: context.createdAt,
     updated_at: context.updatedAt,
+    semantic_version: context.semantic_version,
     nodes: nodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -222,6 +226,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
       model_used: source.model_used,
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
+      semantic_contribution: source.semantic_contribution,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
       processing_log: source.processing_log,
@@ -318,6 +323,7 @@ export function collectionsToGeneralContext(collections: GeneralContextCollectio
       model_used: source.model_used,
       extraction_hash: source.extraction_hash,
       relevance: source.relevance,
+      semantic_contribution: source.semantic_contribution,
       discarded_at: source.discarded_at,
       reconciliation_summary: source.reconciliation_summary,
       processing_log: source.processing_log,

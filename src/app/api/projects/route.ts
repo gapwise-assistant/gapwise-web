@@ -10,6 +10,7 @@ import { isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { resolveScope } from '@/lib/scope/projectScope';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 
 export const runtime = 'nodejs';
 
@@ -104,6 +105,7 @@ export async function POST(request: NextRequest) {
       project = processed.project;
     }
     await saveProject(userId, project);
+    await refreshAskSuggestionsForProject({ userId, project });
     if (!body.description) {
       try {
         await createProjectSnapshot({

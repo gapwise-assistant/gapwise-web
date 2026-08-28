@@ -5,6 +5,7 @@ import { StorageError } from '@/lib/storage/types';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { saveFeedback } from '@/lib/tools/feedbackTools';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 
 export const runtime = 'nodejs';
 
@@ -70,6 +71,9 @@ export async function POST(request: Request) {
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await answerQuestion({ ...body, userId });
     if (result.projectId) {
+      await refreshAskSuggestionsForProject({ userId, project: result.context });
+    }
+    if (result.projectId) {
       try {
         await createProjectSnapshot({
           userId,
@@ -114,6 +118,9 @@ export async function PATCH(request: Request) {
       const body = reopenRequestSchema.parse(rawBody);
       const userId = await requireAuthenticatedUserId(request, body.userId);
       const result = await reopenAnsweredQuestion({ ...body, userId });
+      if (result.projectId && result.ownerType === 'project') {
+        await refreshAskSuggestionsForProject({ userId, project: result.context });
+      }
       if (result.projectId) {
         try {
           await createProjectSnapshot({
@@ -141,6 +148,7 @@ export async function PATCH(request: Request) {
     const body = editRequestSchema.parse(rawBody);
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const result = await editAnsweredQuestion({ ...body, userId });
+    await refreshAskSuggestionsForProject({ userId, project: result.context });
     try {
       await createProjectSnapshot({
         userId,

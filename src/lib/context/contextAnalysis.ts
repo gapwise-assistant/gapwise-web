@@ -953,11 +953,17 @@ export async function processContextSource(
     updated = relationshipCompletion.project;
     retireExplicitlyDisprovedRisks(updated);
     const completedActionIds = resolveSatisfiedNextActions(updated, new Date().toISOString());
+    const historyEventCountBeforeContext = project.historyEvents?.length ?? 0;
     updated = appendContextAddedHistory(project, updated, {
       sourceId: input.sourceId ?? 'new-source',
       filename: input.filename,
       createdAt: new Date().toISOString(),
     });
+    const sourceAfterContext = updated.sources.find((source) => source.id === input.sourceId);
+    const contextHistoryAdded = (updated.historyEvents?.length ?? 0) > historyEventCountBeforeContext;
+    if (sourceAfterContext && !contextHistoryAdded && completedActionIds.length === 0) {
+      sourceAfterContext.semantic_contribution = false;
+    }
     if (completedActionIds.length > 0) {
       appendNextActionCompletionHistory(updated, completedActionIds, new Date().toISOString());
     }

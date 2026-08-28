@@ -343,6 +343,9 @@ export function AskGapswise({
     setHasLoadedRemoteState(false);
     setChats([]);
     setActiveChatId(null);
+    setSuggestedQuestions(null);
+    setIsSuggestionsLoading(scope.type === 'project');
+    setSuggestionsError('');
     setHiddenProposalKeys(new Set());
     setShownProposalKeys(new Set());
     setIsWorkspaceHidden(localStorage.getItem(hiddenWorkspaceKey(userId, scope)) === 'true');
@@ -399,20 +402,24 @@ export function AskGapswise({
     if (!hasLoadedPersistedState) return;
     let isMounted = true;
     const fetchSuggestions = async () => {
+      if (scope.type !== 'project') {
+        setIsSuggestionsLoading(false);
+        return;
+      }
+      setSuggestedQuestions(null);
       setIsSuggestionsLoading(true);
       setSuggestionsError('');
       try {
-        const response = await authFetch('/api/ask/suggestions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId,
-            scopeLabel,
-            ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
-          }),
-        });
-        const data = await response.json() as { topQuestions?: unknown[]; otherQuestions?: unknown[]; error?: string };
+        const response = await authFetch(`/api/ask/suggestions?projectId=${encodeURIComponent(scope.projectId)}`);
+        const data = await response.json() as {
+          topQuestions?: unknown[];
+          otherQuestions?: unknown[];
+          projectId?: string;
+          error?: string;
+          status?: string;
+        };
         if (!response.ok) throw new Error(data.error ?? 'Suggestions are unavailable.');
+        if (data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable for this workspace.');
         const top = (data.topQuestions ?? [])
           .filter((question): question is string => typeof question === 'string')
           .slice(0, 3);
@@ -423,7 +430,6 @@ export function AskGapswise({
         setSuggestedQuestions({ top, other });
       } catch (caught) {
         if (!isMounted) return;
-        setSuggestedQuestions(null);
         setSuggestionsError(caught instanceof Error ? caught.message : 'Suggestions are unavailable.');
       } finally {
         if (isMounted) setIsSuggestionsLoading(false);
@@ -433,7 +439,7 @@ export function AskGapswise({
     return () => {
       isMounted = false;
     };
-  }, [hasLoadedPersistedState, profile, scope, scopeLabel, userId]);
+  }, [hasLoadedPersistedState, profile, scope, userId]);
 
   const handleNewChat = () => {
     const fresh = newChat();
@@ -821,7 +827,7 @@ export function AskGapswise({
               ))}
             </div>
           ) : (
-            <p className="mt-3 text-xs text-slate-500">{suggestionsError || 'No suggestions are available yet.'}</p>
+            <p className="mt-3 text-xs text-slate-500">{suggestionsError || 'Suggestions are being prepared.'}</p>
           )}
         </section>
       )}

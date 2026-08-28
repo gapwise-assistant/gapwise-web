@@ -10,6 +10,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { getStorageProvider } from '@/lib/storage';
 import { persistAskConversationContext, persistAskProposal } from '@/lib/ask/conversationContext';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 import { askGapswise } from '@/lib/ask/adkClient';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
@@ -509,6 +510,7 @@ async function runAskTurn(params: { userId: string; project: Project; chat: AskC
     () => persistAskConversationContext({
     userId: params.userId, chatId: params.chat.id, messageId: userMessageId, text: params.message,
       projectId: params.project.id, captureProcessingLog: true,
+      refreshSuggestions: false,
     }),
   );
   const projectAfterContext = await recordDeveloperGenerationStep(
@@ -595,7 +597,7 @@ async function transitionProposal(params: { userId: string; turn: RiversideAskTu
     project = await recordDeveloperGenerationStep(
       params.recorder,
       { name: 'Proposal source processed', category: 'proposal', chatId: message.chatId, messageId: message.id, proposalId: params.proposal.id, sourceId: proposalSourceIdFor(message.id, params.proposal.id), summary: 'Persisted and processed the proposal as project context.' },
-      () => persistAskProposal({ userId: params.userId, projectId: project.id, assistantMessageId: message.id, proposal: nextProposal }),
+      () => persistAskProposal({ userId: params.userId, projectId: project.id, assistantMessageId: message.id, proposal: nextProposal, refreshSuggestions: false }),
     );
     if (params.anchorKey) {
       recordControlledJourneyAnchor(params.anchors, {
@@ -795,6 +797,11 @@ export async function createRiversideHistoryDemoForUser(params: { userId: string
   project = await resolveDriverQuestionIfNeeded(params.userId, project, anchors, recorder);
   project = await resolvePricingIfNeeded(params.userId, project, anchors, recorder);
   project = await processDocument(params.userId, project, RIVERSIDE_HISTORY_DOCUMENTS[4], recorder);
+  await refreshAskSuggestionsForProject({
+    userId: params.userId,
+    project,
+    storage,
+  });
 
   const snapshots = await storage.listProjectSnapshots(params.userId, project.id);
   const messages = (await storage.getAskMessages(params.userId)).filter((message) => message.projectId === project.id);

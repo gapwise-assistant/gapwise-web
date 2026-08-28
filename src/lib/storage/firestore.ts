@@ -402,6 +402,30 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
   }
 
+  async getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null> {
+    try {
+      const snapshot = await this.collection(userId, 'askSuggestionAssessments')
+        .where('projectId', '==', projectId)
+        .get();
+      return snapshot.docs
+        .map((doc) => this.fromFirestore<AskSuggestionsCacheRecord>(doc.data()))
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async getProjectSemanticVersion(userId: string, projectId: string): Promise<string | null> {
+    try {
+      const snapshot = await this.collection(userId, 'contexts').doc(projectId).get();
+      if (!snapshot.exists) return null;
+      const value = snapshot.data()?.semantic_version;
+      return typeof value === 'string' ? value : '';
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.save(userId, 'askSuggestionAssessments', record);
   }

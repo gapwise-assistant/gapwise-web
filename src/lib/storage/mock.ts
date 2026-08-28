@@ -359,6 +359,18 @@ export class MockStorageProvider implements StorageProvider {
     return (await this.getUser(userId)).askSuggestionAssessments?.find((record) => record.id === cacheId) ?? null;
   }
 
+  async getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null> {
+    return (await this.getUser(userId)).askSuggestionAssessments
+      ?.filter((record) => record.projectId === projectId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
+  }
+
+  async getProjectSemanticVersion(userId: string, projectId: string): Promise<string | null> {
+    const context = (await this.getUser(userId)).contexts.find((candidate) => candidate.id === projectId);
+    if (!context) return null;
+    return context.semantic_version ?? '';
+  }
+
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
   }

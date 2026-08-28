@@ -49,6 +49,7 @@ const replay = vi.hoisted(() => ({
   usedContext: new Set<string>(),
   usedAsk: new Set<string>(),
   usedRelationship: new Set<string>(),
+  suggestionRefreshes: 0,
   unexpected: [] as string[],
 }));
 
@@ -152,6 +153,7 @@ function resetReplayState(): void {
   replay.usedContext.clear();
   replay.usedAsk.clear();
   replay.usedRelationship.clear();
+  replay.suggestionRefreshes = 0;
   replay.unexpected.length = 0;
   replay.model.mockReset();
   replay.ask.mockReset();
@@ -164,6 +166,15 @@ function configureExternalCassettes(): void {
   }));
 
   replay.ask.mockImplementation(async ({ message }: { message: string }) => {
+    if (message.includes('__gapswise_ask_suggestions__')) {
+      replay.suggestionRefreshes += 1;
+      return {
+        answer: JSON.stringify({
+          top_questions: ['Which remaining project uncertainty matters most?'],
+          other_questions: ['What should be checked before launch?'],
+        }),
+      };
+    }
     const turn = message.includes('validate')
       ? 'validation'
       : message.includes('volunteer drivers cancel')
@@ -450,6 +461,7 @@ describe('deterministic generator E2E regression', () => {
     expect(result.snapshotCount).toBe(snapshots.length);
     expect(result.pdfSourcesWithCompletionTrace).toBe(5);
     expect(result.askProposalSourcesWithCompletionTrace).toBe(4);
+    expect(replay.suggestionRefreshes).toBe(1);
 
     const resolvedDecisions = project.nodes.filter((node) => node.type === 'DECISION' && node.status === 'RESOLVED');
     expect(resolvedDecisions.length).toBeGreaterThanOrEqual(2);
@@ -525,6 +537,7 @@ describe('deterministic generator E2E regression', () => {
       event.type === 'action_completed' && event.primaryNodeId === deliveryAction?.id,
     );
     expect(deliveryActionEvents).toHaveLength(1);
+    expect(replay.suggestionRefreshes).toBe(1);
     assertNoUnexpectedCalls('riverside');
   }, 120_000);
 });

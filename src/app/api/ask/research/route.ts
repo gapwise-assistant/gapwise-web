@@ -8,6 +8,7 @@ import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { AskResearchEvidence } from '@/types/ask';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { confirmDecision } from '@/lib/decisions/workspace';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 
 export const runtime = 'nodejs';
 
@@ -274,12 +275,15 @@ export async function POST(request: Request) {
     if (isQuestionAction || isDecisionAction) {
       await storage.saveAskResearch(userId, research);
       if (isQuestionAction) {
-        await answerQuestion({
+        const answerResult = await answerQuestion({
           userId,
           nodeId: targetQuestionId!,
           answer: text,
           projectId: chat.projectId,
         });
+        if (answerResult.projectId) {
+          await refreshAskSuggestionsForProject({ userId, project: answerResult.context });
+        }
       } else {
         const target = await loadDecisionTarget(userId, chat.projectId, targetDecisionId!);
         const updated = confirmDecision(target.project, {
@@ -287,7 +291,10 @@ export async function POST(request: Request) {
           customDecision: text,
         });
         if (target.isGeneral) await saveGeneralContext(userId, updated);
-        else await saveProject(userId, updated);
+        else {
+          await saveProject(userId, updated);
+          await refreshAskSuggestionsForProject({ userId, project: updated });
+        }
       }
       const confirmed = { ...research, status: 'confirmed' as const, updatedAt: new Date().toISOString() };
       await storage.saveAskResearch(userId, confirmed);

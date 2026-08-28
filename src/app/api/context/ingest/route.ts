@@ -17,6 +17,8 @@ import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
+import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export const runtime = 'nodejs';
 
@@ -212,6 +214,7 @@ export async function POST(request: Request) {
     forceReprocess,
     captureProcessingLog: isLocalhostRequest(request),
   });
+  const semanticStateChanged = semanticProjectVersion(target.project) !== semanticProjectVersion(result.project);
   if (!result.skipped && !result.error) {
     const refreshed = await refreshProjectGapRuntime({
       userId: source.userId,
@@ -223,6 +226,13 @@ export async function POST(request: Request) {
     result.project = refreshed.project;
   }
   if (!result.skipped) await saveTarget(source.userId, result.project, target.isGeneral);
+  if (!target.isGeneral && semanticStateChanged && !result.skipped && !result.error) {
+    await refreshAskSuggestionsForProject({
+      userId: source.userId,
+      project: result.project,
+      profile,
+    });
+  }
 
   const sourceHistoryEventId = !result.skipped && !result.error
     ? result.project.historyEvents?.find((event) =>

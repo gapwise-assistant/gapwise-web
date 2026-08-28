@@ -189,7 +189,9 @@ describe('Riverside history demo generator', () => {
     const messages = (await storage.getAskMessages('riverside-user')).filter((message) => message.projectId === result.project.id);
     const proposals = messages.flatMap((message) => message.contextProposals ?? message.proposals ?? []);
 
-    expect(mocks.askGapswise).toHaveBeenCalledTimes(3);
+    // Three calls are the scripted conversation; the fourth is the single
+    // final project-state suggestion refresh for the batch journey.
+    expect(mocks.askGapswise).toHaveBeenCalledTimes(4);
     expect(result.pdfs).toHaveLength(5);
     expect(result.pdfs.every((pdf) => pdf.stored)).toBe(true);
     expect(result.snapshotCount).toBeGreaterThan(8);

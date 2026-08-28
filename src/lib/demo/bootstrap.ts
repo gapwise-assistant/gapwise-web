@@ -578,6 +578,7 @@ export async function loadNorthstarPilotDemoForUser(userId: string): Promise<Nor
       text: conversation.user,
       projectId: project.id,
       captureProcessingLog: process.env.NODE_ENV !== 'production',
+      refreshSuggestions: false,
     });
     const ingestedProject = await storage.getProject(userId, project.id);
     if (!ingestedProject) throw new Error('The Northstar pilot project disappeared during Ask ingestion.');
@@ -747,6 +748,7 @@ async function runHarborAsk(params: {
     text: params.message,
     projectId: params.project.id,
     captureProcessingLog: process.env.NODE_ENV !== 'production',
+    refreshSuggestions: false,
   });
   const projectAfterUserMessage = await storage.getProject(params.userId, params.project.id);
   if (!projectAfterUserMessage) throw new Error('The Harbor Hotels project disappeared during Ask ingestion.');

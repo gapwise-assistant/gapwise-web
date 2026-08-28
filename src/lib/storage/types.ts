@@ -68,6 +68,7 @@ export interface FirestoreSource extends BaseEntity {
   model_used?: string;
   extraction_hash?: string;
   relevance?: 'relevant' | 'possibly_not_relevant';
+  semantic_contribution?: boolean;
   discarded_at?: string;
   reconciliation_summary?: QuestionReconciliationSummary;
   processing_log?: ContextProcessingLog;
@@ -82,6 +83,7 @@ export interface FirestoreContext extends BaseEntity {
   active_question?: CandidateGap | null;
   historyEvents?: ProjectHistoryEvent[];
   branch?: Project['branch'];
+  semantic_version?: string;
 }
 
 export interface FirestoreConversation extends BaseEntity {
@@ -144,11 +146,14 @@ export interface AskSuggestionsCacheRecord {
   projectId?: string;
   scopeKey: string;
   projectStateVersion: string;
+  /** The project-only revision used for cheap read-path staleness checks. */
+  semanticProjectVersion?: string;
   topQuestions: string[];
   otherQuestions: string[];
   generatedBy: string;
   createdAt: string;
   updatedAt: string;
+  status?: 'ready' | 'stale' | 'failed';
 }
 
 export type DeveloperGenerationRunStatus = 'running' | 'completed' | 'failed';
@@ -256,6 +261,8 @@ export interface StorageProvider {
   getProjectOverviewAssessment(userId: string, cacheId: string): Promise<ProjectOverviewAssessmentCacheRecord | null>;
   saveProjectOverviewAssessment(userId: string, record: ProjectOverviewAssessmentCacheRecord): Promise<void>;
   getAskSuggestionsCache(userId: string, cacheId: string): Promise<AskSuggestionsCacheRecord | null>;
+  getLatestAskSuggestionsCache(userId: string, projectId: string): Promise<AskSuggestionsCacheRecord | null>;
+  getProjectSemanticVersion(userId: string, projectId: string): Promise<string | null>;
   saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void>;
 
   listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]>;
