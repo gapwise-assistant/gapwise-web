@@ -126,6 +126,12 @@ describe('Ask suggestions read route', () => {
       generatedBy: 'gapswise-agent',
       createdAt: '2026-08-28T10:00:00.000Z',
       updatedAt: '2026-08-28T10:00:01.000Z',
+      ...(status === 'preparing'
+        ? {
+          generationStartedAt: new Date().toISOString(),
+          generationLeaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }
+        : {}),
       status,
     });
 
@@ -135,6 +141,35 @@ describe('Ask suggestions read route', () => {
     await expect(response.json()).resolves.toMatchObject({
       topQuestions: ['Previous question?'],
       status,
+    });
+  });
+
+  it('reports an expired preparing lease as stale without generating suggestions', async () => {
+    storage.getLatestAskSuggestionsCache.mockResolvedValue({
+      id: 'assessment-expired',
+      userId: 'demo-user',
+      projectId: 'workspace-1',
+      scopeKey: 'project:workspace-1',
+      projectStateVersion: 'published-input-v1',
+      semanticProjectVersion: 'semantic-project-v1',
+      requestedSemanticProjectVersion: 'semantic-project-v1',
+      generationId: 'generation-expired',
+      generationLeaseExpiresAt: '2020-01-01T00:00:00.000Z',
+      topQuestions: ['Previous question?'],
+      otherQuestions: [],
+      generatedBy: 'gapswise-agent',
+      createdAt: '2026-08-28T10:00:00.000Z',
+      updatedAt: '2026-08-28T10:00:01.000Z',
+      status: 'preparing',
+    });
+
+    const response = await GET(new Request('http://localhost/api/ask/suggestions?userId=demo-user&projectId=workspace-1'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      topQuestions: ['Previous question?'],
+      status: 'stale',
+      cached: true,
     });
   });
 

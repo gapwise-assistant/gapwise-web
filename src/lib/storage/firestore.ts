@@ -35,6 +35,11 @@ import {
 } from '@/types/projectSnapshot';
 import { compactProcessingLogForFirestore } from '@/lib/context/processingLog';
 import { askSuggestionsCurrentCacheId } from '@/lib/ask/suggestionsCacheId';
+import {
+  askSuggestionsInputVersion,
+  createAskSuggestionsLease,
+  hasValidAskSuggestionsLease,
+} from '@/lib/ask/suggestionsLease';
 
 type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
@@ -444,10 +449,12 @@ export class FirestoreStorageProvider implements StorageProvider {
         if (existing?.projectId && existing.projectId !== record.projectId) return;
         if (
           existing?.status === 'preparing'
-          && existing.requestedSemanticProjectVersion === record.requestedSemanticProjectVersion
+          && askSuggestionsInputVersion(existing) === askSuggestionsInputVersion(record)
+          && hasValidAskSuggestionsLease(existing)
         ) return;
 
         const now = record.requestedAt ?? record.updatedAt;
+        const lease = createAskSuggestionsLease(now);
         const preparing: AskSuggestionsCacheRecord = {
           ...record,
           id: ref.id,
@@ -456,6 +463,8 @@ export class FirestoreStorageProvider implements StorageProvider {
           otherQuestions: existing?.otherQuestions ?? record.otherQuestions,
           createdAt: existing?.createdAt ?? record.createdAt,
           updatedAt: now,
+          generationStartedAt: record.generationStartedAt ?? lease.generationStartedAt,
+          generationLeaseExpiresAt: record.generationLeaseExpiresAt ?? lease.generationLeaseExpiresAt,
         };
         transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt(preparing)));
         started = true;
@@ -483,6 +492,7 @@ export class FirestoreStorageProvider implements StorageProvider {
           current.projectId !== record.projectId
           || current.generationId !== generationId
           || current.requestedSemanticProjectVersion !== record.requestedSemanticProjectVersion
+          || askSuggestionsInputVersion(current) !== askSuggestionsInputVersion(record)
         ) return;
         transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
           ...record,
@@ -511,10 +521,6 @@ export class FirestoreStorageProvider implements StorageProvider {
         if (!snapshot.exists) return;
         const current = this.fromFirestore<AskSuggestionsCacheRecord>(snapshot.data()!);
         if (current.projectId !== projectId) return;
-        if (
-          current.status === 'preparing'
-          && current.requestedSemanticProjectVersion === requestedSemanticProjectVersion
-        ) return;
         const now = new Date().toISOString();
         transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
           ...current,
@@ -523,6 +529,8 @@ export class FirestoreStorageProvider implements StorageProvider {
           requestedAt: now,
           updatedAt: now,
           generationId: undefined,
+          generationStartedAt: undefined,
+          generationLeaseExpiresAt: undefined,
         })), { merge: false });
       });
     } catch (error) {

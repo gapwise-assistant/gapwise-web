@@ -20,6 +20,10 @@ import type { Project, UserMemoryProfile } from '@/types/clarity';
 import type { DurableMemory } from '@/types/contextPack';
 import type { AskSuggestionsCacheRecord, AskSuggestionAssessmentStatus, StorageProvider } from '@/lib/storage/types';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
+import {
+  createAskSuggestionsLease,
+  ASK_SUGGESTIONS_GENERATION_LEASE_MS,
+} from '@/lib/ask/suggestionsLease';
 
 function failureStage(error: unknown): AskFailureStage {
   const candidate = error && typeof error === 'object' && 'stage' in error
@@ -97,7 +101,7 @@ export async function refreshAskSuggestionsForProject(params: {
 
     const refreshKey = `${params.userId}:${params.project.id}:${publishedInputVersion}`;
     const existingRefresh = refreshInFlight.get(refreshKey);
-    if (existingRefresh) return existingRefresh;
+    if (existingRefresh && existingRefresh.leaseExpiresAt > Date.now()) return existingRefresh.promise;
     const refresh = runRaceSafeRefresh({
       ...params,
       storage,
@@ -109,11 +113,12 @@ export async function refreshAskSuggestionsForProject(params: {
       memories,
       currentRecord,
     });
-    refreshInFlight.set(refreshKey, refresh);
+    const leaseExpiresAt = Date.now() + ASK_SUGGESTIONS_GENERATION_LEASE_MS;
+    refreshInFlight.set(refreshKey, { promise: refresh, leaseExpiresAt });
     try {
       return await refresh;
     } finally {
-      refreshInFlight.delete(refreshKey);
+      if (refreshInFlight.get(refreshKey)?.promise === refresh) refreshInFlight.delete(refreshKey);
     }
   } catch (error) {
     // Refresh is an enhancement after a successful semantic mutation. It must
@@ -161,7 +166,10 @@ async function generateLegacySuggestions(params: {
   }
 }
 
-const refreshInFlight = new Map<string, Promise<CachedAskSuggestions>>();
+const refreshInFlight = new Map<string, {
+  promise: Promise<CachedAskSuggestions>;
+  leaseExpiresAt: number;
+}>();
 
 async function generateSuggestions(params: {
   userId: string;
@@ -226,6 +234,7 @@ async function runRaceSafeRefresh(params: {
 }): Promise<CachedAskSuggestions> {
   const now = new Date().toISOString();
   const generationId = randomUUID();
+  const lease = createAskSuggestionsLease(now);
   const requestRecord: AskSuggestionsCacheRecord = {
     id: '',
     userId: params.userId,
@@ -242,6 +251,8 @@ async function runRaceSafeRefresh(params: {
     createdAt: now,
     updatedAt: now,
     requestedAt: now,
+    generationStartedAt: lease.generationStartedAt,
+    generationLeaseExpiresAt: lease.generationLeaseExpiresAt,
     status: 'preparing',
   };
 
@@ -276,6 +287,8 @@ async function runRaceSafeRefresh(params: {
       status: 'ready',
       generatedAt: completedAt,
       updatedAt: completedAt,
+      generationStartedAt: undefined,
+      generationLeaseExpiresAt: undefined,
     };
     const published = await params.storage.publishAskSuggestionsCache?.(
       params.userId,
@@ -312,6 +325,8 @@ async function runRaceSafeRefresh(params: {
       failureStage: stage,
       generatedAt: current?.generatedAt,
       updatedAt: new Date().toISOString(),
+      generationStartedAt: undefined,
+      generationLeaseExpiresAt: undefined,
     };
     const failedPublished = await params.storage.publishAskSuggestionsCache?.(
       params.userId,

@@ -209,4 +209,68 @@ describe('Ask suggestions refresh', () => {
     });
     expect(raceStorage.publishAskSuggestionsCache).toHaveBeenCalledOnce();
   });
+
+  it('rejects an older generation when profile or memory input changes without a project change', async () => {
+    const project = createGoldenDemoProject();
+    const detailedProfile = { ...DEFAULT_USER_PROFILE, answer_density: 'detailed' as const };
+    let current: AskSuggestionsCacheRecord | null = null;
+    const releases: Array<() => void> = [];
+    const raceStorage = {
+      getAskSuggestionsCache: vi.fn(),
+      saveAskSuggestionsCache: vi.fn(),
+      getLatestAskSuggestionsCache: vi.fn(async () => current),
+      getProjectSemanticVersion: vi.fn(async () => semanticProjectVersion(project)),
+      beginAskSuggestionsRefresh: vi.fn(async (_userId: string, record: AskSuggestionsCacheRecord) => {
+        if (
+          current?.status === 'preparing'
+          && current.publishedInputVersion === record.publishedInputVersion
+        ) return false;
+        current = { ...record };
+        return true;
+      }),
+      publishAskSuggestionsCache: vi.fn(async (_userId: string, record: AskSuggestionsCacheRecord, generationId: string) => {
+        if (
+          current?.generationId !== generationId
+          || current.publishedInputVersion !== record.publishedInputVersion
+        ) return false;
+        current = { ...record };
+        return true;
+      }),
+    };
+    mocks.askGapswise.mockImplementation(() => new Promise((resolve) => {
+      const label = `Profile result ${releases.length + 1}?`;
+      releases.push(() => resolve({
+        answer: JSON.stringify({ top_questions: [label], other_questions: [] }),
+      }));
+    }));
+
+    const firstRefresh = refreshAskSuggestionsForProject({
+      userId: 'ask-user',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+      memories: [],
+      storage: raceStorage as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const secondRefresh = refreshAskSuggestionsForProject({
+      userId: 'ask-user',
+      project,
+      profile: detailedProfile,
+      memories: [],
+      storage: raceStorage as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(releases).toHaveLength(2);
+    releases[1]!();
+    await expect(secondRefresh).resolves.toMatchObject({ top: ['Profile result 2?'] });
+    releases[0]!();
+    await firstRefresh;
+
+    expect(current).toMatchObject({
+      status: 'ready',
+      topQuestions: ['Profile result 2?'],
+    });
+    expect(raceStorage.publishAskSuggestionsCache).toHaveBeenCalledTimes(2);
+  });
 });

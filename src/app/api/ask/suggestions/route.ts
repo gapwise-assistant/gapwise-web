@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getStorageProvider } from '@/lib/storage';
+import { hasValidAskSuggestionsLease } from '@/lib/ask/suggestionsLease';
 
 export const runtime = 'nodejs';
 
@@ -53,10 +54,13 @@ async function readSavedSuggestions(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'Suggestions are unavailable for this workspace.' }, { status: 503 });
     }
     const requestedVersion = latest?.requestedSemanticProjectVersion ?? latest?.semanticProjectVersion;
+    const leaseExpired = latest?.status === 'preparing' && !hasValidAskSuggestionsLease(latest);
     const status = !latest
       ? 'preparing'
       : requestedVersion && requestedVersion !== currentProjectVersion
         ? 'stale'
+        : leaseExpired
+          ? 'stale'
         : latest.status && assessmentStatuses.has(latest.status)
           ? latest.status
           : 'ready';

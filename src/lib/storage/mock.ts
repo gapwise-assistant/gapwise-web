@@ -34,6 +34,11 @@ import {
   type SnapshotReferencedRecordType,
 } from '@/types/projectSnapshot';
 import { askSuggestionsCurrentCacheId } from '@/lib/ask/suggestionsCacheId';
+import {
+  askSuggestionsInputVersion,
+  createAskSuggestionsLease,
+  hasValidAskSuggestionsLease,
+} from '@/lib/ask/suggestionsLease';
 
 interface MockDatabase {
   users: Record<
@@ -384,9 +389,11 @@ export class MockStorageProvider implements StorageProvider {
     if (existing?.projectId && existing.projectId !== record.projectId) return false;
     if (
       existing?.status === 'preparing'
-      && existing.requestedSemanticProjectVersion === record.requestedSemanticProjectVersion
+      && askSuggestionsInputVersion(existing) === askSuggestionsInputVersion(record)
+      && hasValidAskSuggestionsLease(existing)
     ) return false;
     const now = record.requestedAt ?? record.updatedAt;
+    const lease = createAskSuggestionsLease(now);
     const preparing: AskSuggestionsCacheRecord = {
       ...record,
       id: currentId,
@@ -395,6 +402,8 @@ export class MockStorageProvider implements StorageProvider {
       otherQuestions: existing?.otherQuestions ?? record.otherQuestions,
       createdAt: existing?.createdAt ?? record.createdAt,
       updatedAt: now,
+      generationStartedAt: record.generationStartedAt ?? lease.generationStartedAt,
+      generationLeaseExpiresAt: record.generationLeaseExpiresAt ?? lease.generationLeaseExpiresAt,
     };
     const index = user.askSuggestionAssessments.findIndex((candidate) => candidate.id === currentId);
     if (index >= 0) user.askSuggestionAssessments[index] = preparing;
@@ -419,6 +428,7 @@ export class MockStorageProvider implements StorageProvider {
       || current.projectId !== record.projectId
       || current.generationId !== generationId
       || current.requestedSemanticProjectVersion !== record.requestedSemanticProjectVersion
+      || askSuggestionsInputVersion(current) !== askSuggestionsInputVersion(record)
     ) return false;
     user.askSuggestionAssessments[index] = { ...record, id: currentId, generationId };
     db.users[userId] = user;
@@ -445,6 +455,8 @@ export class MockStorageProvider implements StorageProvider {
       requestedAt: now,
       updatedAt: now,
       generationId: undefined,
+      generationStartedAt: undefined,
+      generationLeaseExpiresAt: undefined,
     };
     db.users[userId] = user;
     await this.writeDb(db);

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { askHandoffMatchesScope, askResponseAction, canUseAskConclusion, canonicalAskQuestions, chatPickerOptions, ChatSession, isClarificationResponse, refreshAskProjectBeforeCompletion, researchStatusFromRecords, restoreChatSessions } from '@/components/AskGapswise';
 import { humanizeSourceTitle } from '@/lib/context/sourceTitle';
+import {
+  normalizeAskSuggestionsAssessment,
+  pollAskSuggestions,
+} from '@/lib/ask/suggestionsPolling';
 
 function chat(id: string, question: string, messagesCount = 1): ChatSession {
   return {
@@ -173,5 +177,67 @@ describe('Source title sanitization', () => {
     expect(humanizeSourceTitle('ask_chat_123_user_456.txt')).toBe('Conversation context');
     expect(humanizeSourceTitle('ask_session_turn.md')).toBe('Conversation context');
     expect(humanizeSourceTitle('clinicflow-project-plan.md')).toBe('Clinicflow Project Plan');
+  });
+});
+
+describe('Ask suggestion polling', () => {
+  function assessment(projectId: string, status: 'preparing' | 'ready' | 'stale' | 'failed', question: string): ReturnType<typeof normalizeAskSuggestionsAssessment> {
+    return normalizeAskSuggestionsAssessment({
+      projectId,
+      status,
+      topQuestions: [question],
+      otherQuestions: [],
+    }, projectId);
+  }
+
+  it('keeps polling the read path until ready and exposes newer questions', async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce(assessment('harbor', 'preparing', 'Previous question?'))
+      .mockResolvedValueOnce(assessment('harbor', 'ready', 'New question?'));
+    const updates: string[] = [];
+
+    await expect(pollAskSuggestions({
+      read,
+      onUpdate: (value) => updates.push(value.topQuestions[0] ?? ''),
+      sleep: vi.fn(async () => undefined),
+      intervalMs: 2_000,
+    })).resolves.toBe('ready');
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(updates).toEqual(['Previous question?', 'New question?']);
+  });
+
+  it('stops polling after a failed assessment', async () => {
+    const read = vi.fn().mockResolvedValue(assessment('harbor', 'failed', 'Previous question?'));
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(pollAskSuggestions({
+      read,
+      onUpdate: () => undefined,
+      sleep,
+    })).resolves.toBe('failed');
+
+    expect(read).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('cancels polling when the selected project changes', async () => {
+    const controller = new AbortController();
+    const read = vi.fn().mockResolvedValue(assessment('harbor', 'preparing', 'Previous question?'));
+    const sleep = vi.fn(async (_milliseconds: number, signal: AbortSignal) => {
+      controller.abort();
+      if (!signal.aborted) await new Promise<void>((resolve) => {
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+
+    await expect(pollAskSuggestions({
+      read,
+      onUpdate: () => undefined,
+      signal: controller.signal,
+      sleep,
+    })).resolves.toBe('aborted');
+
+    expect(read).toHaveBeenCalledOnce();
   });
 });

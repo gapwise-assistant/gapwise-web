@@ -156,6 +156,9 @@ export interface AskSuggestionsCacheRecord {
   publishedInputVersion?: string;
   /** Compare-and-set token for the refresh currently being generated. */
   generationId?: string;
+  /** Explicit ownership timestamps for the refresh currently being generated. */
+  generationStartedAt?: string;
+  generationLeaseExpiresAt?: string;
   topQuestions: string[];
   otherQuestions: string[];
   generatedBy: string;

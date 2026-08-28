@@ -12,18 +12,12 @@ import { AskSourceModal } from '@/components/AskSourceModal';
 import { formatDateTime } from '@/lib/datetime/displayDateTime';
 import type { UserMemoryProfile } from '@/types/clarity';
 import { Button } from '@/components/ui/Button';
-
-type AskSuggestionsStatus = 'preparing' | 'ready' | 'stale' | 'failed';
-
-interface AskSuggestionsAssessment {
-  topQuestions: string[];
-  otherQuestions: string[];
-  projectId: string;
-  semanticVersion?: string;
-  generatedAt?: string;
-  generatedBy?: string;
-  status: AskSuggestionsStatus;
-}
+import {
+  normalizeAskSuggestionsAssessment,
+  pollAskSuggestions,
+  type AskSuggestionsAssessment,
+  type AskSuggestionsResponseShape,
+} from '@/lib/ask/suggestionsPolling';
 
 interface AskGapswiseProps {
   userId: string;
@@ -325,6 +319,7 @@ export function AskGapswise({
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
   const [isSuggestionRetrying, setIsSuggestionRetrying] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState('');
+  const [suggestionsPollNonce, setSuggestionsPollNonce] = useState(0);
   const [hasLoadedPersistedState, setHasLoadedPersistedState] = useState(false);
   const [hasLoadedRemoteState, setHasLoadedRemoteState] = useState(false);
   const [researchAction, setResearchAction] = useState<ResearchActionState | null>(null);
@@ -340,6 +335,7 @@ export function AskGapswise({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const suggestionProjectIdRef = useRef<string | null>(null);
   const initialPromptSentRef = useRef<string | null>(null);
   const handledNewChatPromptRef = useRef<string | null>(null);
   const processingNewChatPromptRef = useRef<string | null>(null);
@@ -350,6 +346,8 @@ export function AskGapswise({
     if (activeChatId) return chats.find((chat) => chat.id === activeChatId) ?? null;
     return draftChat ?? chats[0] ?? null;
   }, [activeChatId, chats, draftChat]);
+  const suggestionProjectId = scope.type === 'project' ? scope.projectId : null;
+  suggestionProjectIdRef.current = suggestionProjectId;
 
   useEffect(() => {
     setHasLoadedRemoteState(false);
@@ -413,72 +411,64 @@ export function AskGapswise({
 
   useEffect(() => {
     if (!hasLoadedPersistedState) return;
-    let isMounted = true;
-    const fetchSuggestions = async () => {
-      if (scope.type !== 'project') {
-        setIsSuggestionsLoading(false);
-        return;
-      }
-      setSuggestionsAssessment(null);
-      setIsSuggestionsLoading(true);
-      setSuggestionsError('');
-      try {
-        const response = await authFetch(`/api/ask/suggestions?projectId=${encodeURIComponent(scope.projectId)}`);
-        const data = await response.json() as {
-          topQuestions?: unknown[];
-          otherQuestions?: unknown[];
-          projectId?: string;
-          error?: string;
-          status?: string;
-          semanticVersion?: string;
-          generatedAt?: string;
-          generatedBy?: string;
-        };
-        if (!response.ok) throw new Error('Suggestions are unavailable right now.');
-        if (data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable right now.');
-        const top = (data.topQuestions ?? [])
-          .filter((question): question is string => typeof question === 'string')
-          .slice(0, 3);
-        const other = (data.otherQuestions ?? [])
-          .filter((question): question is string => typeof question === 'string')
-          .slice(0, 3);
-        if (!isMounted) return;
-        const status = data.status === 'ready'
-          || data.status === 'stale'
-          || data.status === 'failed'
-          || data.status === 'preparing'
-          ? data.status
-          : 'preparing';
-        setSuggestionsAssessment({
-          topQuestions: top,
-          otherQuestions: other,
-          projectId: data.projectId,
-          ...(data.semanticVersion ? { semanticVersion: data.semanticVersion } : {}),
-          ...(data.generatedAt ? { generatedAt: data.generatedAt } : {}),
-          ...(data.generatedBy ? { generatedBy: data.generatedBy } : {}),
-          status,
-        });
-      } catch {
-        if (!isMounted) return;
-        setSuggestionsAssessment({
-          topQuestions: [],
-          otherQuestions: [],
-          projectId: scope.projectId,
+    if (!suggestionProjectId) {
+      setIsSuggestionsLoading(false);
+      return;
+    }
+
+    let isActive = true;
+    const controller = new AbortController();
+    // Existing questions remain rendered while polling; this flag only drives
+    // the empty-state skeleton while a read-only refresh is still pending.
+    setIsSuggestionsLoading(true);
+    setSuggestionsError('');
+
+    const read = async (signal: AbortSignal): Promise<AskSuggestionsAssessment> => {
+      const response = await authFetch(`/api/ask/suggestions?projectId=${encodeURIComponent(suggestionProjectId)}`, { signal });
+      const data = await response.json() as AskSuggestionsResponseShape;
+      if (!response.ok) throw new Error(data.error ?? 'Suggestions are unavailable right now.');
+      return normalizeAskSuggestionsAssessment(data, suggestionProjectId);
+    };
+
+    void pollAskSuggestions({
+      read,
+      signal: controller.signal,
+      onUpdate: (assessment) => {
+        if (!isActive) return;
+        setSuggestionsAssessment(assessment);
+        setIsSuggestionsLoading(assessment.status === 'preparing' || assessment.status === 'stale');
+      },
+      onError: () => {
+        if (!isActive) return;
+        setSuggestionsAssessment((current) => ({
+          ...(current ?? { topQuestions: [], otherQuestions: [], projectId: suggestionProjectId }),
+          projectId: suggestionProjectId,
           status: 'failed',
-        });
+        }));
         setSuggestionsError('Suggestions are unavailable right now.');
-      } finally {
-        if (isMounted) setIsSuggestionsLoading(false);
-      }
-    };
-    void fetchSuggestions();
+        setIsSuggestionsLoading(false);
+      },
+      onTimeout: () => {
+        if (!isActive) return;
+        setSuggestionsAssessment((current) => ({
+          ...(current ?? { topQuestions: [], otherQuestions: [], projectId: suggestionProjectId }),
+          projectId: suggestionProjectId,
+          status: 'stale',
+        }));
+        setSuggestionsError('Suggestions are taking longer than expected. Retry when you are ready.');
+        setIsSuggestionsLoading(false);
+      },
+    });
+
     return () => {
-      isMounted = false;
+      isActive = false;
+      controller.abort();
     };
-  }, [hasLoadedPersistedState, profile, scope, userId]);
+  }, [hasLoadedPersistedState, suggestionProjectId, suggestionsPollNonce, userId]);
 
   const retrySuggestions = async () => {
     if (scope.type !== 'project' || isSuggestionRetrying) return;
+    const retryProjectId = scope.projectId;
     setIsSuggestionRetrying(true);
     setSuggestionsError('');
     try {
@@ -496,26 +486,19 @@ export function AskGapswise({
         generatedAt?: string;
         generatedBy?: string;
       };
-      if (!response.ok || data.projectId !== scope.projectId) throw new Error('Suggestions are unavailable right now.');
-      const status = data.status === 'ready'
-        || data.status === 'stale'
-        || data.status === 'failed'
-        || data.status === 'preparing'
-        ? data.status
-        : 'preparing';
-      setSuggestionsAssessment({
-        topQuestions: (data.topQuestions ?? []).filter((question): question is string => typeof question === 'string').slice(0, 3),
-        otherQuestions: (data.otherQuestions ?? []).filter((question): question is string => typeof question === 'string').slice(0, 3),
-        projectId: data.projectId,
-        ...(data.semanticVersion ? { semanticVersion: data.semanticVersion } : {}),
-        ...(data.generatedAt ? { generatedAt: data.generatedAt } : {}),
-        ...(data.generatedBy ? { generatedBy: data.generatedBy } : {}),
-        status,
-      });
+      if (!response.ok) throw new Error('Suggestions are unavailable right now.');
+      const assessment = normalizeAskSuggestionsAssessment(data, retryProjectId);
+      if (suggestionProjectIdRef.current !== retryProjectId) return;
+      setSuggestionsAssessment(assessment);
+      // Restart the read-only poller so an older poll cannot overwrite the
+      // explicit retry result for this project.
+      setSuggestionsPollNonce((current) => current + 1);
     } catch {
-      setSuggestionsError('Suggestions are unavailable right now.');
+      if (suggestionProjectIdRef.current === retryProjectId) {
+        setSuggestionsError('Suggestions are unavailable right now.');
+      }
     } finally {
-      setIsSuggestionRetrying(false);
+      if (suggestionProjectIdRef.current === retryProjectId) setIsSuggestionRetrying(false);
     }
   };
 
@@ -887,7 +870,10 @@ export function AskGapswise({
             </div>
           </div>
           {(isSuggestionsLoading && !suggestionsAssessment)
-            || (suggestionsAssessment?.status === 'preparing' && !suggestionsAssessment.topQuestions.length) ? (
+            || (isSuggestionsLoading
+              && (suggestionsAssessment?.status === 'preparing' || suggestionsAssessment?.status === 'stale')
+              && !suggestionsAssessment.topQuestions.length
+              && !suggestionsAssessment.otherQuestions.length) ? (
             <div className="mt-4 space-y-2" aria-label="Loading suggested questions">
               {[1, 2, 3].map((item) => <div key={item} className="h-10 animate-pulse rounded-lg bg-slate-900/80" />)}
             </div>
