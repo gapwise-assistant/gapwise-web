@@ -7,6 +7,7 @@ import { hashText } from '@/lib/context/ingestion';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { getStorageProvider } from '@/lib/storage';
 import { persistAskConversationContext, persistAskProposal } from '@/lib/ask/conversationContext';
 import { askGapswise } from '@/lib/ask/adkClient';
@@ -290,12 +291,13 @@ function transitionType(event: ProjectHistoryEvent): ProjectSnapshotTrigger | nu
 
 async function prepareAssessments(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<void> {
   const storage = getStorageProvider();
+  const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
   const memories = await storage.getMemories(userId);
   const contextPack = await buildContextPackForUser({
     userId,
     query: 'What is the current strategic state of this project?',
     project,
-    profile: DEFAULT_USER_PROFILE,
+    profile,
     durableMemories: memories,
     scope: { type: 'project', projectId: project.id },
     includeBroadContext: true,
@@ -303,7 +305,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
   let focus = await recordDeveloperGenerationStep(
     recorder,
     { name: 'Focus assessment obtained', category: 'assessment', summary: 'Loaded the current Focus assessment.' },
-    () => getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE),
+    () => getCachedFocusAssessment(userId, project, contextPack, profile),
   );
   if (!focus) {
     const goal = project.nodes.find((node) => node.type === 'GOAL');
@@ -317,7 +319,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
       score: 0,
       confidence: 1,
     } satisfies FocusAssessment;
-    const version = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
+    const version = await focusProjectStateVersion(project, contextPack, profile);
     const now = new Date().toISOString();
     await recordDeveloperGenerationStep(
       recorder,
@@ -332,7 +334,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
     await recordDeveloperGenerationStep(
       recorder,
       { name: 'Overview assessment obtained', category: 'assessment', summary: 'Loaded the current Overview assessment.' },
-      () => getProjectOverviewAssessmentWithMetadata(userId, project, project.historyEvents ?? [], focus, contextPack),
+      () => getProjectOverviewAssessmentWithMetadata(userId, project, project.historyEvents ?? [], focus, contextPack, { profile }),
     );
   } catch {
     const openItems = project.nodes.filter((node) => node.status === 'OPEN' && ['DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK'].includes(node.type)).slice(0, 3);
@@ -344,7 +346,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
       unsettled: openItems.map((node) => ({ title: node.text, explanation: 'This item remains open in the project graph.', sourceNodeIds: [node.id] })),
       criticalIssues: [], emergingInsights: [], confidence: 0.5,
     };
-    const version = await overviewProjectStateVersion(project, project.historyEvents ?? [], focus, contextPack);
+    const version = await overviewProjectStateVersion(project, project.historyEvents ?? [], focus, contextPack, profile);
     const now = new Date().toISOString();
     await recordDeveloperGenerationStep(
       recorder,

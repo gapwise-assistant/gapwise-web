@@ -58,7 +58,7 @@ const derivedSchema = z.object({
     actionNodeId: z.string().optional(),
     confidence: z.number().min(0).max(1),
     factors: factorsSchema,
-  })).max(3),
+  })).max(2),
 });
 
 type DerivedCandidate = z.infer<typeof derivedSchema>['candidates'][number];
@@ -104,7 +104,7 @@ function fromAttentionCandidate(candidate: AttentionCandidate, project: Project)
 function compactProjectState(project: Project, contextPack: ContextPack, profile?: UserMemoryProfile): string {
   const openNodes = project.nodes
     .filter((node) => node.status === 'OPEN')
-    .slice(0, 30)
+    .slice(0, 20)
     .map((node) => ({
       id: node.id,
       type: node.type,
@@ -116,10 +116,10 @@ function compactProjectState(project: Project, contextPack: ContextPack, profile
   return JSON.stringify({
     project: { title: project.title, goal: project.goal, deadline: project.deadline },
     openNodes,
-    evidence: contextPack.relevantEvidence.slice(0, 10),
-    commitments: contextPack.upcomingCommitments.slice(0, 8),
-    recentDecisions: contextPack.recentDecisions.slice(0, 8),
-    preferences: contextPack.userPreferences.slice(0, 8).map((memory) => memory.text),
+    evidence: contextPack.relevantEvidence.slice(0, 6),
+    commitments: contextPack.upcomingCommitments.slice(0, 5),
+    recentDecisions: contextPack.recentDecisions.slice(0, 5),
+    preferences: contextPack.userPreferences.slice(0, 5).map((memory) => memory.text),
     edges: project.edges
       .filter((edge) => edge.type === 'blocks' || edge.type === 'depends_on')
       .map((edge) => ({ source: edge.source, target: edge.target, type: edge.type })),
@@ -133,8 +133,17 @@ function compactProjectState(project: Project, contextPack: ContextPack, profile
           evidence: contextPack.projectReasoningContext.evidence.map((source) => ({ source_id: source.source_id, supports: source.supports ?? [] })),
         }
       : null,
-    profile,
+    profile: profile ? {
+      answer_density: profile.answer_density,
+      brainstorm_style: profile.brainstorm_style,
+      uncertainty_style: profile.uncertainty_style,
+    } : undefined,
   });
+}
+
+function parseDerivedCandidates(text: string | undefined): DerivedCandidate[] {
+  const normalized = text?.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '') || '{}';
+  return derivedSchema.parse(JSON.parse(normalized)).candidates;
 }
 
 async function deriveCandidates(
@@ -144,9 +153,8 @@ async function deriveCandidates(
 ): Promise<DerivedCandidate[]> {
   if (isDemoMode()) return [];
   const model = getAgentModelConfig('attention');
-  const response = await getVertexGenAIClient().models.generateContent({
-    model: model.model,
-    contents: [{ role: 'user', parts: [{ text: [
+  const client = getVertexGenAIClient();
+  const prompt = [
       'Assess what would most usefully move this project forward now.',
       'You may propose a derived action or discovery that is not stored as a graph node, especially when validating a key premise would be more useful than prematurely deciding logistics.',
       'Do not merely restate the user question, project goal, or a vague instruction to decide what to do first.',
@@ -165,13 +173,13 @@ async function deriveCandidates(
       'When a candidate is blocked, prefer the unresolved actionable prerequisite that must be addressed first.',
       'Relationships such as informs and affects may influence priority but do not make a candidate ineligible.',
       'Score every candidate using the supplied Attention factors. Do not invent a different scoring system.',
-      'Return at most three candidates. Return none when stored project items already express the best focus.',
+      'Return at most two candidates. Keep title, nextAction, and whyNow concise. Return none when stored project items already express the best focus.',
       compactProjectState(project, contextPack, profile),
-    ].join('\n\n') }] }],
-    config: {
+    ].join('\n\n');
+  const config = {
       temperature: 0,
-      maxOutputTokens: model.maxOutputTokens,
-      responseMimeType: 'application/json',
+      maxOutputTokens: Math.max(model.maxOutputTokens, 1536),
+      responseMimeType: 'application/json' as const,
       responseSchema: {
         type: Type.OBJECT,
         required: ['candidates'],
@@ -206,10 +214,23 @@ async function deriveCandidates(
           },
         },
       },
-    },
+    };
+  const response = await client.models.generateContent({
+    model: model.model,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    config,
   });
-  const parsed = JSON.parse(response.text?.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '') || '{}');
-  return derivedSchema.parse(parsed).candidates;
+  try {
+    return parseDerivedCandidates(response.text);
+  } catch (firstError) {
+    console.warn('[Focus Assessment] Retrying malformed structured output.', firstError);
+    const retry = await client.models.generateContent({
+      model: model.model,
+      contents: [{ role: 'user', parts: [{ text: `${prompt}\n\nThe previous structured response was invalid or truncated. Return exactly one best candidate or an empty candidates array. Keep each prose field under 120 characters.` }] }],
+      config,
+    });
+    return parseDerivedCandidates(retry.text);
+  }
 }
 
 export async function generateFocusAssessment(

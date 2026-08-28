@@ -118,7 +118,9 @@ function validGuidance(result: CareerGapStrategyResult, assessment: GapAssessmen
   if (!selected) return result.guidance === null;
   const guidance = result.guidance;
   if (!guidance) return false;
-  if (!/^(Decide|Confirm|Clarify|Find out|Verify)\b/.test(guidance.focus)) return false;
+  const focusIsCanonicalQuestion = guidance.focus.trim() === selected.question.trim();
+  const focusIsActionableCopy = /^(Decide|Confirm|Clarify|Find out|Verify)\b/.test(guidance.focus);
+  if (!focusIsCanonicalQuestion && !focusIsActionableCopy) return false;
   if (![guidance.focus, guidance.whyNow, guidance.nextStep, guidance.whatCouldChange]
     .every((value) => value.trim().length >= 3)) return false;
   const allowedIds = new Set([

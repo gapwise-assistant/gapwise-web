@@ -95,6 +95,23 @@ describe('determineAskRoute', () => {
       null,
     )).resolves.toMatchObject({
       route: 'graph_reasoning',
+      reasoningMode: 'impact',
+    });
+  });
+
+  it('promotes focus questions into the shared graph focus mode', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'internal_context',
+      reason: 'The request concerns the user project.',
+    })));
+
+    await expect(determineAskRoute(
+      'demo-user',
+      'What should I focus on next?',
+      null,
+    )).resolves.toMatchObject({
+      route: 'graph_reasoning',
+      reasoningMode: 'focus',
     });
   });
 

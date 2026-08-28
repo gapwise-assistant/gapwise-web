@@ -65,6 +65,14 @@ def test_routing_policy_uses_current_message_when_saved_context_is_sparse() -> N
     assert "do not request clarification." in instruction
     assert "the current user message is always first-class context." in instruction
     assert "choose web_research only when" in instruction
+    assert "reasoningmode focus" in instruction
+    assert "reasoningmode impact" in instruction
+
+
+def test_routing_schema_exposes_graph_reasoning_mode() -> None:
+    schema = agent.AskRouteDecision.model_json_schema()
+
+    assert "reasoningMode" in schema["properties"]
 
 
 def test_partner_policy_keeps_sparse_project_discovery_concise() -> None:

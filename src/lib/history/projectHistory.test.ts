@@ -155,8 +155,9 @@ describe('project history', () => {
       type: 'DECISION',
       status: 'OPEN',
     });
-    expect(secondContextEvent?.changes?.[0].text).toBe('Use the community hall for the first event.');
-    expect(secondContextEvent?.changes?.[0].snapshot?.text).toBe('Use the community hall for the first event.');
+    expect(secondContextEvent?.changes?.[0].text).toBe('Choose the launch location.');
+    expect(secondContextEvent?.changes?.[0].snapshot?.text).toBe('Choose the launch location.');
+    expect(secondContextEvent?.changes?.[0].snapshot?.status).toBe('RESOLVED');
   });
 
   it('reports existing downstream nodes as affected without repeating learned nodes', async () => {

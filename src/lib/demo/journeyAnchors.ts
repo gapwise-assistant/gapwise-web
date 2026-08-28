@@ -1,5 +1,6 @@
 import type { ClarityNode, NodeType, Project, ProjectHistoryEventType } from '@/types/clarity';
 import { appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
+import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 
 export type JourneyActionableNodeType = Extract<
   NodeType,
@@ -157,6 +158,13 @@ function satisfiesTargetIds(project: Project, actionNodeId: string): string[] {
   );
 }
 
+function canonicalActionNode(project: Project, node: ClarityNode | undefined): ClarityNode | undefined {
+  if (!node || (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION')) return node;
+  return canonicalQuestionGroups(project)
+    .find((group) => group.nodeIds.includes(node.id))
+    ?.canonical ?? node;
+}
+
 /**
  * Records an anchor only from a controlled source. A source with one
  * canonical result can provide the stable action ID; a source with several
@@ -265,8 +273,13 @@ export function inspectJourneyAnchor(
   );
 
   if (anchor.actionNodeId) {
-    const actionNode = nodesById.get(anchor.actionNodeId);
+    const actionNode = canonicalActionNode(project, nodesById.get(anchor.actionNodeId));
     if (actionNode && isJourneyActionableNode(actionNode)) {
+      if (actionNode.id !== anchor.actionNodeId) {
+        anchor.actionNodeId = actionNode.id;
+        anchor.candidateNodeIds = uniqueIds([...anchor.candidateNodeIds, actionNode.id]);
+        anchors.set(key, anchor);
+      }
       if (!anchor.outcomeNodeId) {
         const targets = satisfiesTargetIds(project, actionNode.id);
         if (targets.length === 1) {

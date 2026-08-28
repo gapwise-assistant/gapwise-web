@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
+import { GoogleIntegrationState } from '@/types/google';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
@@ -52,11 +53,12 @@ interface MockDatabase {
       projectSnapshots: ProjectSnapshot[];
       developerGenerationRuns: DeveloperGenerationRun[];
       developerGenerationSteps: DeveloperGenerationStep[];
+      googleIntegrations: Array<GoogleIntegrationState & { id: string; userId: string }>;
     }
   >;
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
 const EMPTY_USER = {
   contexts: [],
@@ -79,6 +81,7 @@ const EMPTY_USER = {
   projectSnapshots: [],
   developerGenerationRuns: [],
   developerGenerationSteps: [],
+  googleIntegrations: [],
 };
 
 function snapshotReferences(
@@ -177,6 +180,7 @@ export class MockStorageProvider implements StorageProvider {
       projectSnapshots: current.projectSnapshots ?? [],
       developerGenerationRuns: current.developerGenerationRuns ?? [],
       developerGenerationSteps: current.developerGenerationSteps ?? [],
+      googleIntegrations: current.googleIntegrations ?? [],
     };
     await this.writeDb(db);
   }
@@ -449,6 +453,22 @@ export class MockStorageProvider implements StorageProvider {
     await this.writeDb(db);
   }
 
+  async getGoogleIntegrations(userId: string): Promise<GoogleIntegrationState[]> {
+    return (await this.getUser(userId)).googleIntegrations.map(({ id: _id, userId: _userId, ...state }) => state);
+  }
+
+  async replaceGoogleIntegrations(userId: string, integrations: GoogleIntegrationState[]): Promise<void> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    user.googleIntegrations = integrations.map((integration) => ({
+      ...integration,
+      id: integration.name,
+      userId,
+    }));
+    db.users[userId] = user;
+    await this.writeDb(db);
+  }
+
   async logEvent(userId: string, event: FirestoreEvent): Promise<void> {
     await this.upsert(userId, 'events', { ...event, userId });
   }
@@ -476,6 +496,7 @@ export class MockStorageProvider implements StorageProvider {
       projectSnapshots: [],
       developerGenerationRuns: [],
       developerGenerationSteps: [],
+      googleIntegrations: [],
     };
     await this.writeDb(db);
   }
@@ -509,6 +530,7 @@ export class MockStorageProvider implements StorageProvider {
       projectSnapshots: user?.projectSnapshots ?? [],
       developerGenerationRuns: user?.developerGenerationRuns ?? [],
       developerGenerationSteps: user?.developerGenerationSteps ?? [],
+      googleIntegrations: user?.googleIntegrations ?? [],
     };
   }
 

@@ -76,7 +76,7 @@ export function relationshipRoleCompatible(
     case 'supports':
       return isEvidenceNode(source) || source.type === 'PREFERENCE';
     case 'contradicts':
-      return isEvidenceNode(source) && (isEvidenceNode(target) || question(target) || target.type === 'DECISION');
+      return isEvidenceNode(source) && (isEvidenceNode(target) || question(target) || target.type === 'DECISION' || target.type === 'RISK');
     case 'resolves':
       return hasConclusiveResultEvidence(source)
         && (
@@ -87,7 +87,7 @@ export function relationshipRoleCompatible(
       return source.type === 'NEXT_ACTION'
         && (question(target) || target.type === 'DECISION');
     case 'supersedes':
-      return isEvidenceNode(source) && (isEvidenceNode(target) || question(target) || target.type === 'DECISION');
+      return isEvidenceNode(source) && (isEvidenceNode(target) || question(target) || target.type === 'DECISION' || target.type === 'RISK');
     case 'blocks':
       return (question(source) || ['RISK', 'CONSTRAINT', 'NEXT_ACTION', 'DECISION'].includes(source.type))
         && blockableTarget(target);
@@ -133,6 +133,12 @@ export function completionAllowedRelationshipTypes(
   const structurallyAllowed = allowedRelationshipTypes(source, target)
     .filter((relationship) => relationship !== 'derived_from' && relationship !== 'supports');
   const questionOrDecisionTarget = isQuestionNode(target) || target.type === 'DECISION';
+
+  if (isEvidenceNode(source) && source.status === 'RESOLVED' && target.type === 'RISK' && target.status === 'OPEN') {
+    return structurallyAllowed.filter((relationship) =>
+      relationship === 'contradicts' || relationship === 'supersedes',
+    );
+  }
 
   // Facts and results provide information for a gap or decision. A resolves
   // edge is offered only when the text is a completed result, never merely

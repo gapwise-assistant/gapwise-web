@@ -135,7 +135,8 @@ describe('AI context graph analysis', () => {
     expect(result.project.nodes).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'RISK', text: 'The launch may slip if the supplier misses Friday.' }),
     ]));
-    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('extraction_basis');
+    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('grounding');
+    expect(JSON.stringify(genAI.models.generateContent.mock.calls[0])).toContain('SOURCE_ASSERTED');
   });
 
   it('does not persist an AI-derived Ask risk before proposal confirmation', async () => {
@@ -508,7 +509,8 @@ describe('AI context graph analysis', () => {
 
     expect(result.project.nodes.find((node) => node.id === 'atlas-change-decision')).toMatchObject({
       status: 'RESOLVED',
-      text: 'Use nightly CSV imports and named user accounts; defer POS integration and SSO until after the pilot.',
+      text: 'Choose the technical scope for the Atlas Retail pilot.',
+      decision_outcome: 'Use nightly CSV imports and named user accounts; defer POS integration and SSO until after the pilot.',
       source_refs: ['src_atlas_canonical_change'],
     });
     expect(result.project.nodes.filter((node) => node.source_refs.includes('src_atlas_canonical_change'))).toHaveLength(1);
@@ -558,7 +560,8 @@ describe('AI context graph analysis', () => {
         source_refs: ['src_supplier_confirmation'],
       }),
     ]));
-    expect(result.project.sources.find((source) => source.id === 'src_supplier_confirmation')?.derived_node_ids).toHaveLength(1);
+    expect(result.project.sources.find((source) => source.id === 'src_supplier_confirmation')?.derived_node_ids)
+      .toEqual(expect.arrayContaining(['supplier-delivery-unknown']));
   });
 
   it('retains an independently resolvable decision child under an older compound decision', async () => {
@@ -1192,7 +1195,7 @@ describe('AI context graph analysis', () => {
 
     const contextPrompt = JSON.stringify(genAI.models.generateContent.mock.calls[0]);
     expect(contextPrompt).toContain('A user-controlled unresolved choice is a DECISION; missing external information is an UNKNOWN.');
-    expect(contextPrompt).toContain('A completed user commitment affecting an existing OPEN DECISION is primarily a RESOLVE_DECISION change');
+    expect(contextPrompt).toContain('A completed user commitment affecting an existing OPEN DECISION is primarily a RESOLVE_DECISION operation');
   });
 
   it('does not turn an attractive or preferred option into a committed decision', async () => {
@@ -1458,12 +1461,13 @@ describe('AI context graph analysis', () => {
     );
     const genAI = mockGenAI({
       summary: 'New hotel research challenges the old area assumption and answers the budget question.',
-      nodes: [
-        { type: 'EVIDENCE', text: 'Comparable Kyoto hotels were recorded as fitting the available trip budget better.', confidence: 0.95, impact: 0.85 },
-      ],
+      operations: [{
+        op: 'RESOLVE_UNKNOWN',
+        targetNodeId: 'unknown_trip_budget',
+        answer: 'Comparable Kyoto hotels fit the available trip budget better.',
+        confidence: 0.92,
+      }],
       relationships: [
-        { source_node_index: 0, target_node_id: 'assumption_hotel_area', type: 'contradicts', confidence: 0.95 },
-        { source_node_index: 0, target_node_id: 'unknown_trip_budget', type: 'resolves', confidence: 0.92 },
       ],
     });
 
@@ -1473,14 +1477,8 @@ describe('AI context graph analysis', () => {
     const assumption = result.project.nodes.find((node) => node.id === 'assumption_hotel_area');
     const budget = result.project.nodes.find((node) => node.id === 'unknown_trip_budget');
 
-    expect(result.project.edges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ target: 'assumption_hotel_area', type: 'contradicts', confidence: 0.95 }),
-      expect.objectContaining({ target: 'unknown_trip_budget', type: 'resolves', confidence: 0.92 }),
-    ]));
-    expect(assumption).toEqual(expect.objectContaining({ status: 'DEFERRED', source_refs: ['src_japan_notes'] }));
-    expect(assumption?.why_it_matters?.join(' ')).toContain('Questioned by newer evidence');
+    expect(assumption).toEqual(expect.objectContaining({ status: 'OPEN', source_refs: [] }));
     expect(budget).toEqual(expect.objectContaining({ status: 'RESOLVED', source_refs: ['src_japan_notes'] }));
-    expect(budget?.why_it_matters?.join(' ')).toContain('Resolved by newer evidence');
   });
 
   it('connects goal-relevant gaps to decisions without creating speculative edges', async () => {
@@ -1530,8 +1528,13 @@ describe('AI context graph analysis', () => {
     });
     const genAI = mockGenAI({
       summary: 'The note answers the existing budget question.',
-      nodes: [{ type: 'EVIDENCE', text: 'The trip budget is recorded as 3000 USD.', confidence: 0.9, impact: 0.9 }],
-      relationships: [{ source_node_index: 0, target_node_id: 'unknown_existing_budget', type: 'resolves', confidence: 0.95 }],
+      operations: [{
+        op: 'RESOLVE_UNKNOWN',
+        targetNodeId: 'unknown_existing_budget',
+        answer: 'The trip budget is recorded as 3000 USD.',
+        confidence: 0.95,
+      }],
+      relationships: [],
     });
 
     const result = await processContextSource(project, input({
@@ -1620,10 +1623,12 @@ describe('AI context graph analysis', () => {
     const stages = source?.processing_log?.stages ?? [];
     expect(stages.map((stage) => stage.name)).toEqual([
       'Context Agent model analysis',
-      'Model normalization and deduplication',
+      'ProjectPatch operation validation',
       'Canonical interpretation validation',
       'Graph persistence',
+      'ProjectPatch execution',
       'Relationship validation',
+      'Relationship completion',
       'Graph persistence result',
     ]);
     expect(JSON.stringify(source?.processing_log)).toContain('Tokyo and Kyoto are in the itinerary.');
@@ -1654,11 +1659,12 @@ describe('AI context graph analysis', () => {
     const modelQuestion = 'Has the insurance company approved the procedure authorization, or what was the outcome of the review expected by October 9?';
     const genAI = mockGenAI({
       summary: 'The surgery preparation note leaves authorization and preparation details to confirm.',
-      nodes: [
-        { type: 'UNKNOWN', text: modelQuestion, confidence: 0.4, impact: 0.96 },
-        { type: 'UNKNOWN', text: 'What does the user need to know before the surgery?', confidence: 0.86, impact: 0.72 },
-        { type: 'UNKNOWN', text: 'What should I confirm before the surgery?', confidence: 0.86, impact: 0.72 },
+      operations: [
+        { op: 'OPEN_UNKNOWN', text: modelQuestion, confidence: 0.9, impact: 0.96 },
+        { op: 'OPEN_UNKNOWN', text: 'What should I confirm before the surgery?', confidence: 0.86, impact: 0.72 },
+        { op: 'OPEN_UNKNOWN', text: 'What arrival instructions has the surgical center confirmed?', confidence: 0.86, impact: 0.8 },
       ],
+      relationships: [],
     });
     const result = await processContextSource(projectWithGoal('Complete my surgery preparation by October 9.'), input({
       sourceId: 'src_surgery_context',
@@ -1733,13 +1739,20 @@ describe('AI context graph analysis', () => {
             relevance: expect.objectContaining({
               enum: ['relevant', 'possibly_not_relevant'],
             }),
-            nodes: expect.objectContaining({
+            operations: expect.objectContaining({
               items: expect.objectContaining({
-                properties: expect.objectContaining({
-                  type: expect.objectContaining({
-                    enum: expect.arrayContaining(['KNOWN', 'UNKNOWN', 'EXPERIMENT', 'PREFERENCE']),
+                anyOf: expect.arrayContaining([
+                  expect.objectContaining({
+                    properties: expect.objectContaining({
+                      op: expect.objectContaining({ enum: ['ADD_CONTEXT'] }),
+                    }),
                   }),
-                }),
+                  expect.objectContaining({
+                    properties: expect.objectContaining({
+                      op: expect.objectContaining({ enum: ['RESOLVE_UNKNOWN'] }),
+                    }),
+                  }),
+                ]),
               }),
             }),
             relationships: expect.objectContaining({
@@ -1747,13 +1760,6 @@ describe('AI context graph analysis', () => {
                 properties: expect.objectContaining({
                   source_ref: expect.any(Object),
                   target_ref: expect.any(Object),
-                }),
-              }),
-            }),
-            reconciliation: expect.objectContaining({
-              items: expect.objectContaining({
-                properties: expect.objectContaining({
-                  same_atomic_proposition: expect.any(Object),
                 }),
               }),
             }),

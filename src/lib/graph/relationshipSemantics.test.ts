@@ -70,6 +70,13 @@ describe('relationship semantics', () => {
     expect(relationshipRoleCompatible(decision, question, 'resolves')).toBe(true);
   });
 
+  it('offers explicit invalidation relationships from resolved evidence to an open risk', () => {
+    const evidence = node('evidence', 'KNOWN', 'The required control is confirmed operational.', 'RESOLVED');
+    const risk = node('risk', 'RISK', 'The project may be delayed if the required control is unavailable.', 'OPEN');
+
+    expect(completionAllowedRelationshipTypes(evidence, risk)).toEqual(['contradicts', 'supersedes']);
+  });
+
   it('does not treat fixed context as a blockable or prerequisite outcome', () => {
     const action = node('action', 'NEXT_ACTION', 'Choose a venue.', 'OPEN');
     const constraint = node('constraint', 'CONSTRAINT', 'The budget cannot exceed 500.', 'RESOLVED');

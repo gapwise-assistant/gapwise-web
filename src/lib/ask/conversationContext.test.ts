@@ -226,6 +226,41 @@ describe('persistAskProposal relationship completion trace', () => {
     });
   });
 
+  it('passes a validated canonical target into ingestion instead of creating a parallel proposal node', async () => {
+    const existing = node('existing-question', 'UNKNOWN', 'Can the required control be enforced?');
+    storedProject = projectWith(existing);
+    mocks.listProjects.mockImplementation(async () => [clone(storedProject)]);
+    mocks.completeProjectRelationships.mockImplementation(async ({ projectAfter }: { projectAfter: Project }) => ({
+      project: projectAfter,
+      trace: { candidatePairs: [], classifications: [], acceptedRelationships: [], rejectedRelationships: [] },
+    }));
+
+    await persistAskProposal({
+      userId: 'user-1',
+      projectId: storedProject.id,
+      assistantMessageId: 'assistant-targeted',
+      proposal: {
+        id: 'proposal-targeted',
+        type: 'UNKNOWN',
+        text: 'Confirm whether the required control can be enforced.',
+        status: 'OPEN',
+        targetNodeId: existing.id,
+      },
+    });
+
+    expect(mocks.ingestContextSource).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        derivedNodes: [expect.objectContaining({
+          canonicalNodeId: existing.id,
+          canonicalQuestionId: existing.id,
+          questionClassification: 'EQUIVALENT',
+        })],
+      }),
+      expect.anything(),
+    );
+  });
+
   it('keeps consecutive proposal diagnostics bounded instead of embedding prior logs', async () => {
     mocks.completeProjectRelationships.mockImplementation(async ({ projectAfter }: { projectAfter: Project }) => ({
       project: projectAfter,

@@ -102,6 +102,29 @@ describe('demo journey anchors', () => {
     expect(journeyAnchorHasOutcome(inspection)).toBe(true);
   });
 
+  it('follows an explicitly reconciled question alias to its resolved canonical outcome', () => {
+    const canonical = node('canonical-question', 'UNKNOWN', 'RESOLVED');
+    canonical.text = 'Can the required retention policy be enforced?';
+    const alias = node('proposal-question', 'UNKNOWN', 'OPEN');
+    alias.text = 'Confirm whether the retention policy can be enforced.';
+    alias.canonical_question_id = canonical.id;
+    const project = projectWithNodes([canonical, alias]);
+    const anchors = createJourneyAnchorBook();
+    recordJourneyAnchor(anchors, {
+      key: 'retention',
+      project,
+      candidateNodeIds: [alias.id],
+      actionNodeId: alias.id,
+    });
+
+    const inspection = inspectJourneyAnchor(anchors, 'retention', project);
+
+    expect(inspection.node?.id).toBe(canonical.id);
+    expect(inspection.node?.status).toBe('RESOLVED');
+    expect(anchors.get('retention')?.actionNodeId).toBe(canonical.id);
+    expect(journeyAnchorHasOutcome(inspection)).toBe(true);
+  });
+
   it('does not treat non-actionable supporting facts as a resolved transition', () => {
     const project = projectWithNodes([node('supporting-fact', 'KNOWN', 'RESOLVED')]);
     const anchors = createJourneyAnchorBook();

@@ -51,9 +51,9 @@ describe('career conflict demo workflow', () => {
     expect(state.project.active_question?.node_id).toBe(CAREER_CONFLICT_QUESTION_ID);
     expect(state.project.active_question?.guidance).toMatchObject({
       generatedBy: 'deterministic',
-      focus: expect.stringMatching(/Decide whether this primarily frontend role remains acceptable/i),
-      nextStep: expect.stringMatching(/minimum condition|linked evidence|record the answer/i),
-      whatCouldChange: expect.stringMatching(/reverse or confirm|current decision/i),
+      focus: expect.stringMatching(/Does this primarily frontend role remain acceptable/i),
+      nextStep: expect.stringMatching(/latest result|linked evidence|record the answer/i),
+      whatCouldChange: expect.stringMatching(/proceed with the decision|revisit the alternatives/i),
     });
     expect(detectCareerConflict(readCareerConflictJobDocument(), state.memories)).toBe(true);
   });

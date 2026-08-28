@@ -248,6 +248,54 @@ describe('project snapshots', () => {
     expect(materialized.ask.messages.map((item) => item.id)).toEqual(['message_old']);
   });
 
+  it('creates one exact snapshot for each action completion and reuses it on retry', async () => {
+    const storage = getStorageProvider();
+    const project = createProjectFromInput({ name: 'Action history', goal: 'Keep completed work traceable.' }, '2026-08-25T12:30:00.000Z');
+    project.nodes.push(
+      { ...node('action_one', 'Confirm the first requirement.'), type: 'NEXT_ACTION' },
+      { ...node('action_two', 'Confirm the second requirement.'), type: 'NEXT_ACTION' },
+    );
+    project.historyEvents = [
+      ...(project.historyEvents ?? []),
+      {
+        id: 'action-event-one', projectId: project.id, createdAt: '2026-08-25T12:31:00.000Z',
+        type: 'action_completed', title: 'Action completed', summary: 'First action completed.', primaryNodeId: 'action_one',
+      },
+      {
+        id: 'action-event-two', projectId: project.id, createdAt: '2026-08-25T12:32:00.000Z',
+        type: 'action_completed', title: 'Action completed', summary: 'Second action completed.', primaryNodeId: 'action_two',
+      },
+    ];
+    await storage.saveProject(userId, project);
+
+    const first = await createProjectSnapshot({
+      userId, projectId: project.id,
+      trigger: { type: 'action_completed', historyEventId: 'action-event-one', nodeId: 'action_one' },
+      label: 'First action completed',
+    });
+    const second = await createProjectSnapshot({
+      userId, projectId: project.id,
+      trigger: { type: 'action_completed', historyEventId: 'action-event-two', nodeId: 'action_two' },
+      label: 'Second action completed',
+    });
+
+    await storage.saveProject(userId, {
+      ...project,
+      nodes: [...project.nodes, node('later_node', 'A later project fact.')],
+    });
+    const retry = await createProjectSnapshot({
+      userId, projectId: project.id,
+      trigger: { type: 'action_completed', historyEventId: 'action-event-one', nodeId: 'action_one' },
+      label: 'First action completed again',
+    });
+
+    const snapshots = await storage.listProjectSnapshots(userId, project.id);
+    expect(retry.id).toBe(first.id);
+    expect(snapshots.filter((snapshot) => snapshot.trigger.historyEventId === 'action-event-one')).toHaveLength(1);
+    expect(snapshots.filter((snapshot) => snapshot.trigger.historyEventId === 'action-event-two')).toHaveLength(1);
+    expect(second.id).not.toBe(first.id);
+  });
+
   it('branches a materialized moment with independent IDs and preserves pending proposal state', async () => {
     const storage = getStorageProvider();
     const project = makeProject('Branchable project', '2026-08-25T13:00:00.000Z');

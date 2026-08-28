@@ -629,14 +629,15 @@ export default function Home() {
     const previous = projects.find((candidate) => candidate.id === updated.id)
       ?? (project.id === updated.id ? project : undefined);
     const next = previous ? appendGoalChangedHistory(previous, updated) : updated;
+    const savedToApi = await persistProjectToAPI(userId, next);
+    setStorageMessage(savedToApi ? '' : 'Persistent storage was unavailable; the change was not saved.');
+    if (!savedToApi) return false;
     setProject((current) => (current.id === next.id ? next : current));
     setProjects((current) => {
       const existingIndex = current.findIndex((item) => item.id === next.id);
       if (existingIndex < 0) return [next, ...current];
       return current.map((item) => (item.id === next.id ? next : item));
     });
-    const savedToApi = await persistProjectToAPI(userId, next);
-    setStorageMessage(savedToApi ? '' : 'Persistent storage was unavailable; the change was not saved.');
     return savedToApi;
   }, [project, projects, userId]);
 
@@ -1483,18 +1484,18 @@ export default function Home() {
     }
   }, [answerTarget, memories, profile, userId]);
 
-  const handleUpdateProfile = (updated: UserMemoryProfile) => {
-    setProfile(updated);
-    void persistMemorySettingsToAPI(userId, updated, memories).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; your current view is unchanged.');
-    });
+  const handleUpdateProfile = async (updated: UserMemoryProfile): Promise<boolean> => {
+    const savedToApi = await persistMemorySettingsToAPI(userId, updated, memories);
+    setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; no changes were applied.');
+    if (savedToApi) setProfile(updated);
+    return savedToApi;
   };
 
-  const handleUpdateMemories = (updated: DurableMemory[]) => {
-    setMemories(updated);
-    void persistMemorySettingsToAPI(userId, profile, updated).then((savedToApi) => {
-      setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; your current view is unchanged.');
-    });
+  const handleUpdateMemories = async (updated: DurableMemory[]): Promise<boolean> => {
+    const savedToApi = await persistMemorySettingsToAPI(userId, profile, updated);
+    setStorageMessage(savedToApi ? '' : 'Memory settings could not be saved; no changes were applied.');
+    if (savedToApi) setMemories(updated);
+    return savedToApi;
   };
 
   const handleFeedbackEvent = (event: FeedbackEvent) => {
@@ -1715,11 +1716,11 @@ export default function Home() {
             onSelectProject={handleSelectProject}
             onOpenNewProject={() => setIsNewProjectOpen(true)}
             onUpdateProject={updateProject}
-            onUpdateGeneralContext={(updated) => {
-              setGeneralContext(updated);
-              persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
-                setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
-              });
+            onUpdateGeneralContext={async (updated) => {
+              const savedToApi = await persistGeneralContextToAPI(userId, updated);
+              setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
+              if (savedToApi) setGeneralContext(updated);
+              return savedToApi;
             }}
             onAnswerQuestion={openGraphQuestion}
             onReviewDecision={openDecisionWorkspace}
@@ -1750,11 +1751,11 @@ export default function Home() {
             profile={profile}
             memories={memories}
             onUpdateProject={updateProject}
-            onUpdateGeneralContext={(updated) => {
-              setGeneralContext(updated);
-              persistGeneralContextToAPI(userId, updated).then((savedToApi) => {
-                setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
-              });
+            onUpdateGeneralContext={async (updated) => {
+              const savedToApi = await persistGeneralContextToAPI(userId, updated);
+              setStorageMessage(savedToApi ? '' : 'General context could not be saved to persistent storage.');
+              if (savedToApi) setGeneralContext(updated);
+              return savedToApi;
             }}
             onUpdateProfile={handleUpdateProfile}
             onUpdateMemories={handleUpdateMemories}

@@ -5,6 +5,7 @@ import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import type { ProjectSnapshot, ProjectSnapshotSummary } from '@/types/projectSnapshot';
+import type { GoogleIntegrationState } from '@/types/google';
 
 export interface BaseEntity {
   id: string;
@@ -205,6 +206,7 @@ export interface DeveloperGenerationStep {
   derivedNodeIds?: string[];
   journeyAnchor?: string;
   candidateNodeIds?: string[];
+  processingOutcome?: 'changed' | 'no_change' | 'failed';
   summary?: string;
   error?: string;
 }
@@ -275,6 +277,8 @@ export interface StorageProvider {
   replaceMemories(userId: string, memories: DurableMemory[]): Promise<void>;
   getUserMemoryProfile(userId: string): Promise<UserMemoryProfile | null>;
   saveUserMemoryProfile(userId: string, profile: UserMemoryProfile): Promise<void>;
+  getGoogleIntegrations?(userId: string): Promise<GoogleIntegrationState[]>;
+  replaceGoogleIntegrations?(userId: string, integrations: GoogleIntegrationState[]): Promise<void>;
 
   logEvent(userId: string, event: FirestoreEvent): Promise<void>;
 

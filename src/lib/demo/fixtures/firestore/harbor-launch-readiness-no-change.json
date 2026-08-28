@@ -1,0 +1,26 @@
+{
+  "fixtureVersion": 1,
+  "fixtureType": "sanitized_developer_trace",
+  "scenario": "Harbor Launch Readiness Report produced no graph change",
+  "projectId": "project_harbor-pilot-history-demo_1787934459243",
+  "source": {
+    "id": "source_project_harbor-pilot-history-demo_1787934459243_final-readiness_5cdc8d8d5dab2f1a",
+    "filename": "Harbor Launch Readiness Report.pdf",
+    "content": "The Harbor pilot will use the nightly CSV integration, and that technical scope is confirmed. Harbor security approved the refreshed penetration-test report. Engineering confirmed that customer data can be deleted within 30 days after the pilot. The final pilot price was approved at $38,500. Procurement issued the Harbor pilot purchase order. Marcus Lee is the Harbor pilot support owner. The final production access rehearsal has not yet been completed and must be completed before launch authorization."
+  },
+  "observed": {
+    "sourceProcessingStatus": "completed",
+    "derivedNodeIds": [],
+    "nodeCountBefore": 13,
+    "nodeCountAfter": 13,
+    "edgeCountBefore": 23,
+    "edgeCountAfter": 23,
+    "historyEventCreated": false,
+    "rawOperationsPersisted": false,
+    "validatedOperationsPersisted": false,
+    "executedOperationsPersisted": false,
+    "rejectedOperationsPersisted": false
+  },
+  "classification": "no_change_observed_with_operation_trace_unavailable",
+  "notes": "The source-processing Developer Generation Step preserved status, counts, and derived node IDs, but the generator failed before saving the source and its ContextProcessingLog. The fixture intentionally does not invent raw model operations."
+}

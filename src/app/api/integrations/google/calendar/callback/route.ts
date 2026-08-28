@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
     const { userId } = readOAuthState(state);
     await exchangeCalendarCode(userId, code);
-    updateIntegrationState(userId, createDemoConnectedState('calendar'));
+    await updateIntegrationState(userId, createDemoConnectedState('calendar'));
 
     appUrl.searchParams.set('googleCalendar', 'connected');
     const response = NextResponse.redirect(appUrl);

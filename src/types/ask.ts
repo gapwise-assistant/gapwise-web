@@ -55,6 +55,8 @@ export interface AskContextProposal {
   type: NodeType;
   text: string;
   reasoning?: string;
+  /** Existing canonical project node this proposal updates or reuses. */
+  targetNodeId?: string;
   /** The lifecycle status that will be used if the user selects Add. */
   status: AskContextProposalStatus;
   sourceMessageId?: string;
@@ -107,6 +109,7 @@ export function normalizeAskContextProposal(value: unknown): AskContextProposal 
     type: record.type as NodeType,
     text: record.text.trim(),
     reasoning: typeof record.reasoning === 'string' ? record.reasoning.trim() : undefined,
+    targetNodeId: typeof record.targetNodeId === 'string' ? record.targetNodeId : undefined,
     status: graphStatus,
     sourceMessageId: typeof record.sourceMessageId === 'string' ? record.sourceMessageId : undefined,
     confirmationStatus,

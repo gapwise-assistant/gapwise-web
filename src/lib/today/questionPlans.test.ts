@@ -69,7 +69,7 @@ describe('Today question suggestions', () => {
     expect(normalized.questions[0].presentationContext?.every((entry) => entry.length <= 300)).toBe(true);
   });
 
-  it('creates action-oriented deterministic presentation copy without changing the graph question', () => {
+  it('keeps the canonical graph question as deterministic presentation copy', () => {
     const roleQuestion: TodayQuestion = {
       id: 'question_role',
       question: 'Does this primarily frontend role remain acceptable given your preference to avoid frontend-heavy roles?',
@@ -85,13 +85,13 @@ describe('Today question suggestions', () => {
 
     expect(presentation).toEqual({
       questionId: 'question_role',
-      title: expect.stringMatching(/^Confirm whether this primarily frontend role remains acceptable/),
+      title: roleQuestion.question,
       summary: 'This determines whether to prepare for or decline the recruiter call.',
     });
     expect(roleQuestion.question).toContain('remain acceptable');
   });
 
-  it('keeps AI presentation copy short and removes quoted evidence prefixes', () => {
+  it('keeps canonical titles while accepting concise AI summaries', () => {
     expect(parseQuestionPresentations(JSON.stringify({
       presentations: [{
         questionId: 'question_budget',
@@ -100,29 +100,29 @@ describe('Today question suggestions', () => {
       }],
     }), questions)[0]).toEqual({
       questionId: 'question_budget',
-      title: 'Clarify the normal frontend workload after launch',
+      title: 'What is the trip budget?',
       summary: 'The steady-state role may be less frontend-heavy.',
     });
   });
 
-  it('parses only valid action-oriented AI copy and fills missing questions deterministically', () => {
+  it('parses valid AI summaries and fills missing questions deterministically', () => {
     expect(parseQuestionPresentations(JSON.stringify({
       presentations: [{
         questionId: 'question_budget',
-        title: 'Decide what to spend on the trip',
+        title: 'What is the trip budget?',
         summary: 'The budget determines which hotels are affordable.',
       }],
     }), questions)).toEqual([
       {
         questionId: 'question_budget',
-        title: 'Decide what to spend on the trip',
+        title: 'What is the trip budget?',
         summary: 'The budget determines which hotels are affordable.',
       },
       localQuestionPresentation(questions[1]),
     ]);
   });
 
-  it('removes the internal question wrapper from deterministic titles', () => {
+  it('does not rewrite canonical question wrappers in presentation code', () => {
     const presentation = localQuestionPresentation({
       id: 'question_wrapper',
       question: 'What should we do about: the launch date?',
@@ -130,62 +130,61 @@ describe('Today question suggestions', () => {
       provenance: 'Graph node: launch_date',
     });
 
-    expect(presentation.title).toBe('Find out the launch date');
-    expect(presentation.title).not.toContain('What should we do about');
+    expect(presentation.title).toBe('What should we do about: the launch date?');
   });
 
-  it('keeps confirmation titles grammatical for yes/no questions', () => {
+  it('preserves canonical yes/no question grammar', () => {
     expect(localQuestionPresentation({
       id: 'question_path',
       question: 'Is there a funded path into applied AI?',
       reason: 'The path affects long-term role fit.',
       provenance: 'Graph node: path',
-    }).title).toBe('Confirm there is a funded path into applied AI');
+    }).title).toBe('Is there a funded path into applied AI?');
 
     expect(localQuestionPresentation({
       id: 'question_retry',
       question: 'Can the offline queue retry without creating duplicate EHR records?',
       reason: 'Blocks the pilot decision.',
       provenance: 'Graph node: retry',
-    }).title).toBe('Verify whether the offline queue can retry without creating duplicate EHR records');
+    }).title).toBe('Can the offline queue retry without creating duplicate EHR records?');
 
     expect(localQuestionPresentation({
       id: 'question_budget_approval',
       question: 'Has Finance approved spending above $45,000 for the pilot?',
       reason: 'Budget approval is still missing.',
       provenance: 'Graph node: budget',
-    }).title).toBe('Confirm whether Finance has approved spending above $45,000 for the pilot');
+    }).title).toBe('Has Finance approved spending above $45,000 for the pilot?');
 
     expect(localQuestionPresentation({
       id: 'question_build_budget',
       question: 'Can the final configuration stay under the $1,600 all-in budget after tax and shipping?',
       reason: 'Determines budget compliance.',
       provenance: 'Graph node: budget',
-    }).title).toBe('Confirm whether the final configuration can stay under the $1,600 all-in budget after…');
+    }).title).toBe('Can the final configuration stay under the $1,600 all-in budget after tax and shipping?');
 
     expect(localQuestionPresentation({
       id: 'question_fit',
       question: 'Will the PC run too hot or loud inside the tightly constrained desk opening?',
       reason: 'Determines acoustic and thermal comfort.',
       provenance: 'Graph node: fit',
-    }).title).toBe('Confirm whether the PC will run too hot or loud inside the tightly constrained desk…');
+    }).title).toBe('Will the PC run too hot or loud inside the tightly constrained desk opening?');
 
     expect(localQuestionPresentation({
       id: 'question_wifi',
       question: 'Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?',
       reason: 'Affects networking requirements.',
       provenance: 'Graph node: wifi',
-    }).title).toBe('Confirm whether the build needs built-in Wi-Fi, or can an Ethernet cable be used…');
+    }).title).toBe('Does the build need built-in Wi-Fi, or can an Ethernet cable be used temporarily?');
 
     expect(localQuestionPresentation({
       id: 'question_bios',
       question: 'Has the retailer confirmed that the motherboard BIOS supports the selected CPU?',
       reason: 'Prevents an out-of-box boot failure.',
       provenance: 'Graph node: bios',
-    }).title).toBe('Confirm whether the retailer has confirmed that the motherboard BIOS supports the…');
+    }).title).toBe('Has the retailer confirmed that the motherboard BIOS supports the selected CPU?');
   });
 
-  it('normalizes advice-shaped consequential questions when source confirmation is pending', () => {
+  it('preserves advice-shaped canonical questions for consistent identity', () => {
     const presentation = localQuestionPresentation({
       id: 'question_requirements',
       question: 'Do I need to change any regular settings before the scheduled event?',
@@ -194,8 +193,7 @@ describe('Today question suggestions', () => {
       presentationContext: ['The responsible team has not confirmed the required settings before the scheduled event.'],
     });
 
-    expect(presentation.title).toMatch(/^Find out what has been confirmed about whether I am required to change any regular/);
-    expect(presentation.title).not.toMatch(/^Do I need/i);
+    expect(presentation.title).toBe('Do I need to change any regular settings before the scheduled event?');
   });
 
   it('uses supported career-demo details in deterministic fallback copy', () => {
@@ -205,7 +203,7 @@ describe('Today question suggestions', () => {
     const presentation = localQuestionPresentation(question);
     const suggestion = localQuestionSuggestion(question);
 
-    expect(presentation.title).toMatch(/^Confirm whether this primarily frontend role remains acceptable/);
+    expect(presentation.title).toBe(question.question);
     expect(presentation.summary.length).toBeGreaterThan(20);
     expect(suggestion.suggestedAnswer).toContain('not enough confirmed context');
     expect(hasUsefulSuggestedAnswer(suggestion)).toBe(false);

@@ -15,6 +15,8 @@ import { createProjectFromInput } from '@/lib/projects/createProject';
 import { loadNorthstarPilotDemoForUser } from '@/lib/demo/bootstrap';
 import { focusAssessmentCacheId, focusProjectStateVersion } from '@/lib/focus/focusCache';
 import { getStorageProvider, resetStorageProviderForTests } from '@/lib/storage';
+import { buildContextPack } from '@/lib/retrieval/contextPack';
+import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 
 const tempDirs: string[] = [];
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
@@ -96,7 +98,19 @@ describe('Northstar pilot demo', () => {
     const messages = await storage.getAskMessages(userId);
     const assistantTexts = messages.filter((message) => message.role === 'assistant').map((message) => message.text);
     const securityGap = findNorthstarSecurityAcceptanceGap(result.project);
-    const projectStateVersion = await focusProjectStateVersion(result.project);
+    const focusContextPack = buildContextPack({
+      userId,
+      query: 'What needs my attention today?',
+      project: result.project,
+      profile: DEFAULT_USER_PROFILE,
+      durableMemories: [],
+      includeBroadContext: true,
+    });
+    const projectStateVersion = await focusProjectStateVersion(
+      result.project,
+      focusContextPack,
+      DEFAULT_USER_PROFILE,
+    );
     const focus = await storage.getFocusAssessment(
       userId,
       focusAssessmentCacheId(result.project.id, projectStateVersion),
@@ -110,12 +124,18 @@ describe('Northstar pilot demo', () => {
     expect(messages.filter((message) => message.role === 'user')).toHaveLength(NORTHSTAR_PILOT_CONVERSATIONS.length);
     expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(NORTHSTAR_PILOT_CONVERSATIONS.length);
 
-    const resolvedScope = result.project.nodes.find((node) => node.text === NORTHSTAR_PILOT_RESOLVED_SCOPE);
-    expect(resolvedScope).toMatchObject({ type: 'DECISION', status: 'RESOLVED' });
+    const resolvedScope = findNorthstarTechnicalScopeDecision(result.project);
+    expect(resolvedScope).toMatchObject({
+      type: 'DECISION',
+      status: 'RESOLVED',
+      decision_outcome: NORTHSTAR_PILOT_RESOLVED_SCOPE,
+    });
     expect(findNorthstarPricingDecision(result.project)).toMatchObject({ type: 'DECISION', status: 'OPEN' });
     expect(result.project.history).toHaveLength(1);
     expect(result.project.history[0]?.answer).toBe(NORTHSTAR_PILOT_RESOLVED_SCOPE);
-    expect(result.project.historyEvents?.filter((event) => event.type === 'context_added')).toHaveLength(NORTHSTAR_PILOT_CONVERSATIONS.length);
+    expect(result.project.historyEvents?.filter((event) =>
+      event.type === 'context_added' || event.type === 'context_changed'
+    )).toHaveLength(0);
     expect(result.project.historyEvents?.some((event) => event.type === 'decision_resolved')).toBe(true);
 
     expect(securityGap).toMatchObject({ type: 'UNKNOWN', status: 'OPEN' });

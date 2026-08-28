@@ -3,6 +3,7 @@ import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import {
   questionIdentityKey,
+  reconcileQuestionCandidate,
 } from '@/lib/questions/canonical';
 import { resolveQuestionReferences } from '@/lib/questions/presentation';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
@@ -556,6 +557,51 @@ function fallbackNodesForSource(content: string): PrecomputedSourceNode[] {
   }];
 }
 
+function reconciledFallbackNodes(project: Project, content: string): PrecomputedSourceNode[] {
+  return fallbackNodesForSource(content).map((node) => {
+    if (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION') return node;
+    const reconciliation = reconcileQuestionCandidate(node, project);
+    return {
+      ...node,
+      questionClassification: reconciliation.classification,
+      canonicalQuestionId: reconciliation.canonicalQuestionId,
+      reconciliationConfidence: reconciliation.confidence,
+      reconciliationReason: reconciliation.reason,
+    };
+  });
+}
+
+function deterministicResolutionOperation(project: Project, content: string): ProjectPatchOperation | undefined {
+  if (content.includes('?')) return undefined;
+  if (/\b(?:has|have|had|is|are|was|were|did|does|do)\s+(?:not|n't)\b|\b(?:pending|uncertain|unconfirmed|unresolved|under review)\b/i.test(content)) {
+    return undefined;
+  }
+  const reportsCompletedResult = /\b(?:test|trial|experiment|request|attempt|run|review|audit|check|measurement|analysis|inspection|rehearsal)\b/i.test(content)
+    && /\b(?:produced|returned|created|found|showed|demonstrated|confirmed|revealed|passed|failed|completed|recorded)\b/i.test(content);
+  if (!reportsCompletedResult) return undefined;
+
+  const contentTerms = new Set(questionIdentityKey(content).split(' ').filter(Boolean));
+  const ranked = project.nodes
+    .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && node.status === 'OPEN')
+    .map((node) => {
+      const terms = questionIdentityKey(node.text).split(' ').filter(Boolean);
+      const shared = terms.filter((term) => contentTerms.has(term)).length;
+      return { node, shared, ratio: terms.length ? shared / terms.length : 0 };
+    })
+    .filter((candidate) => candidate.shared >= 2 && candidate.ratio >= 0.4)
+    .sort((left, right) => right.ratio - left.ratio || right.shared - left.shared);
+  if (!ranked.length || (ranked[1] && ranked[1].ratio === ranked[0].ratio && ranked[1].shared === ranked[0].shared)) {
+    return undefined;
+  }
+  return {
+    op: 'RESOLVE_UNKNOWN',
+    targetNodeId: ranked[0].node.id,
+    answer: content.trim(),
+    confidence: 0.84,
+    operationRef: 'fallback:resolved-result',
+  };
+}
+
 /** Deterministic graph fallback used when model analysis is unavailable. */
 export function extractDeterministicFallbackNodes(content: string): PrecomputedSourceNode[] {
   return fallbackNodesForSource(content);
@@ -659,6 +705,57 @@ function operationsFromLegacyNodes(nodes: PrecomputedSourceNode[]): ProjectPatch
     }
     return undefined;
   }).filter((operation): operation is ProjectPatchOperation => Boolean(operation));
+}
+
+function applyLegacyReconciliationMetadata(
+  project: Project,
+  nodes: PrecomputedSourceNode[] | undefined,
+  operationNodeIds: Record<string, string>,
+  sourceId: string,
+  now: string,
+): string[] {
+  if (!nodes?.length) return [];
+  const updatedIds = new Set<string>();
+  nodes.forEach((candidate, index) => {
+    const operationRef = candidate.candidateRef ?? `new:${index}`;
+    const persistedId = operationNodeIds[operationRef] ?? operationNodeIds[`new:${index}`];
+    const persisted = project.nodes.find((node) => node.id === persistedId);
+    if (!persisted) return;
+
+    const canonicalId = candidate.canonicalNodeId ?? candidate.canonicalQuestionId;
+    const canonical = canonicalId ? project.nodes.find((node) => node.id === canonicalId) : undefined;
+    const classification = candidate.questionClassification;
+    const reusesCanonical = ['PARAPHRASE', 'EQUIVALENT', 'REFINES_EXISTING', 'ASSUMPTION'].includes(classification ?? '');
+    const target = canonical && reusesCanonical ? canonical : persisted;
+
+    if (classification === 'REFINES_EXISTING' && canonical && candidate.text.trim()) {
+      canonical.question_aliases = mergeUnique(canonical.question_aliases, [canonical.text, candidate.text]);
+      canonical.text = candidate.text.trim();
+    } else if (canonical && candidate.text.trim() !== canonical.text.trim()) {
+      canonical.question_aliases = mergeUnique(canonical.question_aliases, [candidate.text.trim()]);
+    }
+
+    if (classification) {
+      target.reconciliation_classification = classification;
+      target.reconciliation_status = 'reconciled';
+      target.reconciliation_confidence = candidate.reconciliationConfidence ?? candidate.confidence;
+      target.reconciliation_reason = candidate.reconciliationReason;
+    }
+    if (classification === 'SUBQUESTION' && canonicalId) {
+      persisted.canonical_node_id = canonicalId;
+      persisted.question_role = 'subquestion';
+    } else if (classification === 'RELATED_BUT_DISTINCT') {
+      persisted.question_role = 'related';
+    }
+    const completedDecisionStatement = candidate.type === 'DECISION'
+      && candidate.status === undefined
+      && /\b(?:decision|choice)\b.*\b(?:was|is|has been)\s+(?:already\s+)?(?:made|decided|resolved|chosen|selected)\b/i.test(candidate.text);
+    if (candidate.status === 'RESOLVED' || completedDecisionStatement) target.status = 'RESOLVED';
+    target.source_refs = Array.from(new Set([...target.source_refs, sourceId]));
+    target.updated_at = now;
+    updatedIds.add(target.id);
+  });
+  return [...updatedIds];
 }
 
 function relationshipRejection(
@@ -793,7 +890,12 @@ export async function ingestContextSource(
         ? canonicalChangesToProjectPatch(input.canonicalChanges).operations
         : input.derivedNodes !== undefined
           ? operationsFromLegacyNodes(input.derivedNodes)
-          : operationsFromLegacyNodes(fallbackNodesForSource(content)));
+          : (() => {
+              const resolution = deterministicResolutionOperation(updated, content);
+              return resolution
+                ? [resolution]
+                : operationsFromLegacyNodes(reconciledFallbackNodes(updated, content));
+            })());
   const patchResult = applyProjectPatch(
     updated,
     { operations: patchOperations },
@@ -804,10 +906,24 @@ export async function ingestContextSource(
     },
   );
   Object.assign(updated, patchResult.project);
+  const legacyMetadataNodeIds = applyLegacyReconciliationMetadata(
+    updated,
+    input.derivedNodes,
+    patchResult.operationNodeIds,
+    sourceId,
+    now,
+  );
+  legacyMetadataNodeIds.forEach((nodeId) => {
+    if (!patchResult.updatedNodeIds.includes(nodeId)) patchResult.updatedNodeIds.push(nodeId);
+  });
 
   const persistedSource = updated.sources.find((source) => source.id === sourceId);
   if (persistedSource) {
-    persistedSource.derived_node_ids = patchResult.createdNodeIds;
+    persistedSource.derived_node_ids = Array.from(new Set([
+      ...patchResult.createdNodeIds,
+      ...patchResult.updatedNodeIds,
+      ...Object.values(patchResult.operationNodeIds),
+    ])).filter((nodeId) => updated.nodes.some((node) => node.id === nodeId));
     persistedSource.reconciliation_summary ??= reconciliationSummaryForOperations(patchOperations);
   }
 

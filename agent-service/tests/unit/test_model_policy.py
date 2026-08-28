@@ -25,6 +25,11 @@ def test_cheap_profile_is_the_default(monkeypatch) -> None:
 
 def test_flagship_profile_is_opt_in(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_MODEL_PROFILE", "flagship")
+    for role in ("CONTEXT", "GAP", "ATTENTION", "PARTNER"):
+        monkeypatch.delenv(f"AGENT_{role}_MODEL", raising=False)
+        monkeypatch.delenv(f"AGENT_{role}_THINKING", raising=False)
+        monkeypatch.delenv(f"AGENT_{role}_THINKING_LEVEL", raising=False)
+        monkeypatch.delenv(f"AGENT_{role}_MAX_OUTPUT_TOKENS", raising=False)
     policy = get_agent_model_policy()
     assert policy["context"].thinking_level == "minimal"
     assert policy["gap"].model == "gemini-3.5-flash"

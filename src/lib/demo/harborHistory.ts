@@ -8,6 +8,7 @@ import { hashText } from '@/lib/context/ingestion';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { getStorageProvider } from '@/lib/storage';
 import { persistAskConversationContext, persistAskProposal } from '@/lib/ask/conversationContext';
 import { askGapswise } from '@/lib/ask/adkClient';
@@ -22,6 +23,7 @@ import {
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { buildGraphHealthReport } from '@/lib/graph/decisionMapDebug';
+import { changedProjectNodeIds } from '@/lib/graph/relationshipCompletion';
 import type { AppScope } from '@/types/scope';
 import type { ClarityNode, EdgeType, Project, ProjectHistoryEvent } from '@/types/clarity';
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
@@ -406,10 +408,11 @@ async function snapshotForEvent(params: {
   return snapshot;
 }
 
-function snapshotTriggerTypeFor(event: ProjectHistoryEvent): 'context_processed' | 'decision_confirmed' | 'gap_resolved' | null {
+function snapshotTriggerTypeFor(event: ProjectHistoryEvent): 'context_processed' | 'decision_confirmed' | 'gap_resolved' | 'action_completed' | null {
   if (event.type === 'context_added') return 'context_processed';
   if (event.type === 'decision_resolved') return 'decision_confirmed';
   if (event.type === 'gap_resolved') return 'gap_resolved';
+  if (event.type === 'action_completed') return 'action_completed';
   return null;
 }
 
@@ -437,12 +440,13 @@ async function uploadPdfIfConfigured(
 
 async function prepareAssessments(userId: string, project: Project, recorder?: DeveloperGenerationRecorder): Promise<void> {
   const storage = getStorageProvider();
+  const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
   const memories = await storage.getMemories(userId);
   const contextPack = await buildContextPackForUser({
     userId,
     query: 'What is the current strategic state of this project?',
     project,
-    profile: DEFAULT_USER_PROFILE,
+    profile,
     durableMemories: memories,
     scope: { type: 'project', projectId: project.id },
     includeBroadContext: true,
@@ -450,7 +454,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
   let focus = await recordDeveloperGenerationStep(
     recorder,
     { name: 'Focus assessment obtained', category: 'assessment', summary: 'Loaded the current Focus assessment.' },
-    () => getCachedFocusAssessment(userId, project, contextPack, DEFAULT_USER_PROFILE),
+    () => getCachedFocusAssessment(userId, project, contextPack, profile),
   );
   if (!focus) {
     // A newly created project can contain only its GOAL, so the normal Focus
@@ -467,7 +471,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
       score: 0,
       confidence: 1,
     };
-    const projectStateVersion = await focusProjectStateVersion(project, contextPack, DEFAULT_USER_PROFILE);
+    const projectStateVersion = await focusProjectStateVersion(project, contextPack, profile);
     const now = new Date().toISOString();
     await recordDeveloperGenerationStep(
       recorder,
@@ -488,7 +492,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
     await recordDeveloperGenerationStep(
       recorder,
       { name: 'Overview assessment obtained', category: 'assessment', summary: 'Loaded the current Overview assessment.' },
-      () => getProjectOverviewAssessmentWithMetadata(userId, project, project.historyEvents ?? [], focus, contextPack),
+      () => getProjectOverviewAssessmentWithMetadata(userId, project, project.historyEvents ?? [], focus, contextPack, { profile }),
     );
   } catch {
     // A malformed model assessment must not prevent the historical Harbor
@@ -524,6 +528,7 @@ async function prepareAssessments(userId: string, project: Project, recorder?: D
       project.historyEvents ?? [],
       focus,
       contextPack,
+      profile,
     );
     const now = new Date().toISOString();
     await recordDeveloperGenerationStep(
@@ -612,11 +617,38 @@ async function processDocument(
   const nextProject = refreshed.project;
   const priorEventIds = new Set((project.historyEvents ?? []).map((event) => event.id));
   const newEvents = (nextProject.historyEvents ?? []).filter((event) => !priorEventIds.has(event.id));
-  const event = newEvents.find((candidate) => candidate.type === 'context_added' && candidate.sourceId === sourceId)
-    ?? latestEvent(nextProject, 'context_added', (candidate) => candidate.sourceId === sourceId);
-  if (!event) {
-    throw new Error(`Processing ${document.filename} did not create a meaningful context history event.`);
-  }
+  const event = newEvents.find((candidate) => candidate.type === 'context_added' && candidate.sourceId === sourceId);
+  const changedNodeIds = changedProjectNodeIds(project, nextProject);
+  const changedEdgeKeys = new Set(nextProject.edges.map((edge) => `${edge.source}:${edge.type}:${edge.target}`));
+  const previousEdgeKeys = new Set(project.edges.map((edge) => `${edge.source}:${edge.type}:${edge.target}`));
+  const graphChanged = changedNodeIds.length > 0
+    || changedEdgeKeys.size !== previousEdgeKeys.size
+    || [...changedEdgeKeys].some((key) => !previousEdgeKeys.has(key));
+  const processingOutcome: 'changed' | 'no_change' | 'failed' = event || newEvents.length > 0
+    ? 'changed'
+    : graphChanged
+      ? 'failed'
+      : 'no_change';
+  await recordDeveloperGenerationStep(
+    recorder,
+    {
+      name: 'Source processing outcome',
+      category: 'source',
+      sourceId,
+      filename: document.filename,
+      processingOutcome,
+      summary: processingOutcome === 'changed'
+        ? `The ${document.filename} processing changed project state.`
+        : processingOutcome === 'no_change'
+          ? `The ${document.filename} processing completed without changing project state.`
+          : `The ${document.filename} processing changed graph state without creating a history event.`,
+    },
+    () => {
+      if (processingOutcome === 'failed') {
+        throw new Error(`Processing ${document.filename} changed graph state without creating a meaningful context history event.`);
+      }
+    },
+  );
   await recordDeveloperGenerationStep(
     recorder,
     {
@@ -636,6 +668,10 @@ async function processDocument(
     () => getStorageProvider().getProject(userId, project.id),
   );
   const persistedProject = reloadedProject ?? nextProject;
+  if (processingOutcome === 'no_change') return persistedProject;
+  if (!event) {
+    throw new Error(`Processing ${document.filename} created project changes without a source history event.`);
+  }
   for (const historyEvent of newEvents) {
     const type = snapshotTriggerTypeFor(historyEvent);
     if (!type) continue;
@@ -1628,8 +1664,17 @@ export async function createHarborHistoryDemoForUser(params: {
   if (snapshots.some((snapshot) => !snapshot.trigger.historyEventId)) {
     throw new Error('Harbor history demo created a snapshot without an exact history event reference.');
   }
-  if (snapshotRecords.some((snapshot) => !snapshot.assessments.focus || !snapshot.assessments.overview || !snapshot.assessments.today)) {
-    throw new Error('Harbor history demo created a snapshot without Focus, Overview, or Today assessment state.');
+  const incompleteAssessmentSnapshots = snapshotRecords
+    .filter((snapshot) => !snapshot.assessments.focus || !snapshot.assessments.overview || !snapshot.assessments.today)
+    .map((snapshot) => ({
+      id: snapshot.id,
+      trigger: snapshot.trigger.type,
+      focus: Boolean(snapshot.assessments.focus),
+      overview: Boolean(snapshot.assessments.overview),
+      today: Boolean(snapshot.assessments.today),
+    }));
+  if (incompleteAssessmentSnapshots.length > 0) {
+    throw new Error(`Harbor history demo created snapshots with incomplete assessment state: ${JSON.stringify(incompleteAssessmentSnapshots)}.`);
   }
   await recorder.step(
     {

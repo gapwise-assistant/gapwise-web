@@ -1,0 +1,53 @@
+import type { Project } from '@/types/clarity';
+import type { GoogleWorkspaceSignals } from '@/types/google';
+import { authFetch } from '@/lib/auth/client';
+
+export interface WorkspaceImportResult {
+  project: Project;
+  imported: number;
+  skipped: number;
+}
+
+/** Imports connector sources through the same persisted Context Agent route as manual context. */
+export async function importWorkspaceSignalsIntoProject(
+  params: { userId: string; project: Project; signals: GoogleWorkspaceSignals },
+  deps: { request?: typeof authFetch } = {},
+): Promise<WorkspaceImportResult> {
+  const request = deps.request ?? authFetch;
+  let current = params.project;
+  let imported = 0;
+  let skipped = 0;
+
+  for (const source of params.signals.derivedSources) {
+    if (current.sources.some((candidate) => candidate.id === source.id)) {
+      skipped += 1;
+      continue;
+    }
+    const response = await request('/api/context/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: params.userId,
+        projectId: current.id,
+        sourceId: source.id,
+        filename: source.filename,
+        content: source.content,
+        type: source.type,
+        mimeType: source.mime_type,
+        sizeBytes: source.size_bytes,
+        storageUrl: source.storage_url,
+        hash: source.hash,
+        origin: 'connector',
+      }),
+    });
+    const body = await response.json().catch(() => ({})) as { error?: string; project?: Project; skipped?: boolean };
+    if (!response.ok || !body.project) {
+      throw new Error(body.error ?? `Connected source ${source.filename} could not be analyzed.`);
+    }
+    current = body.project;
+    if (body.skipped) skipped += 1;
+    else imported += 1;
+  }
+
+  return { project: current, imported, skipped };
+}

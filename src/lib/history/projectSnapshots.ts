@@ -574,6 +574,21 @@ export async function createProjectSnapshot(params: {
   const storage = getStorageProvider();
   const project = await storage.getProject(params.userId, params.projectId);
   if (!project) throw new StorageError('The project for this snapshot was not found.', 'NOT_FOUND');
+  const snapshots = await storage.listProjectSnapshots(params.userId, project.id);
+  if (params.trigger.historyEventId) {
+    const existingSummary = snapshots.find(
+      (snapshot) => snapshot.trigger.historyEventId === params.trigger.historyEventId,
+    );
+    if (existingSummary) {
+      const existing = await storage.getProjectSnapshot(params.userId, existingSummary.id);
+      if (existing) {
+        if (!isProjectSnapshotV2(existing)) {
+          throw new StorageError('A legacy snapshot references the current history event.', 'VALIDATION_ERROR');
+        }
+        return existing;
+      }
+    }
+  }
   const [allChats, allMessages, allResearch] = await Promise.all([
     storage.getAskChats(params.userId),
     storage.getAskMessages(params.userId),
@@ -615,7 +630,6 @@ export async function createProjectSnapshot(params: {
     return existing;
   }
   const assessments = await persistedAssessments(params.userId, project);
-  const snapshots = await storage.listProjectSnapshots(params.userId, project.id);
   const snapshot: ProjectSnapshotV2 = {
     id: snapshotId,
     userId: params.userId,

@@ -265,6 +265,7 @@ function completionPrompt(
     'Most pairs should be NONE. Create a relationship only when the source text and supplied project state support a specific semantic connection.',
     'Use the narrowest valid relationship. Shared vocabulary, proximity, or general project relevance is not enough.',
     'informs means information helps evaluate the target; supports means evidence strengthens a conclusion; resolves means completed evidence already answers the target; satisfies means a NEXT_ACTION is intended to complete the target.',
+    'contradicts or supersedes may connect resolved evidence to an OPEN RISK only when the evidence directly disproves or replaces the condition described by that risk.',
     'blocks means the source must be addressed before the target can proceed; depends_on means the source cannot proceed until the target is satisfied; affects means the source may materially change the target without necessarily blocking it.',
     'Return one classification for any pair you classify and choose only from that pair allowedTypes or NONE.',
     JSON.stringify({ nodes, existing_edges: edges, pairs }),

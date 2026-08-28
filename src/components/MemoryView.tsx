@@ -1,18 +1,18 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Brain, CheckCircle2, Eye, Plus, Save, Sliders, Trash2 } from 'lucide-react';
+import { Brain, Eye, MoreHorizontal, Plus, Save, Sliders, X } from 'lucide-react';
 import { DurableMemory, MemoryCategory } from '@/types/contextPack';
 import { UserMemoryProfile } from '@/types/clarity';
-import { activeMemories, confirmMemory, editMemory, forgetMemory } from '@/lib/memory/store';
+import { activeMemories, editMemory, forgetMemory } from '@/lib/memory/store';
 import { createDurableMemory } from '@/lib/memory/policy';
 import { buildPromptProfile } from '@/lib/personalization/promptProfile';
 
 interface MemoryViewProps {
   profile: UserMemoryProfile;
   memories: DurableMemory[];
-  onUpdateProfile: (updated: UserMemoryProfile) => void;
-  onUpdateMemories: (updated: DurableMemory[]) => void;
+  onUpdateProfile: (updated: UserMemoryProfile) => boolean | Promise<boolean>;
+  onUpdateMemories: (updated: DurableMemory[]) => boolean | Promise<boolean>;
   section?: 'all' | 'memory' | 'preferences';
   variant?: 'page' | 'drawer';
 }
@@ -31,35 +31,87 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
   const [draftMemory, setDraftMemory] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
-  const [savedMessage, setSavedMessage] = useState('');
+  const [openMemoryMenuId, setOpenMemoryMenuId] = useState<string | null>(null);
+  const [removalPendingId, setRemovalPendingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
 
   useEffect(() => {
     setFormData(profile);
   }, [profile]);
+
+  useEffect(() => {
+    if (!openMemoryMenuId) return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMemoryMenuId(null);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && !target.closest('[data-memory-menu]')) {
+        setOpenMemoryMenuId(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [openMemoryMenuId]);
 
   const visibleMemories = activeMemories(memories);
   const promptProfile = buildPromptProfile(profile, memories);
   const showMemory = section === 'all' || section === 'memory';
   const showPreferences = section === 'all' || section === 'preferences';
 
-  const handleSaveProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    onUpdateProfile(formData);
-    setSavedMessage('Memory profile updated.');
-    setTimeout(() => setSavedMessage(''), 3000);
+  const persistMemories = async (
+    key: string,
+    updated: DurableMemory[],
+    success: string,
+    afterSave?: () => void,
+  ) => {
+    setSavingKey(key);
+    setStatusMessage(null);
+    try {
+      const saved = await onUpdateMemories(updated);
+      if (saved === false) throw new Error('The memory change could not be saved.');
+      afterSave?.();
+      setStatusMessage({ tone: 'success', text: success });
+    } catch (reason) {
+      setStatusMessage({ tone: 'error', text: reason instanceof Error ? reason.message : 'The memory change could not be saved.' });
+    } finally {
+      setSavingKey(null);
+    }
   };
 
-  const handleAddMemory = () => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingKey('profile');
+    setStatusMessage(null);
+    try {
+      const saved = await onUpdateProfile(formData);
+      if (saved === false) throw new Error('Preferences could not be saved.');
+      setStatusMessage({ tone: 'success', text: 'Preferences saved.' });
+    } catch (reason) {
+      setStatusMessage({ tone: 'error', text: reason instanceof Error ? reason.message : 'Preferences could not be saved.' });
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const handleAddMemory = async () => {
     const created = createDurableMemory(`Remember that ${draftMemory.trim()}`);
     if (!created) return;
-    onUpdateMemories([created, ...memories]);
-    setDraftMemory('');
+    await persistMemories('add', [created, ...memories], 'Memory saved.', () => setDraftMemory(''));
   };
 
-  const handleSaveEdit = (memory: DurableMemory) => {
-    onUpdateMemories(editMemory(memories, memory.id, editingText, memory.category));
-    setEditingId(null);
-    setEditingText('');
+  const handleSaveEdit = async (memory: DurableMemory) => {
+    await persistMemories(`edit:${memory.id}`, editMemory(memories, memory.id, editingText, memory.category), 'Memory updated.', () => {
+      setEditingId(null);
+      setEditingText('');
+    });
   };
 
   if (variant === 'drawer') {
@@ -83,15 +135,15 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               <div className="mt-2 flex justify-end">
                 <button
                   type="button"
-                  onClick={handleAddMemory}
-                  disabled={!draftMemory.trim()}
+                  onClick={() => { void handleAddMemory(); }}
+                  disabled={!draftMemory.trim() || savingKey === 'add'}
                   className="inline-flex items-center gap-1.5 rounded-md bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Save className="h-3.5 w-3.5" aria-hidden="true" />
-                  Remember
+                  {savingKey === 'add' ? 'Saving…' : 'Remember'}
                 </button>
               </div>
-              {savedMessage && <p className="mt-2 text-xs text-emerald-300">{savedMessage}</p>}
+              {statusMessage && <p role={statusMessage.tone === 'error' ? 'alert' : undefined} className={`mt-2 text-xs ${statusMessage.tone === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>{statusMessage.text}</p>}
             </div>
 
             <div className="border-t border-slate-800 pt-6">
@@ -113,7 +165,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                         <div className="mt-2 space-y-2">
                           {categoryMemories.map((memory) => (
                             <div key={memory.id} className="rounded-lg border border-slate-800/80 bg-slate-900/60 p-3">
-                              {editingId === memory.id ? (
+                          {editingId === memory.id ? (
                                 <textarea
                                   rows={3}
                                   value={editingText}
@@ -129,23 +181,102 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                                 <span>{categoryLabel}</span>
                                 <span className="ml-auto flex items-center gap-2">
                                   {editingId === memory.id ? (
-                                    <button type="button" onClick={() => handleSaveEdit(memory)} className="font-semibold text-cyan-200 hover:text-cyan-100">Save</button>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingId(null);
+                                          setEditingText('');
+                                        }}
+                                        disabled={savingKey === `edit:${memory.id}`}
+                                        className="inline-flex items-center gap-1 font-semibold text-slate-400 hover:text-slate-200 disabled:opacity-50"
+                                      >
+                                        <X className="h-3 w-3" aria-hidden="true" />
+                                        Cancel
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={savingKey === `edit:${memory.id}`}
+                                        onClick={() => { void handleSaveEdit(memory); }}
+                                        className="font-semibold text-cyan-200 hover:text-cyan-100 disabled:opacity-50"
+                                      >
+                                        {savingKey === `edit:${memory.id}` ? 'Saving…' : 'Save'}
+                                      </button>
+                                    </>
                                   ) : (
+                                    <div className="relative" data-memory-menu>
+                                      <button
+                                        type="button"
+                                        aria-label={`Memory actions for ${memory.text}`}
+                                        aria-haspopup="menu"
+                                        aria-expanded={openMemoryMenuId === memory.id}
+                                        onClick={() => setOpenMemoryMenuId((current) => current === memory.id ? null : memory.id)}
+                                        disabled={savingKey === `remove:${memory.id}`}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                                      >
+                                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                                      </button>
+                                      {openMemoryMenuId === memory.id && (
+                                        <div role="menu" className="absolute right-0 top-8 z-20 min-w-24 rounded-lg border border-slate-700 bg-slate-900 p-1 shadow-xl shadow-black/30">
+                                          <button
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={() => {
+                                              setOpenMemoryMenuId(null);
+                                              setEditingId(memory.id);
+                                              setEditingText(memory.text);
+                                            }}
+                                            className="block w-full rounded-md px-2.5 py-1.5 text-left text-[10px] font-semibold text-cyan-200 hover:bg-cyan-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={() => {
+                                              setOpenMemoryMenuId(null);
+                                              setRemovalPendingId(memory.id);
+                                            }}
+                                            className="block w-full rounded-md px-2.5 py-1.5 text-left text-[10px] font-semibold text-rose-200 hover:bg-rose-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </span>
+                              </div>
+                              {removalPendingId === memory.id && editingId !== memory.id && (
+                                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-rose-900/70 bg-rose-950/30 px-2.5 py-2 text-[10px]">
+                                  <span className="text-rose-200">Remove this memory?</span>
+                                  <span className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setRemovalPendingId(null)}
+                                      disabled={savingKey === `remove:${memory.id}`}
+                                      className="font-semibold text-slate-400 hover:text-slate-200 disabled:opacity-50"
+                                    >
+                                      Cancel
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        setEditingId(memory.id);
-                                        setEditingText(memory.text);
+                                        void persistMemories(
+                                          `remove:${memory.id}`,
+                                          forgetMemory(memories, memory.id),
+                                          'Memory removed.',
+                                          () => setRemovalPendingId(null),
+                                        );
                                       }}
-                                      className="font-semibold text-cyan-200 hover:text-cyan-100"
+                                      disabled={savingKey === `remove:${memory.id}`}
+                                      className="font-semibold text-rose-200 hover:text-rose-100 disabled:opacity-50"
                                     >
-                                      Edit
+                                      {savingKey === `remove:${memory.id}` ? 'Removing…' : 'Remove'}
                                     </button>
-                                  )}
-                                  <button type="button" onClick={() => onUpdateMemories(confirmMemory(memories, memory.id))} className="font-semibold text-emerald-300 hover:text-emerald-200">Confirm</button>
-                                  <button type="button" onClick={() => onUpdateMemories(forgetMemory(memories, memory.id))} className="font-semibold text-slate-500 hover:text-rose-200">Forget</button>
-                                </span>
-                              </div>
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -191,12 +322,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
               </label>
             </div>
             <div className="flex justify-end">
-              <button type="submit" className="inline-flex items-center gap-1.5 rounded-md border border-cyan-700 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-100 hover:border-cyan-500">
+              <button type="submit" disabled={savingKey === 'profile'} className="inline-flex items-center gap-1.5 rounded-md border border-cyan-700 bg-cyan-950/40 px-3 py-2 text-xs font-bold text-cyan-100 hover:border-cyan-500 disabled:opacity-50">
                 <Save className="h-3.5 w-3.5" aria-hidden="true" />
-                Save preferences
+                {savingKey === 'profile' ? 'Saving…' : 'Save preferences'}
               </button>
             </div>
-            {savedMessage && <p className="text-xs text-emerald-300">{savedMessage}</p>}
+            {statusMessage && <p role={statusMessage.tone === 'error' ? 'alert' : undefined} className={`text-xs ${statusMessage.tone === 'success' ? 'text-emerald-300' : 'text-rose-300'}`}>{statusMessage.text}</p>}
           </form>
         )}
       </div>
@@ -213,7 +344,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           <div>
             <h1 className="text-2xl font-extrabold text-slate-100">Memory</h1>
             <p className="text-xs text-slate-400">
-              Inspect, edit, confirm, or forget durable preferences and priorities that retrieval is allowed to use.
+              Inspect and edit durable preferences and priorities that retrieval is allowed to use.
             </p>
           </div>
         </div>
@@ -270,7 +401,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
             <Save className="w-4 h-4" />
             Save Profile
           </button>
-          {savedMessage && <p className="text-xs text-emerald-400 text-center">{savedMessage}</p>}
+            {statusMessage && <p role={statusMessage.tone === 'error' ? 'alert' : undefined} className={`text-center text-xs ${statusMessage.tone === 'success' ? 'text-emerald-400' : 'text-rose-300'}`}>{statusMessage.text}</p>}
         </form>}
 
         {showMemory && <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
@@ -287,11 +418,11 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
           />
           <button
             type="button"
-            onClick={handleAddMemory}
-            disabled={!draftMemory.trim()}
+            onClick={() => { void handleAddMemory(); }}
+            disabled={!draftMemory.trim() || savingKey === 'add'}
             className="min-h-11 w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold rounded-xl text-xs disabled:opacity-50 sm:min-h-0"
           >
-            Remember This
+            {savingKey === 'add' ? 'Saving…' : 'Remember This'}
           </button>
         </div>}
       </div>
@@ -328,42 +459,101 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
                       </p>
                       <div className="flex flex-wrap gap-2">
                         {editingId === memory.id ? (
-                          <button
-                            type="button"
-                            onClick={() => handleSaveEdit(memory)}
-                            className="min-h-10 rounded-lg border border-cyan-800 bg-cyan-950 px-2 py-1 text-[10px] font-semibold text-cyan-200 sm:min-h-0"
-                          >
-                            Save Edit
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              disabled={savingKey === `edit:${memory.id}`}
+                              onClick={() => {
+                                setEditingId(null);
+                                setEditingText('');
+                              }}
+                              className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-300 sm:min-h-0"
+                            >
+                              <X className="h-3 w-3" aria-hidden="true" />
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={savingKey === `edit:${memory.id}`}
+                              onClick={() => { void handleSaveEdit(memory); }}
+                              className="min-h-10 rounded-lg border border-cyan-800 bg-cyan-950 px-2 py-1 text-[10px] font-semibold text-cyan-200 sm:min-h-0"
+                            >
+                              {savingKey === `edit:${memory.id}` ? 'Saving…' : 'Save'}
+                            </button>
+                          </>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingId(memory.id);
-                              setEditingText(memory.text);
-                            }}
-                            className="min-h-10 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold text-slate-300 sm:min-h-0"
-                          >
-                            Edit
-                          </button>
+                          <div className="relative" data-memory-menu>
+                            <button
+                              type="button"
+                              aria-label={`Memory actions for ${memory.text}`}
+                              aria-haspopup="menu"
+                              aria-expanded={openMemoryMenuId === memory.id}
+                              onClick={() => setOpenMemoryMenuId((current) => current === memory.id ? null : memory.id)}
+                              disabled={savingKey === `remove:${memory.id}`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                            >
+                              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                            {openMemoryMenuId === memory.id && (
+                              <div role="menu" className="absolute right-0 top-9 z-20 min-w-24 rounded-lg border border-slate-700 bg-slate-900 p-1 shadow-xl shadow-black/30">
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setOpenMemoryMenuId(null);
+                                    setEditingId(memory.id);
+                                    setEditingText(memory.text);
+                                  }}
+                                  className="block w-full rounded-md px-2.5 py-1.5 text-left text-[10px] font-semibold text-cyan-200 hover:bg-cyan-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setOpenMemoryMenuId(null);
+                                    setRemovalPendingId(memory.id);
+                                  }}
+                                  className="block w-full rounded-md px-2.5 py-1.5 text-left text-[10px] font-semibold text-rose-200 hover:bg-rose-950/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => onUpdateMemories(confirmMemory(memories, memory.id))}
-                          className="min-h-10 rounded-lg border border-emerald-800 bg-emerald-950 px-2 py-1 text-[10px] font-semibold text-emerald-200 flex items-center gap-1 sm:min-h-0"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          Confirm
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onUpdateMemories(forgetMemory(memories, memory.id))}
-                          className="min-h-10 rounded-lg border border-rose-800 bg-rose-950 px-2 py-1 text-[10px] font-semibold text-rose-200 flex items-center gap-1 sm:min-h-0"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          Forget
-                        </button>
                       </div>
+                      {removalPendingId === memory.id && editingId !== memory.id && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-rose-900/70 bg-rose-950/30 px-2.5 py-2 text-[10px]">
+                          <span className="text-rose-200">Remove this memory?</span>
+                          <span className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setRemovalPendingId(null)}
+                              disabled={savingKey === `remove:${memory.id}`}
+                              className="font-semibold text-slate-400 hover:text-slate-200 disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void persistMemories(
+                                  `remove:${memory.id}`,
+                                  forgetMemory(memories, memory.id),
+                                  'Memory removed.',
+                                  () => setRemovalPendingId(null),
+                                );
+                              }}
+                              disabled={savingKey === `remove:${memory.id}`}
+                              className="font-semibold text-rose-200 hover:text-rose-100 disabled:opacity-50"
+                            >
+                              {savingKey === `remove:${memory.id}` ? 'Removing…' : 'Remove'}
+                            </button>
+                          </span>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

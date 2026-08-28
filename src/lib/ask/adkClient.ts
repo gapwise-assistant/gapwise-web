@@ -206,6 +206,7 @@ const askContextProposalSchema = z.object({
   type: normalizedAskProposalTypeSchema,
   text: z.string().trim().min(1).max(1200),
   reasoning: z.string().trim().min(1).max(1200).optional(),
+  targetNodeId: z.string().trim().min(1).optional(),
   status: askProposalStatusSchema,
   sourceMessageId: z.string().trim().min(1).optional(),
 });
@@ -213,6 +214,7 @@ const legacyAskProposalSchema = z.object({
   type: normalizedAskProposalTypeSchema,
   text: z.string().trim().min(1).max(1200),
   reasoning: z.string().trim().min(1).max(1200).optional(),
+  targetNodeId: z.string().trim().min(1).optional(),
   suggestedStatus: askProposalStatusSchema.optional(),
   sourceMessageId: z.string().trim().min(1).optional(),
   status: z.enum(['proposed', 'added', 'dismissed']).optional(),
@@ -669,6 +671,19 @@ function requiresGraphReasoning(message: string): boolean {
   return projectConcepts.length >= 2 && evaluationCue.test(normalized);
 }
 
+function graphReasoningModeForMessage(message: string): ProjectReasoningMode | undefined {
+  const normalized = message.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (isFocusQuestion(normalized)) return 'focus';
+  if (/\b(?:what happens|what would happen|downstream|consequence|impact|affect(?:s|ed)?|at risk|what changes if|what would change)\b/.test(normalized)) {
+    return 'impact';
+  }
+  if (/\b(?:choose|decide|decision|trade[- ]?off|which option|best option)\b/.test(normalized)) {
+    return 'decision';
+  }
+  return requiresGraphReasoning(normalized) ? 'reasoning' : undefined;
+}
+
 function applyGraphReasoningOverride(
   message: string,
   decision: { route: AskRoutingDecision; reason: string; reasoningMode?: ProjectReasoningMode },
@@ -677,15 +692,16 @@ function applyGraphReasoningOverride(
     decision.route === 'web_research'
     || explicitlyRequestsWebResearch(message)
   ) return decision;
+  const inferredMode = graphReasoningModeForMessage(message);
   if (decision.route === 'graph_reasoning') {
-    return { ...decision, reasoningMode: decision.reasoningMode ?? 'reasoning' };
+    return { ...decision, reasoningMode: decision.reasoningMode ?? inferredMode ?? 'reasoning' };
   }
-  if (!requiresGraphReasoning(message)) return decision;
+  if (!inferredMode) return decision;
 
   const promoted = {
     route: 'graph_reasoning' as const,
     reason: `${decision.reason} Generic causal project reasoning requires the canonical graph slice.`,
-    reasoningMode: 'reasoning' as const,
+    reasoningMode: inferredMode,
   };
   logAskDebug('graph-reasoning-promoted', {
     originalRoute: decision.route,

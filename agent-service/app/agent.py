@@ -63,6 +63,10 @@ class AskRouteDecision(BaseModel):
             "Never intended for the end user."
         )
     )
+    reasoningMode: Literal["factual", "reasoning", "impact", "decision", "focus"] | None = Field(
+        default=None,
+        description="Graph retrieval mode. Required when route is graph_reasoning.",
+    )
 
 
 class AskContextProposal(BaseModel):
@@ -83,6 +87,13 @@ class AskContextProposal(BaseModel):
     ]
     text: str = Field(min_length=1, max_length=1200)
     reasoning: str | None = Field(default=None, max_length=1200)
+    targetNodeId: str | None = Field(
+        default=None,
+        description=(
+            "Existing canonical project node represented by this proposal. "
+            "Use only an ID supplied in the Context Pack."
+        ),
+    )
     status: Literal["OPEN", "RESOLVED", "DEFERRED"]
 
 
@@ -251,9 +262,8 @@ routing_agent = Agent(
         "The current user message is always first-class context. "
         "It may introduce a project, goal, preference, constraint, idea, "
         "uncertainty, decision, problem, or fact. "
-        "Choose internal_context for conversations about the user's project, "
-        "goals, decisions, priorities, plans, tradeoffs, ideas, uncertainty, "
-        "or what they should do next. "
+        "Choose internal_context for ordinary conversations about the user's project, "
+        "goals, plans, ideas, uncertainty, or simple factual questions. "
         "Choose graph_reasoning when the user asks about relationships among "
         "multiple project facts, dependencies, blockers, downstream impact, "
         "consequences, conflicts, tradeoffs, prerequisite chains, or what "
@@ -266,10 +276,14 @@ routing_agent = Agent(
         "Do not choose graph_reasoning for a simple fact lookup, summary, "
         "ordinary conversation, or a generic request to explain the assistant's "
         "previous recommendation. "
-        "If the user says they do not know what to choose, what format to use, "
-        "how to approach something, what to prioritize, or what would work best, "
-        "choose internal_context. These are problems for the Partner Agent to "
-        "help reason through, not missing prerequisite facts. "
+        "For questions asking what to focus on, prioritize, do first, address next, "
+        "or what matters most, choose graph_reasoning with reasoningMode focus. "
+        "For consequences, downstream effects, impact, or what changes if a condition "
+        "changes, choose graph_reasoning with reasoningMode impact. "
+        "For choosing among options or project tradeoffs, choose graph_reasoning with "
+        "reasoningMode decision when graph relationships are needed. Use reasoningMode "
+        "reasoning for other relationship questions. "
+        "When route is not graph_reasoning, omit reasoningMode. "
         "Choose web_research only when the request requires current or external "
         "information that should be verified outside Gapswise, or when the user "
         "explicitly asks to search, check, verify, or research online. "
@@ -316,6 +330,8 @@ root_agent = Agent(
         "Never mark a response as conclusion merely because it discusses an open question. "
         "AI reasoning must not silently become project truth. Clear project facts explicitly stated by the user are handled by Context ingestion. "
         "Use contextProposals only for valuable project state you derived rather than facts the user stated. "
+        "When a proposal restates, refines, or advances an existing project node, set targetNodeId to that supplied canonical node ID. "
+        "Never invent a targetNodeId, and do not create a parallel proposal for project state already marked RESOLVED. "
         "A contextProposal may be an inferred risk, assumption, unresolved external question, or decision implication, but it is only a suggestion until the user chooses Add. "
         "Do not propose hypothetical outcomes, unsupported blockers, ordinary recommendations, or every follow-up question. Return an empty contextProposals array when there is no derived state worth tracking. "
         "Each contextProposal must be one atomic concept with type, text, optional reasoning, and status OPEN, RESOLVED, or DEFERRED. The application will show Add and Dismiss; never claim a proposal was saved. "

@@ -192,9 +192,36 @@ export function clinicFlowRetryTestSource(): ClinicFlowRegressionSource {
     extractionSummary: 'The 20-record offline retry test produced duplicate EHR records; the current connector is not safe for retry.',
     processingStatus: 'completed',
     relevance: 'relevant',
+    operations: [
+      {
+        op: 'ADD_CONTEXT',
+        nodeType: 'EVIDENCE',
+        nodeId: CLINICFLOW_NODE_IDS.retryTest,
+        operationRef: 'new:0',
+        text: 'The 20-record offline retry test produced three duplicate EHR records because the connector accepted an unacknowledged retry as a second write.',
+        confidence: 0.98,
+        impact: 0.98,
+      },
+      {
+        op: 'ADD_CONTEXT',
+        nodeType: 'KNOWN',
+        nodeId: CLINICFLOW_NODE_IDS.retryResult,
+        operationRef: 'new:1',
+        text: 'The current EHR connector has no stable idempotency key and cannot be safely used for offline retries before September 15.',
+        confidence: 0.98,
+        impact: 0.98,
+      },
+      {
+        op: 'RESOLVE_UNKNOWN',
+        targetNodeId: CLINICFLOW_NODE_IDS.retry,
+        operationRef: 'resolved-retry',
+        answer: 'The 20-record test produced three duplicate EHR records, so the current connector cannot retry safely.',
+        confidence: 0.99,
+      },
+    ],
     derivedNodes: [
       {
-        ...node(CLINICFLOW_NODE_IDS.retryTest, 'EXPERIMENT', 'The 20-record offline retry test produced three duplicate EHR records because the connector accepted an unacknowledged retry as a second write.', 0.98, [
+        ...node(CLINICFLOW_NODE_IDS.retryTest, 'EVIDENCE', 'The 20-record offline retry test produced three duplicate EHR records because the connector accepted an unacknowledged retry as a second write.', 0.98, [
           'This is conclusive evidence that the current connector fails the duplicate-record stop condition.',
         ]),
         relatedNodeIds: [CLINICFLOW_NODE_IDS.retry],

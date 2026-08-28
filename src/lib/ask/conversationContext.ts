@@ -5,13 +5,18 @@ import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } fro
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
 import type { AskContextProposal } from '@/types/ask';
-import { canonicalQuestionGroups, canonicalOpenQuestions } from '@/lib/questions/canonical';
+import {
+  canonicalQuestionGroups,
+  canonicalOpenQuestions,
+  reconcileQuestionCandidate,
+} from '@/lib/questions/canonical';
 import {
   changedProjectNodeIds,
   completeProjectRelationships,
   type RelationshipCompletionTrace,
 } from '@/lib/graph/relationshipCompletion';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import { retireExplicitlyDisprovedRisks } from '@/lib/graph/riskLifecycle';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import type { ContextProcessingLog } from '@/types/clarity';
 import { boundedId } from '@/lib/ids/boundedId';
@@ -48,6 +53,34 @@ function proposalId(assistantMessageId: string, proposal: AskContextProposal): s
   return proposal.id ?? boundedId('proposal', `${assistantMessageId}_${proposal.type}_${proposal.text}`);
 }
 
+function proposalTargetCompatible(proposal: AskContextProposal, node: Project['nodes'][number]): boolean {
+  if (proposal.type === 'UNKNOWN' || proposal.type === 'ASSUMPTION') {
+    return node.type === 'UNKNOWN' || node.type === 'ASSUMPTION';
+  }
+  return proposal.type === node.type;
+}
+
+function canonicalProposalTarget(project: Project, proposal: AskContextProposal): string | undefined {
+  const explicit = proposal.targetNodeId
+    ? project.nodes.find((node) => node.id === proposal.targetNodeId && node.status !== 'DEPRECATED')
+    : undefined;
+  if (explicit && proposalTargetCompatible(proposal, explicit)) return explicit.id;
+
+  if (proposal.type === 'UNKNOWN' || proposal.type === 'ASSUMPTION') {
+    const reconciliation = reconcileQuestionCandidate(proposal, project);
+    const candidateId = reconciliation.canonicalQuestionId;
+    const candidate = candidateId ? project.nodes.find((node) => node.id === candidateId) : undefined;
+    if (candidate && proposalTargetCompatible(proposal, candidate)) return candidate.id;
+  }
+
+  const normalized = proposal.text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return project.nodes.find((node) =>
+    node.status !== 'DEPRECATED'
+    && proposalTargetCompatible(proposal, node)
+    && node.text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === normalized
+  )?.id;
+}
+
 /**
  * Persists a proposal only after the user explicitly chooses Add. The node is
  * passed through the normal graph ingestion writer as a precomputed node so
@@ -64,6 +97,7 @@ export async function persistAskProposal(params: {
   const profile = await loadUserMemoryProfile(params.userId, DEFAULT_USER_PROFILE);
   const sourceId = proposalSourceId(params.assistantMessageId, proposalId(params.assistantMessageId, params.proposal));
   const now = new Date().toISOString();
+  const targetNodeId = canonicalProposalTarget(target.project, params.proposal);
   const proposalContext = [params.proposal.text, params.proposal.reasoning]
     .filter((value): value is string => Boolean(value?.trim()))
     .join('\n');
@@ -84,6 +118,13 @@ export async function persistAskProposal(params: {
       confidence: 0.9,
       impact: 0.75,
       status: params.proposal.status,
+      ...(targetNodeId ? {
+        canonicalNodeId: targetNodeId,
+        canonicalQuestionId: targetNodeId,
+        questionClassification: 'EQUIVALENT' as const,
+        reconciliationConfidence: 1,
+        reconciliationReason: 'The accepted Ask proposal explicitly reuses an existing canonical project node.',
+      } : {}),
       ...(params.proposal.reasoning ? { whyItMatters: [params.proposal.reasoning] } : {}),
     }],
     deferHistory: true,
@@ -149,6 +190,7 @@ export async function persistAskProposal(params: {
   if (sourceWithLog) sourceWithLog.processing_log = relationshipLog;
 
   const completedActionIds = resolveSatisfiedNextActions(relationshipProject);
+  retireExplicitlyDisprovedRisks(relationshipProject, now);
   let updated = appendContextAddedHistory(target.project, relationshipProject, {
     sourceId,
     filename: `Ask proposal ${params.assistantMessageId}.txt`,

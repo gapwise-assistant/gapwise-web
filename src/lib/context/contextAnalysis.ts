@@ -18,6 +18,7 @@ import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProj
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import { retireExplicitlyDisprovedRisks } from '@/lib/graph/riskLifecycle';
 import {
   changedProjectNodeIds,
   completeProjectRelationships,
@@ -437,7 +438,11 @@ function legacyNodesToOperations(analysis: ContextAnalysis): ProjectPatchOperati
     .map((node, index): ProjectPatchOperation | undefined => {
       const operationRef = node.candidate_ref ?? `new:${index}`;
       const reconciliation = reconciliationByRef.get(node.candidate_ref);
-      const targetNodeId = reconciliation?.canonical_node_id ?? reconciliation?.canonical_question_id;
+      const reusesCanonicalNode = ['PARAPHRASE', 'EQUIVALENT', 'REFINES_EXISTING', 'ASSUMPTION']
+        .includes(reconciliation?.classification ?? '');
+      const targetNodeId = reusesCanonicalNode
+        ? reconciliation?.canonical_node_id ?? reconciliation?.canonical_question_id
+        : undefined;
       const confidence = node.confidence;
       const impact = node.impact;
 
@@ -472,6 +477,29 @@ function legacyNodesToOperations(analysis: ContextAnalysis): ProjectPatchOperati
     .filter((operation): operation is ProjectPatchOperation => Boolean(operation));
 }
 
+function legacyAnalysisNodesForMetadata(analysis: ContextAnalysis): PrecomputedSourceNode[] {
+  const reconciliationByRef = new Map(analysis.reconciliation.map((item) => [item.candidate_ref, item]));
+  return analysis.nodes.map((node) => {
+    const reconciliation = reconciliationByRef.get(node.candidate_ref);
+    return {
+      candidateRef: node.candidate_ref,
+      type: node.type,
+      text: node.text,
+      grounding: node.grounding,
+      confidence: node.confidence,
+      impact: node.impact,
+      whyItMatters: node.why_it_matters,
+      status: node.status,
+      questionClassification: reconciliation?.classification,
+      canonicalNodeId: reconciliation?.canonical_node_id,
+      canonicalQuestionId: reconciliation?.canonical_question_id,
+      reconciliationConfidence: reconciliation?.confidence,
+      reconciliationReason: reconciliation?.reason,
+      questionAliases: node.question_aliases,
+    };
+  });
+}
+
 function analysisOperations(analysis: ContextAnalysis): ProjectPatchOperation[] {
   const operations = analysis.operations.length > 0
     ? analysis.operations
@@ -481,6 +509,14 @@ function analysisOperations(analysis: ContextAnalysis): ProjectPatchOperation[] 
       ...operation,
     } as ProjectPatchOperation & { grounding?: z.infer<typeof operationGroundingSchema> };
     delete persistableOperation.grounding;
+    if (persistableOperation.op === 'OPEN_UNKNOWN') {
+      persistableOperation.text = persistableOperation.text
+        .replace(/^Has I\b/i, 'Have I')
+        .replace(/^Has we\b/i, 'Have we')
+        .replace(/^Does I\b/i, 'Do I')
+        .replace(/^Does we\b/i, 'Do we')
+        .replace(/^Is I\b/i, 'Am I');
+    }
     return {
       ...persistableOperation,
       operationRef: operation.operationRef ?? `op:${index}`,
@@ -500,6 +536,7 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     'Use ADD_CONTEXT for one explicit source-asserted KNOWN, EVIDENCE, CONSTRAINT, PREFERENCE, RISK, or ASSUMPTION proposition.',
     'Use OPEN_DECISION for one explicit unresolved user-controlled choice that is not already represented.',
     'Use RESOLVE_DECISION when the source clearly commits to an outcome for an existing OPEN DECISION. Keep the original decision question as the target identity and put only the chosen outcome in outcome.',
+    'A completed user commitment affecting an existing OPEN DECISION is primarily a RESOLVE_DECISION operation, not a new fact or preference.',
     'Use OPEN_UNKNOWN for one missing factual question that must be learned, observed, measured, or confirmed.',
     'Use RESOLVE_UNKNOWN when the source directly supplies the missing answer to an existing OPEN UNKNOWN or ASSUMPTION.',
     'Use ADD_ACTION for one explicitly intended or committed piece of project work.',
@@ -892,6 +929,9 @@ export async function processContextSource(
       reconciliationSummary: input.reconciliationSummary,
       relevance: analysis.relevance,
       operations,
+      ...(rawAnalysis.operations.length === 0
+        ? { derivedNodes: legacyAnalysisNodesForMetadata(analysis) }
+        : {}),
       relationships: analysisRelationshipsToPrecomputedRelationships(analysis),
       deferHistory: true,
       processingLog,
@@ -911,6 +951,7 @@ export async function processContextSource(
       model: options.model,
     });
     updated = relationshipCompletion.project;
+    retireExplicitlyDisprovedRisks(updated);
     const completedActionIds = resolveSatisfiedNextActions(updated, new Date().toISOString());
     updated = appendContextAddedHistory(project, updated, {
       sourceId: input.sourceId ?? 'new-source',

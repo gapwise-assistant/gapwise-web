@@ -207,6 +207,7 @@ export async function POST(request: Request) {
     input.derivedNodes = DEMO_PDF_EXTRACTION.nodes;
   }
 
+  const priorHistoryEventIds = new Set((target.project.historyEvents ?? []).map((event) => event.id));
   const result = await processContextSource(target.project, input, profile, {
     forceReprocess,
     captureProcessingLog: isLocalhostRequest(request),
@@ -222,6 +223,14 @@ export async function POST(request: Request) {
     result.project = refreshed.project;
   }
   if (!result.skipped) await saveTarget(source.userId, result.project, target.isGeneral);
+
+  const sourceHistoryEventId = !result.skipped && !result.error
+    ? result.project.historyEvents?.find((event) =>
+      event.type === 'context_added'
+      && event.sourceId === source.sourceId
+      && !priorHistoryEventIds.has(event.id)
+    )?.id
+    : undefined;
 
   if (result.error) {
     return NextResponse.json({
@@ -321,7 +330,7 @@ export async function POST(request: Request) {
         trigger: {
           type: 'context_processed',
           sourceId: source.sourceId,
-          historyEventId: result.project.historyEvents?.at(-1)?.id,
+          ...(sourceHistoryEventId ? { historyEventId: sourceHistoryEventId } : {}),
         },
         label: 'Context processed',
         summary: `Processed ${source.filename}.`,

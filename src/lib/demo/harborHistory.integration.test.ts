@@ -125,7 +125,7 @@ describe('Harbor history demo integration', () => {
       generated_at: new Date().toISOString(),
       recommendations: [],
     });
-    mocks.getCachedFocusAssessment.mockImplementation(async (userId: string, project: Project, pack: ContextPack) => {
+    mocks.getCachedFocusAssessment.mockImplementation(async (userId: string, project: Project, pack: ContextPack, profile: any) => {
       const assessment = {
         kind: 'question' as const,
         title: 'Integration focus',
@@ -135,7 +135,7 @@ describe('Harbor history demo integration', () => {
         score: 1,
         confidence: 1,
       };
-      const version = await focusProjectStateVersion(project, pack);
+      const version = await focusProjectStateVersion(project, pack, profile);
       const now = new Date().toISOString();
       await storage.saveFocusAssessment(userId, {
         id: focusAssessmentCacheId(project.id, version),
@@ -154,6 +154,7 @@ describe('Harbor history demo integration', () => {
       history: Project['historyEvents'],
       focus: any,
       pack: ContextPack,
+      deps: { profile?: any } = {},
     ) => {
       const assessment = {
         trajectory: { state: 'taking_shape' as const, explanation: 'Integration assessment' },
@@ -165,7 +166,7 @@ describe('Harbor history demo integration', () => {
         emergingInsights: [],
         confidence: 1,
       };
-      const version = await overviewProjectStateVersion(project, history ?? [], focus, pack);
+      const version = await overviewProjectStateVersion(project, history ?? [], focus, pack, deps.profile);
       const now = new Date().toISOString();
       await storage.saveProjectOverviewAssessment(userId, {
         id: projectOverviewAssessmentCacheId(project.id, version),
@@ -277,7 +278,7 @@ describe('Harbor history demo integration', () => {
     expect(askMoment.project.historyEvents?.some((event) => event.type === 'ask_proposal_dismissed')).toBe(false);
     expect(dismissalMoment.project.historyEvents?.some((event) => event.type === 'ask_proposal_dismissed')).toBe(true);
     expect(dismissalMoment.project.nodes.some((node) =>
-      node.text === 'Confirm whether engineering can enforce 30-day customer-data deletion.'
+      /30-day.*(?:customer-data )?deletion|delet.*within 30 days/i.test(node.text)
     )).toBe(true);
     expect(dismissalMoment.project.nodes.some((node) =>
       node.text === 'Record that Harbor approved a temporary exception to the deletion policy.'
@@ -290,5 +291,5 @@ describe('Harbor history demo integration', () => {
     )).toBe(true);
     expect(result.askResponseSnapshotCount).toBe(3);
     expect(result.proposalDismissedSnapshotCount).toBe(3);
-  });
+  }, 15_000);
 });

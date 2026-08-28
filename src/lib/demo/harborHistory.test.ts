@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/clarity';
 import type { AskContextProposal } from '@/types/ask';
+import noChangeTraceFixture from '@/lib/demo/fixtures/firestore/harbor-launch-readiness-no-change.json';
 
 const mocks = vi.hoisted(() => ({
   storage: null as any,
@@ -21,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   getProjectOverviewAssessmentWithMetadata: vi.fn(),
   buildContextPackForUser: vi.fn(),
   generateDailyBrief: vi.fn(),
+  noOpFinalReadiness: false,
+  omitLaunchRehearsalNode: false,
 }));
 
 vi.mock('@/lib/storage', () => ({ getStorageProvider: () => mocks.storage }));
@@ -85,6 +88,8 @@ describe('Harbor history demo journey', () => {
     process.env.CLOUD_STORAGE_BUCKET = 'test-bucket';
     mocks.snapshots = [];
     mocks.askCalls = 0;
+    mocks.noOpFinalReadiness = false;
+    mocks.omitLaunchRehearsalNode = false;
     mocks.uploadContextSourcePdf.mockReset();
     mocks.processContextSource.mockReset();
     mocks.refreshProjectGapRuntime.mockReset();
@@ -106,6 +111,8 @@ describe('Harbor history demo journey', () => {
     mocks.generationSteps = [];
     mocks.storage = {
       getMemories: vi.fn(async () => []),
+      getUserMemoryProfile: vi.fn(async () => null),
+      replaceMemories: vi.fn(async () => undefined),
       getProject: vi.fn(async () => clone(project)),
       listProjects: vi.fn(async () => project ? [clone(project)] : []),
       saveProject: vi.fn(async (_userId: string, next: Project) => { project = clone(next); }),
@@ -179,10 +186,12 @@ describe('Harbor history demo journey', () => {
       if (slug.includes('procurement update')) {
         next.nodes.push(node(next, 'pricing', 'DECISION', 'Approve the Harbor pilot price.'));
       }
-      if (slug.includes('launch readiness')) {
+      if (slug.includes('launch readiness') && !mocks.noOpFinalReadiness) {
         next.nodes.push(node(next, 'rehearsal', 'UNKNOWN', 'Has the production access rehearsal been completed successfully?'));
       }
-      next.historyEvents = [...(next.historyEvents ?? []), historyEvent(next, `event:${sourceId}`, 'context_added', sourceId)];
+      if (!mocks.noOpFinalReadiness || !slug.includes('launch readiness')) {
+        next.historyEvents = [...(next.historyEvents ?? []), historyEvent(next, `event:${sourceId}`, 'context_added', sourceId)];
+      }
       return { project: next, skipped: false };
     });
 
@@ -211,11 +220,13 @@ describe('Harbor history demo journey', () => {
         derived_node_ids: [nodeId],
         processing_status: 'completed',
       });
-      next.nodes.push({
-        ...node(next, nodeId, selected.type === 'DECISION' ? 'DECISION' : 'UNKNOWN', selected.text),
-        type: selected.type,
-        source_refs: [sourceId],
-      } as any);
+      if (!(mocks.omitLaunchRehearsalNode && /production access rehearsal/i.test(selected.text))) {
+        next.nodes.push({
+          ...node(next, nodeId, selected.type === 'DECISION' ? 'DECISION' : 'UNKNOWN', selected.text),
+          type: selected.type,
+          source_refs: [sourceId],
+        } as any);
+      }
       next.historyEvents = [...(next.historyEvents ?? []), historyEvent(next, `event:${proposalId}`, 'context_added', sourceId)];
       project = next;
       return next;
@@ -387,5 +398,30 @@ describe('Harbor history demo journey', () => {
     expect(first).not.toBe(second);
     expect(first.length).toBeLessThanOrEqual(240);
     expect(second.length).toBeLessThanOrEqual(240);
+  });
+
+  it('treats a redundant final-readiness PDF as successful no_change processing', async () => {
+    mocks.noOpFinalReadiness = true;
+
+    expect(noChangeTraceFixture.source.filename).toBe('Harbor Launch Readiness Report.pdf');
+    const result = await createHarborHistoryDemoForUser({ userId: 'demo-user', fresh: true });
+    const source = result.project.sources.find((candidate) => candidate.filename === noChangeTraceFixture.source.filename);
+
+    expect(source?.processing_status).toBe('completed');
+    expect(source?.derived_node_ids).toEqual(noChangeTraceFixture.observed.derivedNodeIds);
+    expect(result.project.historyEvents?.some((event) => event.sourceId === source?.id)).toBe(false);
+    expect(mocks.generationSteps).toContainEqual(expect.objectContaining({
+      filename: noChangeTraceFixture.source.filename,
+      processingOutcome: 'no_change',
+    }));
+    expect(mocks.generationRuns[0]).toMatchObject({ status: 'completed' });
+  });
+
+  it('still fails clearly when a required journey anchor is genuinely missing', async () => {
+    mocks.omitLaunchRehearsalNode = true;
+
+    await expect(createHarborHistoryDemoForUser({ userId: 'demo-user', fresh: true }))
+      .rejects.toThrow(/launchRehearsal|launch rehearsal|candidate/i);
+    expect(mocks.generationRuns[0]).toMatchObject({ status: 'failed' });
   });
 });

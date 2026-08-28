@@ -23,13 +23,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
   }
   if (isDemoMode()) {
-    updateIntegrationState(userId, createDemoConnectedState('calendar'));
-    return NextResponse.json({ integrations: getIntegrationStates(userId), demoMode: true });
+    await updateIntegrationState(userId, createDemoConnectedState('calendar'));
+    return NextResponse.json({ integrations: await getIntegrationStates(userId), demoMode: true });
   }
   if (await hasGoogleOAuthTokens(userId, 'calendar')) {
-    updateIntegrationState(userId, createDemoConnectedState('calendar'));
+    await updateIntegrationState(userId, createDemoConnectedState('calendar'));
   }
-  return NextResponse.json({ integrations: getIntegrationStates(userId) });
+  return NextResponse.json({ integrations: await getIntegrationStates(userId) });
 }
 
 export async function POST(request: Request) {
@@ -48,22 +48,22 @@ export async function POST(request: Request) {
     if (isDemoMode() && body.action === 'connect') {
       if (!body.name) throw new Error('Missing integration name.');
       const integrations = body.name === 'calendar'
-        ? updateIntegrationState(userId, createDemoConnectedState('calendar'))
-        : getIntegrationStates(userId);
+        ? await updateIntegrationState(userId, createDemoConnectedState('calendar'))
+        : await getIntegrationStates(userId);
       return NextResponse.json({ integrations, demoMode: true });
     }
 
     if (body.action === 'sync') {
       const signals = await collectWorkspaceSignalsForUser({
         userId,
-        integrations: getIntegrationStates(userId),
+        integrations: await getIntegrationStates(userId),
         query: body.query ?? '',
       });
-      return NextResponse.json({ signals, integrations: getIntegrationStates(userId) });
+      return NextResponse.json({ signals, integrations: await getIntegrationStates(userId) });
     }
 
     if (body.action === 'update' && body.integration) {
-      return NextResponse.json({ integrations: updateIntegrationState(userId, body.integration) });
+      return NextResponse.json({ integrations: await updateIntegrationState(userId, body.integration) });
     }
 
     if (!body.name) throw new Error('Missing integration name.');
@@ -72,10 +72,10 @@ export async function POST(request: Request) {
       if (body.name === 'calendar' && !isDemoMode()) {
         await deleteGoogleOAuthTokens(userId, 'calendar');
       }
-      return NextResponse.json({ integrations: disconnectIntegrationForUser(userId, body.name) });
+      return NextResponse.json({ integrations: await disconnectIntegrationForUser(userId, body.name) });
     }
 
-    const integrations = connectIntegration(userId, body.name, {
+    const integrations = await connectIntegration(userId, body.name, {
       selectedLabels: body.selectedLabels,
       selectedDriveIds: body.selectedDriveIds,
     });

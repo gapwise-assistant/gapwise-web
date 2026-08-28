@@ -3,12 +3,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { processContextSource } from '@/lib/context/contextAnalysis';
+import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
+import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { listProjects, saveProject } from '@/lib/storage';
 import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
 import { POST } from './route';
 
 vi.mock('@/lib/context/contextAnalysis', () => ({
   processContextSource: vi.fn(),
+}));
+vi.mock('@/lib/agents/gapRuntime', () => ({
+  refreshProjectGapRuntime: vi.fn(),
+}));
+vi.mock('@/lib/history/projectSnapshots', () => ({
+  createProjectSnapshot: vi.fn(),
 }));
 vi.mock('@/lib/storage', () => ({
   getStorageProvider: vi.fn(() => ({
@@ -35,6 +43,10 @@ describe('POST /api/context/ingest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.GAPSWISE_DEMO_MODE = 'false';
+    vi.mocked(refreshProjectGapRuntime).mockImplementation(async ({ project }: { project: ReturnType<typeof createProjectFromInput> }) => ({
+      project,
+      runtime: null,
+    }));
   });
 
   it('loads the requested user project, persists AI graph updates, and returns new questions', async () => {
@@ -135,5 +147,49 @@ describe('POST /api/context/ingest', () => {
     expect(response.status).toBe(403);
     expect(processContextSource).not.toHaveBeenCalled();
     expect(saveProject).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse an older history event when the source produces no new context event', async () => {
+    const project = createProjectFromInput({ name: 'Calendar project', goal: 'Keep calendar context separate.' });
+    project.historyEvents = [{
+      id: 'older-event',
+      projectId: project.id,
+      createdAt: '2026-08-20T12:00:00.000Z',
+      type: 'context_added',
+      title: 'Older source added',
+      summary: 'An older source changed the project.',
+      sourceId: 'older-source',
+    }];
+    const updated = {
+      ...project,
+      sources: [{
+        id: 'calendar-source',
+        filename: 'calendar-event.txt',
+        type: 'text' as const,
+        content: 'A calendar event unrelated to this workspace.',
+        extracted_at: '2026-08-28T12:00:00.000Z',
+        derived_node_ids: [],
+        processing_status: 'completed' as const,
+      }],
+      historyEvents: project.historyEvents,
+    };
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(processContextSource).mockResolvedValue({ project: updated, skipped: false, modelUsed: 'gemini-test' });
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user', projectId: project.id, sourceId: 'calendar-source', filename: 'calendar-event.txt',
+      type: 'text', content: 'A calendar event unrelated to this workspace.', origin: 'connector',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createProjectSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      trigger: {
+        type: 'context_processed',
+        sourceId: 'calendar-source',
+      },
+    }));
+    expect(createProjectSnapshot).not.toHaveBeenCalledWith(expect.objectContaining({
+      trigger: expect.objectContaining({ historyEventId: 'older-event' }),
+    }));
   });
 });

@@ -57,7 +57,7 @@ describe('POST /api/today/question-plans', () => {
     await expect(response.json()).resolves.toMatchObject({
       generatedBy: 'gapswise-agent',
       suggestions: [{ questionId: 'question_budget', suggestedAnswer: 'The budget is not recorded yet.', whyItMatters: 'It controls the hotel decision.' }],
-      presentations: [{ questionId: 'question_budget', title: 'Decide what to spend on the trip', summary: 'The budget determines which hotels are affordable.' }],
+      presentations: [{ questionId: 'question_budget', title: 'What is the trip budget?', summary: 'The budget determines which hotels are affordable.' }],
     });
   });
 

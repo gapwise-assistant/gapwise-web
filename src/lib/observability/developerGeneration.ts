@@ -26,6 +26,7 @@ export interface DeveloperGenerationStepMetadata {
   derivedNodeIds?: string[];
   journeyAnchor?: string;
   candidateNodeIds?: string[];
+  processingOutcome?: 'changed' | 'no_change' | 'failed';
   summary?: string;
 }
 

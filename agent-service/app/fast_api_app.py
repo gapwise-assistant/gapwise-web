@@ -278,7 +278,7 @@ async def route_ask(
     request: AskRouteRequest,
     http_request: Request,
     x_gapswise_internal_secret: str | None = Header(default=None),
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Classify an Ask request before the Partner Agent is allowed to run."""
     _check_internal_secret(x_gapswise_internal_secret)
     if is_demo_mode():
@@ -301,6 +301,11 @@ async def route_ask(
         "fact lookups, summaries, ordinary conversation, or generic explanations of a prior answer. "
         "If a tradeoff requires tracing relationships among multiple project nodes, prefer graph_reasoning "
         "over internal_context. "
+        "For questions asking what to focus on, prioritize, do first, address next, or what matters most, "
+        "choose graph_reasoning with reasoningMode focus. For consequences, downstream effects, impact, "
+        "or what changes if a condition changes, choose graph_reasoning with reasoningMode impact. "
+        "For choosing among options or project tradeoffs that need graph relationships, use reasoningMode decision. "
+        "Use reasoningMode reasoning for other graph questions, and omit reasoningMode for non-graph routes. "
         "Choose web_research only when current or external information must be verified outside Gapswise."
     )
     try:

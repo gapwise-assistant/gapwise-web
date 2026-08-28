@@ -43,6 +43,7 @@ import {
   NORTHSTAR_PILOT_RESOLVED_SCOPE,
   ensureNorthstarReplayDecisions,
   findNorthstarTechnicalScopeDecision,
+  ensureNorthstarSecurityAcceptanceGap,
   northstarPilotProjectInput,
 } from '@/lib/demo/northstarPilot';
 import { getStorageProvider } from '@/lib/storage';
@@ -583,6 +584,9 @@ export async function loadNorthstarPilotDemoForUser(userId: string): Promise<Nor
     project = ingestedProject;
     if (index === 0) {
       project = ensureNorthstarReplayDecisions(project, ingested.sourceId);
+    }
+    if (index === 3) {
+      project = ensureNorthstarSecurityAcceptanceGap(project, ingested.sourceId);
     }
 
     const refreshed = await refreshProjectGapRuntime({

@@ -1,5 +1,6 @@
 import type { Project } from '@/types/clarity';
 import { anchorProjectDecision } from '@/lib/decisions/anchoring';
+import { applyProjectPatch } from '@/lib/context/canonicalChanges';
 
 export const NORTHSTAR_PILOT_DEMO_NAME = 'Northstar pilot';
 export const NORTHSTAR_PILOT_CREATED_AT = '2026-08-24T09:00:00.000Z';
@@ -8,6 +9,7 @@ export const NORTHSTAR_PILOT_CHAT_ID = 'northstar_pilot_discovery_chat';
 export const NORTHSTAR_PILOT_RESOLVED_SCOPE = 'Use scheduled CSV imports and named user accounts for the eight-week pilot; defer the full API integration and SSO until after the pilot succeeds.';
 export const NORTHSTAR_PILOT_TECHNICAL_DECISION = 'Choose the technical scope for the Northstar Logistics pilot';
 export const NORTHSTAR_PILOT_PRICING_DECISION = 'Settle the pricing for the Northstar Logistics pilot';
+export const NORTHSTAR_PILOT_SECURITY_QUESTION = 'Will Northstar accept the 14-month-old penetration-test summary under its 12-month security policy?';
 
 export interface NorthstarPilotConversation {
   user: string;
@@ -178,4 +180,17 @@ export function findNorthstarSecurityAcceptanceGap(project: Project): Project['n
   return project.nodes
     .filter((node) => (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION') && node.status === 'OPEN')
     .find((node) => /penetration|security|report|accept/i.test(node.text));
+}
+
+export function ensureNorthstarSecurityAcceptanceGap(project: Project, sourceId: string): Project {
+  if (findNorthstarSecurityAcceptanceGap(project)) return project;
+  return applyProjectPatch(project, {
+    operations: [{
+      op: 'OPEN_UNKNOWN',
+      operationRef: 'northstar-security-acceptance',
+      text: NORTHSTAR_PILOT_SECURITY_QUESTION,
+      confidence: 0.95,
+      impact: 0.98,
+    }],
+  }, sourceId).project;
 }

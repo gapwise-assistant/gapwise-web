@@ -8,6 +8,7 @@ import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AppScope } from '@/types/scope';
 import { GoogleWorkspaceSignals } from '@/types/google';
+import { importWorkspaceSignalsIntoProject } from '@/lib/google/importWorkspaceSignals';
 
 export interface SettingsContentProps {
   userId: string;
@@ -17,10 +18,10 @@ export interface SettingsContentProps {
   generalContext: Project;
   profile: UserMemoryProfile;
   memories: DurableMemory[];
-  onUpdateProject: (updated: Project) => void;
-  onUpdateGeneralContext: (updated: Project) => void;
-  onUpdateProfile: (updated: UserMemoryProfile) => void;
-  onUpdateMemories: (updated: DurableMemory[]) => void;
+  onUpdateProject: (updated: Project) => boolean | Promise<boolean>;
+  onUpdateGeneralContext: (updated: Project) => boolean | Promise<boolean>;
+  onUpdateProfile: (updated: UserMemoryProfile) => boolean | Promise<boolean>;
+  onUpdateMemories: (updated: DurableMemory[]) => boolean | Promise<boolean>;
   onSignOut: () => void;
 }
 
@@ -40,15 +41,13 @@ export const SettingsContent: React.FC<SettingsContentProps> = ({
 }) => {
   const connectionProject = scope.type === 'project' ? project : generalContext;
 
-  const importWorkspaceSignals = (signals: GoogleWorkspaceSignals) => {
-    const updated: Project = JSON.parse(JSON.stringify(connectionProject));
-    const existingIds = new Set(updated.sources.map((source) => source.id));
-    signals.derivedSources.forEach((source) => {
-      if (!existingIds.has(source.id)) updated.sources.push(source);
-    });
-    updated.updated_at = new Date().toISOString();
-    if (scope.type === 'project') onUpdateProject(updated);
-    else onUpdateGeneralContext(updated);
+  const importWorkspaceSignals = async (signals: GoogleWorkspaceSignals): Promise<{ imported: number; skipped: number }> => {
+    const result = await importWorkspaceSignalsIntoProject({ userId, project: connectionProject, signals });
+    const updated = scope.type === 'project'
+      ? await onUpdateProject(result.project)
+      : await onUpdateGeneralContext(result.project);
+    if (updated === false) throw new Error('Connected context was analyzed but the refreshed project could not be displayed.');
+    return { imported: result.imported, skipped: result.skipped };
   };
 
   return (

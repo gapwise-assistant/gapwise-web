@@ -1,6 +1,7 @@
 import { FieldValue, Firestore } from 'firebase-admin/firestore';
 import type { ContextProcessingLog, Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
+import { GoogleIntegrationState } from '@/types/google';
 import { AppScope, EVERYTHING_SCOPE } from '@/types/scope';
 import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask';
 import { createGoldenDemoProject } from '@/lib/demo/seed';
@@ -34,7 +35,7 @@ import {
 } from '@/types/projectSnapshot';
 import { compactProcessingLogForFirestore } from '@/lib/context/processingLog';
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -590,6 +591,33 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
   }
 
+  async getGoogleIntegrations(userId: string): Promise<GoogleIntegrationState[]> {
+    const records = await this.list<GoogleIntegrationState & { id: string; userId: string }>(
+      userId,
+      'googleIntegrations',
+    );
+    return records.map(({ id: _id, userId: _userId, ...state }) => state);
+  }
+
+  async replaceGoogleIntegrations(userId: string, integrations: GoogleIntegrationState[]): Promise<void> {
+    try {
+      const collection = this.collection(userId, 'googleIntegrations');
+      const existing = await collection.get();
+      const batch = this.db.batch();
+      existing.docs.forEach((doc) => batch.delete(doc.ref));
+      integrations.forEach((integration) => {
+        batch.set(collection.doc(integration.name), firestoreSafeRecord(this.withServerUpdatedAt({
+          ...integration,
+          id: integration.name,
+          userId,
+        })));
+      });
+      await batch.commit();
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
   async logEvent(userId: string, event: FirestoreEvent): Promise<void> {
     await this.save(userId, 'events', event);
   }
@@ -613,6 +641,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'projectSnapshots',
       'developerGenerationRuns',
       'developerGenerationSteps',
+      'googleIntegrations',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();
