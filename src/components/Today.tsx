@@ -596,7 +596,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
             </div>
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
-              <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">What deserves attention now</h1>
+              <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">Which gap deserves attention now</h1>
             </div>
           </div>
 

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, CircleAlert, History, Sparkles } from 'lucide-react';
 import type { Project } from '@/types/clarity';
 import { authFetch } from '@/lib/auth/client';
-import type { ProjectOverviewAssessment, ProjectTrajectory } from '@/lib/overview/projectOverviewAssessment';
+import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 
 interface ProjectOverviewProps {
   userId: string;
@@ -14,16 +14,6 @@ interface ProjectOverviewProps {
   onViewHistory: () => void;
   onViewToday?: () => void;
 }
-
-const trajectoryLabels: Record<ProjectTrajectory, string> = {
-  exploring: 'Exploring',
-  taking_shape: 'Taking shape',
-  moving_forward: 'Moving forward',
-  at_risk: 'At risk',
-  blocked: 'Blocked',
-  changing_direction: 'Changing direction',
-  ready_for_next_stage: 'Ready for next stage',
-};
 
 function severityClasses(severity: 'high' | 'medium' | 'watch'): string {
   if (severity === 'high') return 'border-rose-800/80 bg-rose-950/20 text-rose-200';
@@ -183,8 +173,7 @@ export function ProjectOverview({
   if (hasCurrentError || !assessment) {
     return (
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace assessment</p>
-        <h2 className="mt-2 text-lg font-extrabold text-slate-100">Overview is being updated.</h2>
+        <h2 className="text-lg font-extrabold text-slate-100">Overview is being updated.</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">
           The project overview is temporarily unavailable.
         </p>
@@ -198,15 +187,7 @@ export function ProjectOverview({
   return (
     <div className="space-y-5">
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace assessment</p>
-            <h2 className="mt-2 text-xl font-extrabold text-slate-100">Where things stand</h2>
-          </div>
-          <span className="inline-flex w-fit rounded-full border border-cyan-800/80 bg-cyan-950/40 px-3 py-1.5 text-xs font-extrabold text-cyan-200">
-            {trajectoryLabels[assessment.trajectory.state]}
-          </span>
-        </div>
+        <h2 className="text-xl font-extrabold text-slate-100">Where things stand</h2>
         <p className="mt-4 text-sm font-semibold leading-relaxed text-slate-200">{assessment.summary}</p>
       </section>
 
