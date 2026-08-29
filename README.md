@@ -276,7 +276,7 @@ The checked-in pipeline currently targets the `gapwise-505217` deployment. Deplo
 gcloud builds submit . \
   --project=gapwise-505217 \
   --config=cloudbuild.yaml \
-  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_GOOGLE_OAUTH_CLIENT_ID='...'
+  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY='...',_GOOGLE_OAUTH_CLIENT_ID='...'
 ```
 
 Public Firebase configuration is supplied through build substitutions. Internal API and OAuth secrets are attached to Cloud Run from Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files. To deploy into another project, first update the project-specific bucket, service accounts, URLs, and Firebase configuration in `cloudbuild.yaml`.

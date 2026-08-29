@@ -21,12 +21,21 @@ import {
   DeveloperGenerationRun,
   DeveloperGenerationStep,
   PublicDemoAskConsumption,
+  PublicDemoAskOperation,
+  PublicDemoAskReservation,
   PublicDemoDailyUsage,
   PublicDemoQuickDemoClaim,
   PublicDemoUsage,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
+import {
+  compactPublicDemoAskOperations,
+  createPublicDemoAskReservationId,
+  hasValidPublicDemoAskLease,
+  publicDemoAskOperations,
+  PUBLIC_DEMO_ASK_RESERVATION_LEASE_MS,
+} from '@/lib/publicDemo/askQuota';
 import {
   PROJECT_SNAPSHOT_MAX_BYTES,
   projectSnapshotToSummary,
@@ -57,6 +66,7 @@ function normalizedPublicDemoUsage(
   const createdAt = typeof value?.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
     ? value.createdAt
     : now;
+  const operations = publicDemoAskOperations(value, createdAt);
   return {
     userId,
     ...(value?.quickDemoProjectId ? { quickDemoProjectId: value.quickDemoProjectId } : {}),
@@ -68,6 +78,7 @@ function normalizedPublicDemoUsage(
     askOperationIds: Array.isArray(value?.askOperationIds)
       ? value.askOperationIds.filter((item): item is string => typeof item === 'string')
       : [],
+    ...(operations.length ? { askOperations: operations } : {}),
     createdAt,
     updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
       ? value.updatedAt
@@ -614,6 +625,229 @@ export class FirestoreStorageProvider implements StorageProvider {
           quickDemoStatus: params.status,
           updatedAt: new Date().toISOString(),
         })), { merge: false });
+      });
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async reservePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+    leaseMs?: number;
+  }): Promise<PublicDemoAskReservation> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    const leaseMs = params.leaseMs ?? PUBLIC_DEMO_ASK_RESERVATION_LEASE_MS;
+    if (!Number.isInteger(leaseMs) || leaseMs <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    try {
+      const userUsageRef = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      const now = params.now ?? new Date().toISOString();
+      const date = now.slice(0, 10);
+      const dailyUsageRef = this.db.collection('publicDemoDailyUsage').doc(date);
+      let result: PublicDemoAskReservation | undefined;
+      await this.db.runTransaction(async (transaction) => {
+        const [userSnapshot, dailySnapshot] = await transaction.getAll(userUsageRef, dailyUsageRef);
+        const existing = normalizedPublicDemoUsage(
+          userSnapshot.exists ? this.fromFirestore<PublicDemoUsage>(userSnapshot.data()!) : undefined,
+          params.userId,
+          now,
+        );
+        const daily = normalizedPublicDemoDailyUsage(
+          dailySnapshot.exists ? this.fromFirestore<PublicDemoDailyUsage>(dailySnapshot.data()!) : undefined,
+          date,
+          now,
+        );
+        const operations = compactPublicDemoAskOperations(existing.askOperations ?? [], now);
+        const current = operations.find((operation) => operation.operationId === params.operationId);
+        if (current?.status === 'completed') {
+          result = {
+            accepted: true,
+            pending: false,
+            alreadyCompleted: true,
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+        if (current && hasValidPublicDemoAskLease(current, now)) {
+          result = {
+            accepted: false,
+            pending: true,
+            alreadyCompleted: false,
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+        const activePendingReservations = operations.filter((operation) => hasValidPublicDemoAskLease(operation, now)).length;
+        if (existing.askMessagesUsed + activePendingReservations >= PUBLIC_DEMO_MAX_ASK_MESSAGES) {
+          result = {
+            accepted: false,
+            pending: false,
+            alreadyCompleted: false,
+            blockedReason: 'user_limit',
+            messagesRemaining: 0,
+            usage: existing,
+          };
+          return;
+        }
+        if (daily.askMessagesUsed >= params.dailyLimit) {
+          result = {
+            accepted: false,
+            pending: false,
+            alreadyCompleted: false,
+            blockedReason: 'daily_limit',
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+
+        const reservationId = createPublicDemoAskReservationId();
+        const operation: PublicDemoAskOperation = {
+          operationId: params.operationId,
+          reservationId,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now,
+          leaseExpiresAt: new Date(Date.parse(now) + leaseMs).toISOString(),
+        };
+        const nextOperations = compactPublicDemoAskOperations(
+          [...operations.filter((candidate) => candidate.operationId !== params.operationId), operation],
+          now,
+        );
+        const usage: PublicDemoUsage = {
+          ...existing,
+          askOperations: nextOperations,
+          updatedAt: now,
+        };
+        transaction.set(userUsageRef, firestoreSafeRecord(this.withServerUpdatedAt(usage)), { merge: false });
+        transaction.set(dailyUsageRef, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...daily,
+          date,
+          askMessagesUsed: daily.askMessagesUsed + 1,
+          updatedAt: now,
+        })), { merge: false });
+        result = {
+          accepted: true,
+          pending: false,
+          alreadyCompleted: false,
+          reservationId,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+          usage,
+        };
+      });
+      if (!result) throw new StorageError('The public demo usage check failed.', 'UNAVAILABLE');
+      return result;
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw this.toStorageError(error);
+    }
+  }
+
+  async completePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId?: string;
+    assistantMessageId: string;
+    now?: string;
+  }): Promise<PublicDemoAskReservation> {
+    try {
+      const userUsageRef = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      const now = params.now ?? new Date().toISOString();
+      let result: PublicDemoAskReservation | undefined;
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(userUsageRef);
+        const existing = normalizedPublicDemoUsage(
+          snapshot.exists ? this.fromFirestore<PublicDemoUsage>(snapshot.data()!) : undefined,
+          params.userId,
+          now,
+        );
+        const operations = existing.askOperations ?? [];
+        const current = operations.find((operation) => operation.operationId === params.operationId);
+        if (!current) throw new StorageError('The public demo Ask reservation was not found.', 'VALIDATION_ERROR');
+        if (current.status === 'completed') {
+          result = {
+            accepted: true,
+            pending: false,
+            alreadyCompleted: true,
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+        if (params.reservationId && current.reservationId !== params.reservationId) {
+          throw new StorageError('The public demo Ask reservation is no longer active.', 'VALIDATION_ERROR');
+        }
+        if (existing.askMessagesUsed >= PUBLIC_DEMO_MAX_ASK_MESSAGES) {
+          throw new StorageError('The public demo Ask allowance is no longer available.', 'VALIDATION_ERROR');
+        }
+        const completed: PublicDemoAskOperation = {
+          ...current,
+          status: 'completed',
+          updatedAt: now,
+          completedAt: now,
+          assistantMessageId: params.assistantMessageId,
+          leaseExpiresAt: undefined,
+        };
+        const nextOperations = operations.map((operation) => (
+          operation.operationId === params.operationId ? completed : operation
+        ));
+        const nextAskOperationIds = Array.from(new Set([
+          ...existing.askOperationIds,
+          params.operationId,
+        ])).slice(-PUBLIC_DEMO_MAX_ASK_MESSAGES);
+        const usage: PublicDemoUsage = {
+          ...existing,
+          askMessagesUsed: existing.askMessagesUsed + 1,
+          askOperationIds: nextAskOperationIds,
+          askOperations: nextOperations,
+          updatedAt: now,
+        };
+        transaction.set(userUsageRef, firestoreSafeRecord(this.withServerUpdatedAt(usage)), { merge: false });
+        result = {
+          accepted: true,
+          pending: false,
+          alreadyCompleted: false,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - usage.askMessagesUsed),
+          usage,
+        };
+      });
+      if (!result) throw new StorageError('The public demo Ask completion failed.', 'UNAVAILABLE');
+      return result;
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw this.toStorageError(error);
+    }
+  }
+
+  async releasePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId: string;
+    now?: string;
+  }): Promise<void> {
+    try {
+      const userUsageRef = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      const now = params.now ?? new Date().toISOString();
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(userUsageRef);
+        if (!snapshot.exists) return;
+        const existing = normalizedPublicDemoUsage(this.fromFirestore<PublicDemoUsage>(snapshot.data()!), params.userId, now);
+        const current = existing.askOperations?.find((operation) => operation.operationId === params.operationId);
+        if (!current || current.status !== 'pending' || current.reservationId !== params.reservationId) return;
+        const usage: PublicDemoUsage = {
+          ...existing,
+          askOperations: existing.askOperations?.filter((operation) => operation.operationId !== params.operationId),
+          updatedAt: now,
+        };
+        transaction.set(userUsageRef, firestoreSafeRecord(this.withServerUpdatedAt(usage)), { merge: false });
       });
     } catch (error) {
       throw this.toStorageError(error);

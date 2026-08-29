@@ -60,6 +60,16 @@ def test_flash_lite_generation_config_omits_unsupported_thinking_field() -> None
     assert config.thinking_config is None
 
 
+def test_public_demo_model_config_caps_output_independently_of_partner_override(monkeypatch) -> None:
+    from app.model_policy import get_public_demo_model_config
+
+    monkeypatch.setenv("AGENT_PARTNER_MAX_OUTPUT_TOKENS", "9999")
+    config = get_public_demo_model_config()
+
+    assert config.max_output_tokens == 512
+    assert config.thinking_level == "low"
+
+
 def test_live_policy_rejects_legacy_models(monkeypatch) -> None:
     monkeypatch.setenv("GAPSWISE_DEMO_MODE", "false")
     try:

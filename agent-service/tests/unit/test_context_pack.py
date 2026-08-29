@@ -59,6 +59,14 @@ def test_web_research_and_routing_apps_use_registered_app_names() -> None:
     assert agent.google_search in agent.web_research_agent.tools
 
 
+def test_public_demo_uses_fixed_non_mutating_512_token_profile() -> None:
+    assert agent.public_demo_app.name == "public_demo"
+    assert agent.public_demo_agent.generate_content_config.max_output_tokens == 512
+    assert agent.public_demo_agent.output_schema is agent.AskResponse
+    assert agent.public_demo_agent.tools == []
+    assert "never use web search, routing, tools, project mutation" in agent.public_demo_agent.instruction.lower()
+
+
 def test_routing_policy_uses_current_message_when_saved_context_is_sparse() -> None:
     instruction = agent.routing_agent.instruction.lower()
 

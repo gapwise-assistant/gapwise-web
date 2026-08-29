@@ -21,12 +21,21 @@ import {
   DeveloperGenerationRun,
   DeveloperGenerationStep,
   PublicDemoAskConsumption,
+  PublicDemoAskOperation,
+  PublicDemoAskReservation,
   PublicDemoDailyUsage,
   PublicDemoQuickDemoClaim,
   PublicDemoUsage,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
+import {
+  compactPublicDemoAskOperations,
+  createPublicDemoAskReservationId,
+  hasValidPublicDemoAskLease,
+  publicDemoAskOperations,
+  PUBLIC_DEMO_ASK_RESERVATION_LEASE_MS,
+} from '@/lib/publicDemo/askQuota';
 import {
   PROJECT_SNAPSHOT_MAX_BYTES,
   projectSnapshotToSummary,
@@ -82,6 +91,7 @@ function normalizedPublicDemoUsage(
   const createdAt = typeof value?.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
     ? value.createdAt
     : now;
+  const operations = publicDemoAskOperations(value, createdAt);
   return {
     userId,
     ...(value?.quickDemoProjectId ? { quickDemoProjectId: value.quickDemoProjectId } : {}),
@@ -93,6 +103,7 @@ function normalizedPublicDemoUsage(
     askOperationIds: Array.isArray(value?.askOperationIds)
       ? value.askOperationIds.filter((item): item is string => typeof item === 'string')
       : [],
+    ...(operations.length ? { askOperations: operations } : {}),
     createdAt,
     updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
       ? value.updatedAt
@@ -550,6 +561,190 @@ export class MockStorageProvider implements StorageProvider {
       const current = user.publicDemoUsage;
       if (!current || current.quickDemoProjectId !== params.projectId) return;
       user.publicDemoUsage = { ...current, quickDemoStatus: params.status, updatedAt: new Date().toISOString() };
+      db.users[params.userId] = user;
+      await this.writeDb(db);
+    });
+  }
+
+  async reservePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+    leaseMs?: number;
+  }): Promise<PublicDemoAskReservation> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    const leaseMs = params.leaseMs ?? PUBLIC_DEMO_ASK_RESERVATION_LEASE_MS;
+    if (!Number.isInteger(leaseMs) || leaseMs <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    return withMockAtomicWrite(this.filePath, async () => {
+      const db = await this.readDb();
+      const now = params.now ?? new Date().toISOString();
+      const date = now.slice(0, 10);
+      const user = db.users[params.userId] ?? { ...EMPTY_USER };
+      const existing = normalizedPublicDemoUsage(user.publicDemoUsage, params.userId, now);
+      const daily = normalizedPublicDemoDailyUsage(db.publicDemoDailyUsage?.[date], date, now);
+      const operations = compactPublicDemoAskOperations(existing.askOperations ?? [], now);
+      const current = operations.find((operation) => operation.operationId === params.operationId);
+      if (current?.status === 'completed') {
+        return {
+          accepted: true,
+          pending: false,
+          alreadyCompleted: true,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+          usage: existing,
+        };
+      }
+      if (current && hasValidPublicDemoAskLease(current, now)) {
+        return {
+          accepted: false,
+          pending: true,
+          alreadyCompleted: false,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+          usage: existing,
+        };
+      }
+      const activePendingReservations = operations.filter((operation) => hasValidPublicDemoAskLease(operation, now)).length;
+      if (existing.askMessagesUsed + activePendingReservations >= PUBLIC_DEMO_MAX_ASK_MESSAGES) {
+        return {
+          accepted: false,
+          pending: false,
+          alreadyCompleted: false,
+          blockedReason: 'user_limit',
+          messagesRemaining: 0,
+          usage: existing,
+        };
+      }
+      if (daily.askMessagesUsed >= params.dailyLimit) {
+        return {
+          accepted: false,
+          pending: false,
+          alreadyCompleted: false,
+          blockedReason: 'daily_limit',
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+          usage: existing,
+        };
+      }
+
+      const reservationId = createPublicDemoAskReservationId();
+      const operation: PublicDemoAskOperation = {
+        operationId: params.operationId,
+        reservationId,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+        leaseExpiresAt: new Date(Date.parse(now) + leaseMs).toISOString(),
+      };
+      const nextOperations = compactPublicDemoAskOperations(
+        [...operations.filter((candidate) => candidate.operationId !== params.operationId), operation],
+        now,
+      );
+      const usage: PublicDemoUsage = {
+        ...existing,
+        askOperations: nextOperations,
+        updatedAt: now,
+      };
+      db.publicDemoDailyUsage = {
+        ...(db.publicDemoDailyUsage ?? {}),
+        [date]: { ...daily, askMessagesUsed: daily.askMessagesUsed + 1, updatedAt: now },
+      };
+      user.publicDemoUsage = usage;
+      db.users[params.userId] = user;
+      await this.writeDb(db);
+      return {
+        accepted: true,
+        pending: false,
+        alreadyCompleted: false,
+        reservationId,
+        messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+        usage,
+      };
+    });
+  }
+
+  async completePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId?: string;
+    assistantMessageId: string;
+    now?: string;
+  }): Promise<PublicDemoAskReservation> {
+    return withMockAtomicWrite(this.filePath, async () => {
+      const db = await this.readDb();
+      const now = params.now ?? new Date().toISOString();
+      const user = db.users[params.userId] ?? { ...EMPTY_USER };
+      const existing = normalizedPublicDemoUsage(user.publicDemoUsage, params.userId, now);
+      const operations = existing.askOperations ?? [];
+      const current = operations.find((operation) => operation.operationId === params.operationId);
+      if (!current) throw new StorageError('The public demo Ask reservation was not found.', 'VALIDATION_ERROR');
+      if (current.status === 'completed') {
+        return {
+          accepted: true,
+          pending: false,
+          alreadyCompleted: true,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+          usage: existing,
+        };
+      }
+      if (params.reservationId && current.reservationId !== params.reservationId) {
+        throw new StorageError('The public demo Ask reservation is no longer active.', 'VALIDATION_ERROR');
+      }
+      if (existing.askMessagesUsed >= PUBLIC_DEMO_MAX_ASK_MESSAGES) {
+        throw new StorageError('The public demo Ask allowance is no longer available.', 'VALIDATION_ERROR');
+      }
+      const completed: PublicDemoAskOperation = {
+        ...current,
+        status: 'completed',
+        updatedAt: now,
+        completedAt: now,
+        assistantMessageId: params.assistantMessageId,
+        leaseExpiresAt: undefined,
+      };
+      const usage: PublicDemoUsage = {
+        ...existing,
+        askMessagesUsed: existing.askMessagesUsed + 1,
+        askOperationIds: Array.from(new Set([...existing.askOperationIds, params.operationId])).slice(-PUBLIC_DEMO_MAX_ASK_MESSAGES),
+        askOperations: operations.map((operation) => (
+          operation.operationId === params.operationId ? completed : operation
+        )),
+        updatedAt: now,
+      };
+      user.publicDemoUsage = usage;
+      db.users[params.userId] = user;
+      await this.writeDb(db);
+      return {
+        accepted: true,
+        pending: false,
+        alreadyCompleted: false,
+        messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - usage.askMessagesUsed),
+        usage,
+      };
+    });
+  }
+
+  async releasePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId: string;
+    now?: string;
+  }): Promise<void> {
+    return withMockAtomicWrite(this.filePath, async () => {
+      const db = await this.readDb();
+      const now = params.now ?? new Date().toISOString();
+      const user = db.users[params.userId] ?? { ...EMPTY_USER };
+      const existing = user.publicDemoUsage
+        ? normalizedPublicDemoUsage(user.publicDemoUsage, params.userId, now)
+        : undefined;
+      const current = existing?.askOperations?.find((operation) => operation.operationId === params.operationId);
+      if (!existing || !current || current.status !== 'pending' || current.reservationId !== params.reservationId) return;
+      user.publicDemoUsage = {
+        ...existing,
+        askOperations: existing.askOperations?.filter((operation) => operation.operationId !== params.operationId),
+        updatedAt: now,
+      };
       db.users[params.userId] = user;
       await this.writeDb(db);
     });

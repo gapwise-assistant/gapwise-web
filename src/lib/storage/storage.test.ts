@@ -126,6 +126,122 @@ describe('Project bootstrap', () => {
 });
 
 describe('MockStorageProvider', () => {
+  it('reserves public Ask attempts without consuming successful allowance until completion', async () => {
+    const storage = await makeProvider();
+    const now = '2026-08-28T12:00:00.000Z';
+
+    const reservation = await storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:one',
+      dailyLimit: 30,
+      now,
+    });
+
+    expect(reservation.accepted).toBe(true);
+    expect(reservation.messagesRemaining).toBe(3);
+    await expect(storage.getPublicDemoUsage('public-user')).resolves.toMatchObject({
+      askMessagesUsed: 0,
+      askOperations: [expect.objectContaining({ operationId: 'ask:one', status: 'pending' })],
+    });
+
+    await storage.releasePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:one',
+      reservationId: reservation.reservationId!,
+      now,
+    });
+    const retry = await storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:one',
+      dailyLimit: 30,
+      now,
+    });
+    expect(retry.accepted).toBe(true);
+    expect(retry.reservationId).not.toBe(reservation.reservationId);
+
+    const completed = await storage.completePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:one',
+      reservationId: retry.reservationId,
+      assistantMessageId: 'assistant-one',
+      now,
+    });
+    expect(completed.messagesRemaining).toBe(2);
+    await expect(storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:one',
+      dailyLimit: 30,
+      now,
+    })).resolves.toMatchObject({ alreadyCompleted: true, messagesRemaining: 2 });
+  });
+
+  it('recovers an expired reservation and rejects stale ownership', async () => {
+    const storage = await makeProvider();
+    const first = await storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:lease',
+      dailyLimit: 30,
+      now: '2026-08-28T12:00:00.000Z',
+      leaseMs: 1000,
+    });
+    const second = await storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:lease',
+      dailyLimit: 30,
+      now: '2026-08-28T12:00:02.000Z',
+      leaseMs: 1000,
+    });
+
+    expect(second.accepted).toBe(true);
+    expect(second.reservationId).not.toBe(first.reservationId);
+    await expect(storage.completePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:lease',
+      reservationId: first.reservationId,
+      assistantMessageId: 'stale-assistant',
+      now: '2026-08-28T12:00:02.000Z',
+    })).rejects.toThrow('no longer active');
+    await expect(storage.completePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:lease',
+      reservationId: second.reservationId,
+      assistantMessageId: 'current-assistant',
+      now: '2026-08-28T12:00:02.000Z',
+    })).resolves.toMatchObject({ messagesRemaining: 2 });
+  });
+
+  it('deduplicates concurrent reservation attempts and still counts failed attempts globally', async () => {
+    const storage = await makeProvider();
+    const results = await Promise.all([
+      storage.reservePublicDemoAsk({ userId: 'public-user', operationId: 'ask:concurrent', dailyLimit: 30 }),
+      storage.reservePublicDemoAsk({ userId: 'public-user', operationId: 'ask:concurrent', dailyLimit: 30 }),
+    ]);
+    expect(results.filter((result) => result.accepted)).toHaveLength(1);
+    expect(results.filter((result) => result.pending)).toHaveLength(1);
+
+    await storage.releasePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:concurrent',
+      reservationId: results.find((result) => result.accepted)?.reservationId!,
+    });
+    await expect(storage.reservePublicDemoAsk({
+      userId: 'public-user',
+      operationId: 'ask:another',
+      dailyLimit: 1,
+    })).resolves.toMatchObject({ blockedReason: 'daily_limit', accepted: false });
+
+    const slotStorage = await makeProvider();
+    const slots = await Promise.all(
+      ['one', 'two', 'three', 'four'].map((operationId) => slotStorage.reservePublicDemoAsk({
+        userId: 'public-user',
+        operationId: `ask:${operationId}`,
+        dailyLimit: 30,
+      })),
+    );
+    expect(slots.filter((result) => result.accepted)).toHaveLength(3);
+    expect(slots.filter((result) => result.blockedReason === 'user_limit')).toHaveLength(1);
+  });
+
   it('keeps projects scoped by userId', async () => {
     const storage = await makeProvider();
     const userOneProject = createGoldenDemoProject();

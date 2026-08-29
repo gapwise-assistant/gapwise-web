@@ -291,18 +291,26 @@ async function agentServiceHeaders(): Promise<Record<string, string>> {
   return { ...await agentRequestHeaders(), ...internalApiHeaders() };
 }
 
-async function createSession(userId: string, projectId?: string, chatId?: string): Promise<string> {
+type AdkExecutionProfile = 'default' | 'public_demo';
+
+async function createSession(
+  userId: string,
+  projectId?: string,
+  chatId?: string,
+  appName: AdkExecutionProfile = 'default',
+): Promise<string> {
   const identityHeaders = await agentServiceHeaders();
+  const registeredAppName = appName === 'public_demo' ? 'public_demo' : 'app';
   logAskDebug('session-request', {
-    endpoint: `${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`,
+    endpoint: `${agentBaseUrl()}/apps/${registeredAppName}/users/${encodeURIComponent(userId)}/sessions`,
     user_id: userId,
     project_id: projectId,
     chat_id: chatId,
-    app_name: 'app',
+    app_name: registeredAppName,
   });
   let response: Response;
   try {
-    response = await fetch(`${agentBaseUrl()}/apps/app/users/${encodeURIComponent(userId)}/sessions`, {
+    response = await fetch(`${agentBaseUrl()}/apps/${registeredAppName}/users/${encodeURIComponent(userId)}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...identityHeaders },
       body: JSON.stringify({
@@ -353,6 +361,7 @@ function textFromAdkEvent(event: unknown): string[] {
 
 interface AdkTurnResult {
   answer: string;
+  sessionId?: string;
   sources: AskSource[];
   searchSuggestions?: AskSearchSuggestions;
   response?: AskResponse;
@@ -522,11 +531,14 @@ async function runAdkTurn(
   sessionId: string,
   message: string,
   structuredResponse = true,
+  appName: AdkExecutionProfile = 'default',
 ): Promise<AdkTurnResult> {
   const identityHeaders = await agentServiceHeaders();
+  const registeredAppName = appName === 'public_demo' ? 'public_demo' : 'app';
+  const endpoint = appName === 'public_demo' ? '/internal/public-demo' : '/run_sse';
   logAskDebug('adk-request', {
-    endpoint: `${agentBaseUrl()}/run_sse`,
-    app_name: 'app',
+    endpoint: `${agentBaseUrl()}${endpoint}`,
+    app_name: registeredAppName,
     user_id: userId,
     session_id: sessionId,
     structuredResponse,
@@ -534,16 +546,23 @@ async function runAdkTurn(
   });
   let response: Response;
   try {
-    response = await fetch(`${agentBaseUrl()}/run_sse`, {
+    response = await fetch(`${agentBaseUrl()}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...identityHeaders },
-      body: JSON.stringify({
-        app_name: 'app',
-        user_id: userId,
-        session_id: sessionId,
-        new_message: { role: 'user', parts: [{ text: message }] },
-        streaming: true,
-      }),
+      body: JSON.stringify(appName === 'public_demo'
+        ? {
+          user_id: userId,
+          message,
+          execution_profile: 'public_demo',
+          ...(sessionId ? { session_id: sessionId } : {}),
+        }
+        : {
+          app_name: registeredAppName,
+          user_id: userId,
+          session_id: sessionId,
+          new_message: { role: 'user', parts: [{ text: message }] },
+          streaming: true,
+        }),
     });
   } catch (error) {
     throw new AskAgentError('The deployed ADK agent could not be reached while running Ask.', {
@@ -557,17 +576,25 @@ async function runAdkTurn(
     });
   }
 
-  const raw = await response.text();
-  const events = raw
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('data: '))
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line.slice(6))];
-      } catch {
-        return [];
-      }
-    });
+  let events: unknown[];
+  let responseSessionId: string | undefined;
+  if (appName === 'public_demo') {
+    const payload = await response.json() as { sessionId?: string; events?: unknown[] };
+    responseSessionId = payload.sessionId;
+    events = Array.isArray(payload.events) ? payload.events : [];
+  } else {
+    const raw = await response.text();
+    events = raw
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data: '))
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line.slice(6))];
+        } catch {
+          return [];
+        }
+      });
+  }
   const textChunks = events.flatMap(textFromAdkEvent);
   const rawAnswer = compactAdkTextChunks(textChunks);
   if (!rawAnswer) throw new AskAgentError('Gemini returned no user-visible answer through the ADK agent.', { stage: 'gemini' });
@@ -595,6 +622,7 @@ async function runAdkTurn(
   });
   return {
     answer: structuredAnswer ?? rawAnswer,
+    ...(responseSessionId ? { sessionId: responseSessionId } : {}),
     ...(responseEnvelope ? { response: responseEnvelope } : {}),
     ...webSourcesFromAdkEvents(events),
   };
@@ -1362,9 +1390,14 @@ export async function askPublicDemo(params: {
   project: import('@/types/clarity').Project;
   sessionId?: string;
   chatId?: string;
+  executionProfile?: AdkExecutionProfile;
 }): Promise<AskResult> {
   assertExternalServicesAllowed('Google ADK / Gemini');
-  const sessionId = params.sessionId ?? await createSession(params.userId, params.project.id, params.chatId);
+  const executionProfile = params.executionProfile ?? 'public_demo';
+  const sessionId = params.sessionId
+    ?? (executionProfile === 'public_demo'
+      ? ''
+      : await createSession(params.userId, params.project.id, params.chatId, executionProfile));
   const nodes = params.project.nodes
     .filter((node) => node.status !== 'DEPRECATED')
     .sort((left, right) => right.impact - left.impact)
@@ -1385,12 +1418,12 @@ export async function askPublicDemo(params: {
     `User message:\n${params.message}`,
     structuredAskResponseInstructions([]),
   ].join('\n\n');
-  const turn = await runAdkTurn(params.userId, sessionId, prompt, true);
+  const turn = await runAdkTurn(params.userId, sessionId, prompt, true, executionProfile);
   const answer = turn.response?.answer ?? turn.answer;
   return {
     answer,
     outcome: turn.response?.outcome ?? 'exploration',
-    sessionId,
+    sessionId: turn.sessionId ?? (sessionId || undefined),
     sources: [],
     promptUsed: prompt,
     contextUsed: {
@@ -1399,7 +1432,11 @@ export async function askPublicDemo(params: {
     },
     contextProposals: [],
     proposals: [],
-    execution: { route: 'internal_context', agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
+    execution: {
+      route: 'internal_context',
+      agent: 'Partner Agent',
+      toolCalls: [executionProfile === 'public_demo' ? 'ADK /internal/public-demo' : 'ADK /run_sse'],
+    },
   };
 }
 

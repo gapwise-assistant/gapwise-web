@@ -17,7 +17,7 @@ import hmac
 import logging
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import google.auth
 from a2a.server.tasks import InMemoryTaskStore
@@ -62,6 +62,13 @@ class AskRouteRequest(BaseModel):
     trusted_context: dict[str, Any] = Field(default_factory=dict)
 
 
+class PublicDemoAskRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    session_id: str | None = None
+    execution_profile: Literal["public_demo"] = "public_demo"
+
+
 def _check_internal_secret(value: str | None) -> None:
     configured_secret = os.environ.get("GAPSWISE_INTERNAL_API_SECRET", "").strip()
     if configured_secret and not hmac.compare_digest(configured_secret, value or ""):
@@ -74,13 +81,24 @@ async def _run_private_agent(
     user_id: str,
     message: str,
     state: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     session_service = services.get_session_service()
-    session = await session_service.create_session(
-        app_name=app_name,
-        user_id=user_id,
-        state=state,
+    session = (
+        await session_service.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if session_id
+        else None
     )
+    if session is None:
+        session = await session_service.create_session(
+            app_name=app_name,
+            user_id=user_id,
+            state=state,
+        )
     events: list[dict[str, Any]] = []
     async for event in runner.run_async(
         user_id=user_id,
@@ -145,7 +163,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         severity="INFO",
     )
     from app.agent import app as adk_app
-    from app.agent import root_agent, routing_app, web_research_app
+    from app.agent import public_demo_app, root_agent, routing_app, web_research_app
 
     session_service = services.get_session_service()
     artifact_service = services.get_artifact_service()
@@ -167,12 +185,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         artifact_service=artifact_service,
         auto_create_session=True,
     )
+    public_demo_runner = Runner(
+        app=public_demo_app,
+        session_service=session_service,
+        artifact_service=artifact_service,
+        auto_create_session=True,
+    )
     app.state.runner = runner
     app.state.agent_app_name = adk_app.name
     app.state.web_research_runner = web_research_runner
     app.state.web_research_app_name = web_research_app.name
     app.state.routing_runner = routing_runner
     app.state.routing_app_name = routing_app.name
+    app.state.public_demo_runner = public_demo_runner
+    app.state.public_demo_app_name = public_demo_app.name
     await attach_a2a_routes(
         app,
         agent=root_agent,
@@ -269,6 +295,36 @@ async def run_web_research(
         raise HTTPException(
             status_code=502,
             detail="External verification failed: web research could not be completed.",
+        ) from error
+    return {"sessionId": session_id, "events": events}
+
+
+@app.post("/internal/public-demo")
+async def run_public_demo(
+    request: PublicDemoAskRequest,
+    http_request: Request,
+    x_gapswise_internal_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run the fixed, non-mutating public-demo Partner profile."""
+    _check_internal_secret(x_gapswise_internal_secret)
+    if is_demo_mode():
+        raise HTTPException(status_code=503, detail="Public demo Agent is disabled in demo mode.")
+    runner = getattr(http_request.app.state, "public_demo_runner", None)
+    if runner is None:
+        raise HTTPException(status_code=503, detail="Public demo Agent is unavailable.")
+    try:
+        session_id, events = await _run_private_agent(
+            runner,
+            http_request.app.state.public_demo_app_name,
+            request.user_id,
+            request.message,
+            session_id=request.session_id,
+        )
+    except Exception as error:
+        startup_logger.warning("Public demo Agent failed safely: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="The public demo could not answer right now.",
         ) from error
     return {"sessionId": session_id, "events": events}
 

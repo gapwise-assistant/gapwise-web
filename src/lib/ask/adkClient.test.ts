@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { askGapswise, determineAskRoute, isFocusQuestion } from './adkClient';
+import { askGapswise, askPublicDemo, determineAskRoute, isFocusQuestion } from './adkClient';
 import { resetStorageProviderForTests } from '@/lib/storage';
 
 const originalUseFirestore = process.env.USE_FIRESTORE;
@@ -676,5 +676,41 @@ describe('askGapswise', () => {
       excludeMessageId: 'message_current',
       excludeSourceId: 'ask_chat_message_current',
     });
+  });
+});
+
+describe('askPublicDemo', () => {
+  it('uses the dedicated server-controlled public-demo execution boundary', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toContain('/internal/public-demo');
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return jsonResponse({
+        sessionId: 'public-session',
+        events: [{
+          content: {
+            parts: [{ text: JSON.stringify({
+              answer: 'Use the current project priorities.',
+              outcome: 'recommendation',
+              contextProposals: [],
+            }) }],
+          },
+        }],
+      });
+    }));
+
+    const result = await askPublicDemo({
+      userId: 'public-user',
+      message: 'What should I focus on?',
+      project: { id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] } as never,
+    });
+
+    expect(requestBody).toEqual({
+      user_id: 'public-user',
+      message: expect.stringContaining('What should I focus on?'),
+      execution_profile: 'public_demo',
+    });
+    expect(result.sessionId).toBe('public-session');
+    expect(result.execution?.toolCalls).toEqual(['ADK /internal/public-demo']);
   });
 });

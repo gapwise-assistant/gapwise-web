@@ -143,6 +143,23 @@ def get_agent_model_config(role: AgentRole) -> AgentModelConfig:
     )
 
 
+def get_public_demo_model_config() -> AgentModelConfig:
+    """Return the fixed public-demo Partner boundary.
+
+    Public access must not inherit a larger output budget from a caller or
+    from the normal Partner response configuration. The model itself remains
+    the configured Partner model, while the public boundary always uses low
+    thinking and 512 output tokens.
+    """
+    partner = get_agent_model_config("partner")
+    return AgentModelConfig(
+        role="partner",
+        model=partner.model,
+        thinking_level="low",
+        max_output_tokens=512,
+    )
+
+
 def get_agent_model_policy() -> dict[AgentRole, AgentModelConfig]:
     return {role: get_agent_model_config(role) for role in ("context", "gap", "attention", "partner")}
 

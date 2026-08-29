@@ -32,6 +32,7 @@ from app.model_policy import (
     DEFAULT_FALLBACK_MODEL,
     generation_config_for,
     get_agent_model_config,
+    get_public_demo_model_config,
     validate_live_model,
 )
 
@@ -49,6 +50,7 @@ def get_configured_model() -> str:
 
 MODEL = get_configured_model()
 MODEL_CONFIG = get_agent_model_config("partner")
+PUBLIC_DEMO_MODEL_CONFIG = get_public_demo_model_config()
 
 
 class AskRouteDecision(BaseModel):
@@ -370,6 +372,28 @@ root_agent = Agent(
     tools=[health_check, get_context_pack],
 )
 
+
+public_demo_agent = Agent(
+    name="gapswise_public_demo_partner",
+    model=Gemini(
+        model=PUBLIC_DEMO_MODEL_CONFIG.model,
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    generate_content_config=generation_config_for(PUBLIC_DEMO_MODEL_CONFIG),
+    output_schema=AskResponse,
+    instruction=(
+        "You are the public Gapwise demo Partner Agent. Answer only from the "
+        "preloaded workspace context and the user's current message. Never use "
+        "web search, routing, tools, project mutation, or context ingestion. "
+        "Return the required structured AskResponse. Keep the response concise "
+        "and conversational. Use exploration for discovery or a follow-up, "
+        "recommendation for directional advice, and conclusion only when a clear "
+        "answer resolves one supplied open question. Always return an empty "
+        "contextProposals array because public demo responses cannot mutate the "
+        "workspace."
+    ),
+)
+
 app = App(
     root_agent=root_agent,
     name="app",
@@ -383,4 +407,9 @@ web_research_app = App(
 routing_app = App(
     root_agent=routing_agent,
     name="ask_routing",
+)
+
+public_demo_app = App(
+    root_agent=public_demo_agent,
+    name="public_demo",
 )

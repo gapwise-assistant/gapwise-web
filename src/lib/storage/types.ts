@@ -178,6 +178,7 @@ export interface PublicDemoUsage {
   quickDemoStatus?: 'creating' | 'ready' | 'failed';
   askMessagesUsed: number;
   askOperationIds: string[];
+  askOperations?: PublicDemoAskOperation[];
   createdAt: string;
   updatedAt: string;
   /** Public-demo records are retained for seven days before administrative cleanup. */
@@ -195,6 +196,29 @@ export interface PublicDemoDailyUsage {
   demosCreated: number;
   askMessagesUsed: number;
   updatedAt: string;
+}
+
+export type PublicDemoAskOperationStatus = 'pending' | 'completed';
+
+export interface PublicDemoAskOperation {
+  operationId: string;
+  reservationId: string;
+  status: PublicDemoAskOperationStatus;
+  createdAt: string;
+  updatedAt: string;
+  leaseExpiresAt?: string;
+  completedAt?: string;
+  assistantMessageId?: string;
+}
+
+export interface PublicDemoAskReservation {
+  accepted: boolean;
+  pending: boolean;
+  alreadyCompleted: boolean;
+  reservationId?: string;
+  blockedReason?: 'user_limit' | 'daily_limit';
+  messagesRemaining: number;
+  usage: PublicDemoUsage;
 }
 
 export interface PublicDemoAskConsumption {
@@ -336,6 +360,26 @@ export interface StorageProvider {
     dailyLimit: number;
     now?: string;
   }): Promise<PublicDemoAskConsumption>;
+  reservePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+    leaseMs?: number;
+  }): Promise<PublicDemoAskReservation>;
+  completePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId?: string;
+    assistantMessageId: string;
+    now?: string;
+  }): Promise<PublicDemoAskReservation>;
+  releasePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    reservationId: string;
+    now?: string;
+  }): Promise<void>;
 
   listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]>;
   getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null>;

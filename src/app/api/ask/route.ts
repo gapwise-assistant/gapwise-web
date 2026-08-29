@@ -48,6 +48,20 @@ function localModelConfig() {
   );
 }
 
+function publicDemoModelConfig() {
+  const config = getAgentModelConfig('partner');
+  return {
+    provider: 'Vertex AI / Google ADK',
+    agent: 'Partner Agent',
+    model: config.model,
+    thinkingLevel: 'low',
+    maxOutputTokens: 512,
+    retryAttempts: 3,
+    profile: 'public_demo',
+    execution: 'Used',
+  } as const;
+}
+
 const askRequestSchema = z.object({
   userId: z.string().trim().min(1).optional(),
   message: z.string().trim().min(1),
@@ -189,110 +203,153 @@ async function runPublicDemoAsk(
   const existingAssistant = (await storage.getAskMessages(principal.uid)).find(
     (message) => message.id === assistantId && message.role === 'assistant',
   );
-  const consumed = existingAssistant
+  const operationId = `ask:${parsed.chatId}:${parsed.userMessageId}`;
+  const reservation = existingAssistant
     ? {
       accepted: true,
-      alreadyConsumed: true,
+      pending: false,
+      alreadyCompleted: true,
       messagesRemaining: publicDemoMessagesRemaining(usage),
       usage: usage!,
     }
-    : await storage.consumePublicDemoAsk({
+    : await storage.reservePublicDemoAsk({
       userId: principal.uid,
-      operationId: `ask:${parsed.chatId}:${parsed.userMessageId}`,
+      operationId,
       dailyLimit: publicDemoDailyAskLimit(),
     });
-  if (consumed.alreadyConsumed && !existingAssistant) {
+  if (reservation.alreadyCompleted && !existingAssistant) {
     return NextResponse.json({
-      error: 'This public demo message has already been used.',
+      error: 'The saved public demo response is temporarily unavailable.',
       publicDemo: {
-        messagesRemaining: consumed.messagesRemaining,
-        complete: consumed.messagesRemaining === 0,
+        messagesRemaining: reservation.messagesRemaining,
+        complete: reservation.messagesRemaining === 0,
       },
+    }, { status: 503 });
+  }
+  if (reservation.pending) {
+    return NextResponse.json({
+      error: 'This public demo message is already being processed.',
+      publicDemo: { messagesRemaining: reservation.messagesRemaining, complete: false },
     }, { status: 409 });
   }
-  if (!consumed.accepted) {
+  if (!reservation.accepted) {
+    if (reservation.blockedReason === 'daily_limit') {
+      return NextResponse.json({
+        error: 'The public demo is temporarily unavailable.',
+        publicDemo: { messagesRemaining: reservation.messagesRemaining, complete: false },
+      }, { status: 429 });
+    }
     return NextResponse.json({
       error: 'Public demo complete. Full Gapwise access is currently private.',
-      publicDemo: { messagesRemaining: consumed.messagesRemaining, complete: true },
+      publicDemo: { messagesRemaining: reservation.messagesRemaining, complete: true },
     }, { status: 429 });
   }
 
-  const chats = await storage.getAskChats(principal.uid);
-  const existingChat = chats.find((chat) => chat.id === parsed.chatId);
-  assertAskChatBinding(existingChat, parsed.projectId, parsed.sessionId, parsed.target);
-  const now = new Date().toISOString();
-  const chat: AskChatSession = {
-    id: parsed.chatId,
-    userId: principal.uid,
-    scopeType: 'project',
-    projectId: parsed.projectId,
-    title: existingChat?.title || titleForMessage(parsed.message),
-    ...(existingChat?.adkSessionId || parsed.sessionId ? { adkSessionId: existingChat?.adkSessionId ?? parsed.sessionId } : {}),
-    createdAt: existingChat?.createdAt ?? now,
-    updatedAt: now,
-  };
-
-  if (!existingAssistant) {
-    await storage.saveAskChat(principal.uid, chat);
-    await storage.saveAskMessage(principal.uid, {
-      id: parsed.userMessageId,
-      chatId: parsed.chatId,
+  try {
+    const chats = await storage.getAskChats(principal.uid);
+    const existingChat = chats.find((chat) => chat.id === parsed.chatId);
+    assertAskChatBinding(existingChat, parsed.projectId, parsed.sessionId, parsed.target);
+    const now = new Date().toISOString();
+    const chat: AskChatSession = {
+      id: parsed.chatId,
       userId: principal.uid,
+      scopeType: 'project',
       projectId: parsed.projectId,
-      role: 'user',
-      text: parsed.message,
-      sources: [],
-      createdAt: now,
-    });
-  }
+      title: existingChat?.title || titleForMessage(parsed.message),
+      ...(existingChat?.adkSessionId || parsed.sessionId ? { adkSessionId: existingChat?.adkSessionId ?? parsed.sessionId } : {}),
+      createdAt: existingChat?.createdAt ?? now,
+      updatedAt: now,
+    };
 
-  const result = existingAssistant
-    ? {
-      answer: existingAssistant.text,
-      sessionId: chat.adkSessionId,
-      sources: existingAssistant.sources,
-      outcome: existingAssistant.outcome,
-      resolvesQuestionId: existingAssistant.resolvesQuestionId,
-      conclusion: existingAssistant.conclusion,
-      contextProposals: [],
-      proposals: [],
-      execution: existingAssistant.execution,
-      openQuestionIds: existingAssistant.openQuestionIds ?? [],
-      openQuestions: existingAssistant.openQuestions ?? [],
-      promptUsed: undefined,
+    if (!existingAssistant) {
+      await storage.saveAskChat(principal.uid, chat);
+      await storage.saveAskMessage(principal.uid, {
+        id: parsed.userMessageId,
+        chatId: parsed.chatId,
+        userId: principal.uid,
+        projectId: parsed.projectId,
+        role: 'user',
+        text: parsed.message,
+        sources: [],
+        createdAt: now,
+      });
     }
-    : await askPublicDemo({
-      userId: principal.uid,
-      message: parsed.message,
-      project,
-      sessionId: chat.adkSessionId,
-      chatId: chat.id,
-    });
 
-  if (!existingAssistant) {
-    await persistAssistantAskMessage({
-      userId: principal.uid,
-      chat,
-      userMessageId: parsed.userMessageId,
-      answer: result.answer,
-      sources: [],
-      openQuestionIds: [],
-      openQuestions: [],
-      outcome: result.outcome,
-      execution: result.execution,
-      sessionId: result.sessionId,
-      storage,
+    const result = existingAssistant
+      ? {
+        answer: existingAssistant.text,
+        sessionId: chat.adkSessionId,
+        sources: existingAssistant.sources,
+        outcome: existingAssistant.outcome,
+        resolvesQuestionId: existingAssistant.resolvesQuestionId,
+        conclusion: existingAssistant.conclusion,
+        contextProposals: [],
+        proposals: [],
+        execution: existingAssistant.execution,
+        openQuestionIds: existingAssistant.openQuestionIds ?? [],
+        openQuestions: existingAssistant.openQuestions ?? [],
+        promptUsed: undefined,
+      }
+      : await askPublicDemo({
+        userId: principal.uid,
+        message: parsed.message,
+        project,
+        sessionId: chat.adkSessionId,
+        chatId: chat.id,
+        executionProfile: 'public_demo',
+      });
+
+    if (!existingAssistant) {
+      await persistAssistantAskMessage({
+        userId: principal.uid,
+        chat,
+        userMessageId: parsed.userMessageId,
+        answer: result.answer,
+        sources: [],
+        openQuestionIds: [],
+        openQuestions: [],
+        outcome: result.outcome,
+        execution: result.execution,
+        sessionId: result.sessionId,
+        storage,
+      });
+    }
+
+    const completed = existingAssistant
+      ? reservation
+      : await storage.completePublicDemoAsk({
+        userId: principal.uid,
+        operationId,
+        reservationId: reservation.reservationId,
+        assistantMessageId: assistantId,
+      });
+
+    return NextResponse.json({
+      ...result,
+      assistantMessageId: assistantId,
+      modelConfig: publicDemoModelConfig(),
+      publicDemo: {
+        messagesRemaining: completed.messagesRemaining,
+        complete: completed.messagesRemaining === 0,
+      },
     });
+  } catch (error) {
+    if (!existingAssistant && reservation.reservationId) {
+      try {
+        await storage.releasePublicDemoAsk({
+          userId: principal.uid,
+          operationId,
+          reservationId: reservation.reservationId,
+        });
+      } catch (releaseError) {
+        console.error('[Gapwise public demo Ask] reservation release failed', {
+          error: releaseError instanceof Error ? releaseError.message : 'unknown-error',
+          operationId,
+        });
+      }
+    }
+    throw error;
   }
-
-  return NextResponse.json({
-    ...result,
-    assistantMessageId: assistantId,
-    publicDemo: {
-      messagesRemaining: consumed.messagesRemaining,
-      complete: consumed.messagesRemaining === 0,
-    },
-  });
 }
 
 async function persistAssistantAskMessage(params: {

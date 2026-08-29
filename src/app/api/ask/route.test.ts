@@ -38,6 +38,9 @@ const askStorage = {
   getProject: vi.fn(),
   getPublicDemoUsage: vi.fn(),
   consumePublicDemoAsk: vi.fn(),
+  reservePublicDemoAsk: vi.fn(),
+  completePublicDemoAsk: vi.fn(),
+  releasePublicDemoAsk: vi.fn(),
   saveAskChat: vi.fn(),
   saveAskMessage: vi.fn(),
   listProjectSnapshots: vi.fn(),
@@ -67,6 +70,36 @@ describe('POST /api/ask', () => {
     askStorage.getAskMessages.mockResolvedValue([]);
     askStorage.getProject.mockResolvedValue({ id: 'project_hackathon', title: 'Demo', goal: 'Demo goal', nodes: [], edges: [], sources: [] });
     askStorage.getPublicDemoUsage.mockResolvedValue(null);
+    askStorage.reservePublicDemoAsk.mockResolvedValue({
+      accepted: true,
+      pending: false,
+      alreadyCompleted: false,
+      reservationId: 'reservation-1',
+      messagesRemaining: 3,
+      usage: {
+        userId: 'demo-user',
+        askMessagesUsed: 0,
+        askOperationIds: [],
+        createdAt: '2026-08-28T12:00:00.000Z',
+        updatedAt: '2026-08-28T12:00:00.000Z',
+        expiresAt: '2026-09-04T12:00:00.000Z',
+      },
+    });
+    askStorage.completePublicDemoAsk.mockResolvedValue({
+      accepted: true,
+      pending: false,
+      alreadyCompleted: false,
+      messagesRemaining: 2,
+      usage: {
+        userId: 'public-user',
+        askMessagesUsed: 1,
+        askOperationIds: ['ask:chat-1:message-1'],
+        createdAt: '2026-08-28T12:00:00.000Z',
+        updatedAt: '2026-08-28T12:01:00.000Z',
+        expiresAt: '2026-09-04T12:00:00.000Z',
+      },
+    });
+    askStorage.releasePublicDemoAsk.mockResolvedValue(undefined);
     askStorage.saveAskChat.mockResolvedValue(undefined);
     askStorage.saveAskMessage.mockResolvedValue(undefined);
     askStorage.listProjectSnapshots.mockResolvedValue([]);
@@ -105,17 +138,33 @@ describe('POST /api/ask', () => {
       updatedAt: '2026-08-28T12:00:00.000Z',
     });
     askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
-    askStorage.consumePublicDemoAsk.mockResolvedValue({
+    askStorage.reservePublicDemoAsk.mockResolvedValue({
       accepted: true,
-      alreadyConsumed: false,
-      messagesRemaining: 2,
+      pending: false,
+      alreadyCompleted: false,
+      reservationId: 'reservation-1',
+      messagesRemaining: 3,
       usage: {
         userId: 'public-user',
         quickDemoProjectId: 'quick-project',
+        askMessagesUsed: 0,
+        askOperationIds: [],
+        createdAt: '2026-08-28T12:00:00.000Z',
+        updatedAt: '2026-08-28T12:01:00.000Z',
+      },
+    });
+    askStorage.completePublicDemoAsk.mockResolvedValue({
+      accepted: true,
+      pending: false,
+      alreadyCompleted: false,
+      messagesRemaining: 2,
+      usage: {
+        userId: 'public-user',
         askMessagesUsed: 1,
         askOperationIds: ['ask:chat-1:message-1'],
         createdAt: '2026-08-28T12:00:00.000Z',
         updatedAt: '2026-08-28T12:01:00.000Z',
+        expiresAt: '2026-09-04T12:00:00.000Z',
       },
     });
     vi.stubEnv('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT', '30');
@@ -139,6 +188,12 @@ describe('POST /api/ask', () => {
     expect(askPublicDemo).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'public-user',
       project: expect.objectContaining({ id: 'quick-project' }),
+      executionProfile: 'public_demo',
+    }));
+    expect(askStorage.completePublicDemoAsk).toHaveBeenCalledWith(expect.objectContaining({
+      operationId: 'ask:chat-1:message-1',
+      reservationId: 'reservation-1',
+      assistantMessageId: expect.any(String),
     }));
     expect(askGapswise).not.toHaveBeenCalled();
     expect(persistAskConversationContext).not.toHaveBeenCalled();
@@ -146,6 +201,7 @@ describe('POST /api/ask', () => {
     await expect(response.json()).resolves.toMatchObject({
       answer: 'The workshop has one unresolved supply choice.',
       publicDemo: { messagesRemaining: 2, complete: false },
+      modelConfig: { profile: 'public_demo', maxOutputTokens: 512 },
       contextProposals: [],
     });
   });
@@ -166,9 +222,11 @@ describe('POST /api/ask', () => {
       updatedAt: '2026-08-28T12:00:00.000Z',
     });
     askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
-    askStorage.consumePublicDemoAsk.mockResolvedValue({
+    askStorage.reservePublicDemoAsk.mockResolvedValue({
       accepted: false,
-      alreadyConsumed: false,
+      pending: false,
+      alreadyCompleted: false,
+      blockedReason: 'user_limit',
       messagesRemaining: 0,
       usage: await askStorage.getPublicDemoUsage('public-user'),
     });
@@ -187,6 +245,99 @@ describe('POST /api/ask', () => {
     expect(askStorage.saveAskMessage).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       publicDemo: { messagesRemaining: 0, complete: true },
+    });
+  });
+
+  it('releases a pending public-demo reservation when the Partner Agent fails', async () => {
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'public-user',
+      emailVerified: false,
+      provider: 'anonymous',
+      accessTier: 'public_demo',
+    });
+    askStorage.getPublicDemoUsage.mockResolvedValue({
+      userId: 'public-user',
+      quickDemoProjectId: 'quick-project',
+      askMessagesUsed: 0,
+      askOperationIds: [],
+      createdAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-28T12:00:00.000Z',
+      expiresAt: '2026-09-04T12:00:00.000Z',
+    });
+    askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
+    vi.stubEnv('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT', '30');
+    vi.mocked(askPublicDemo).mockRejectedValueOnce(new AskAgentError('temporary', { stage: 'agent-unavailable' }));
+
+    const response = await POST(jsonRequest({
+      userId: 'public-user',
+      message: 'Try this question',
+      projectId: 'quick-project',
+      chatId: 'chat-failure',
+      userMessageId: 'message-failure',
+    }));
+
+    expect(response.status).toBe(503);
+    expect(askStorage.completePublicDemoAsk).not.toHaveBeenCalled();
+    expect(askStorage.releasePublicDemoAsk).toHaveBeenCalledWith(expect.objectContaining({
+      operationId: 'ask:chat-failure:message-failure',
+      reservationId: 'reservation-1',
+    }));
+  });
+
+  it('returns a completed operation response without another agent call', async () => {
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'public-user',
+      emailVerified: false,
+      provider: 'google',
+      accessTier: 'public_demo',
+    });
+    askStorage.getPublicDemoUsage.mockResolvedValue({
+      userId: 'public-user',
+      quickDemoProjectId: 'quick-project',
+      askMessagesUsed: 1,
+      askOperationIds: ['ask:chat-complete:message-complete'],
+      createdAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-28T12:01:00.000Z',
+      expiresAt: '2026-09-04T12:00:00.000Z',
+    });
+    askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
+    askStorage.getAskMessages.mockResolvedValue([{
+      id: boundedId('ask_assistant', 'message-complete'),
+      chatId: 'chat-complete',
+      userId: 'public-user',
+      projectId: 'quick-project',
+      role: 'assistant',
+      text: 'Saved response',
+      sources: [],
+      createdAt: '2026-08-28T12:01:00.000Z',
+    }]);
+    askStorage.getAskChats.mockResolvedValue([{
+      id: 'chat-complete',
+      userId: 'public-user',
+      scopeType: 'project',
+      projectId: 'quick-project',
+      title: 'Completed question',
+      adkSessionId: 'public-session',
+      createdAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-28T12:01:00.000Z',
+    }]);
+    vi.stubEnv('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT', '30');
+
+    const response = await POST(jsonRequest({
+      userId: 'public-user',
+      message: 'Repeat the completed question',
+      projectId: 'quick-project',
+      chatId: 'chat-complete',
+      userMessageId: 'message-complete',
+      sessionId: 'public-session',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askPublicDemo).not.toHaveBeenCalled();
+    expect(askStorage.reservePublicDemoAsk).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      answer: 'Saved response',
+      publicDemo: { messagesRemaining: 2 },
     });
   });
 
