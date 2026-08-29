@@ -335,6 +335,23 @@ describe('project snapshots', () => {
     expect((await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id, clientRequestId })).project.id).toBe(branched.project.id);
   });
 
+  it('does not count archived workspaces when naming a snapshot branch', async () => {
+    const storage = getStorageProvider();
+    const project = makeProject('Archived-only branch', '2026-08-25T14:00:00.000Z');
+    project.status = 'archived';
+    await storage.saveProject(userId, project);
+    const snapshot = await createProjectSnapshot({
+      userId,
+      projectId: project.id,
+      trigger: { type: 'context_processed', sourceId: 'source_context' },
+      label: 'Archived source moment',
+    });
+
+    const branched = await branchProjectFromSnapshot({ userId, snapshotId: snapshot.id });
+
+    expect(branched.project.title).toBe('Archived-only branch');
+  });
+
   it('bounds long branch IDs and remaps every referenced record consistently', async () => {
     const storage = getStorageProvider();
     const project = makeProject('Long branch IDs project', '2026-08-25T13:30:00.000Z');

@@ -54,6 +54,7 @@ import { calculateGapPriority } from '@/lib/prioritization';
 import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 import type { QuickDemoResult } from '@/lib/demo/quickDemo';
+import type { ResolutionValidationSubmission } from '@/types/resolutionValidation';
 
 type AppTab = AppDestination;
 
@@ -1465,7 +1466,7 @@ export default function Home() {
     void openChatWithPrompt(prompt, target, idontKnowProjectId ?? GENERAL_CONTEXT_ID);
   }, [generalContext, idontKnowGap, idontKnowProjectId, openChatWithPrompt, project, projects]);
 
-  const submitQuestionAnswer = useCallback(async (answer: string) => {
+  const submitQuestionAnswer = useCallback(async (answer: string, validation?: ResolutionValidationSubmission) => {
     if (!answerTarget) return;
     const isEditing = answerTarget.mode === 'edit';
     const isCareerConflictQuestion = answerTarget.nodeId === CAREER_CONFLICT_QUESTION_ID;
@@ -1480,6 +1481,8 @@ export default function Home() {
         question: answerTarget.question,
         previousAnswer: answerTarget.initialAnswer,
         answer,
+        ...(validation?.validationOverride ? { validationOverride: true } : {}),
+        ...(validation?.validationFingerprint ? { validationFingerprint: validation.validationFingerprint } : {}),
       } : {
         userId,
         nodeId: answerTarget.nodeId,
@@ -1494,6 +1497,8 @@ export default function Home() {
             }
           : {}),
         ...(answerTarget.projectId ? { projectId: answerTarget.projectId } : {}),
+        ...(validation?.validationOverride ? { validationOverride: true } : {}),
+        ...(validation?.validationFingerprint ? { validationFingerprint: validation.validationFingerprint } : {}),
       }),
     });
     const body = await response.json();
@@ -1798,6 +1803,7 @@ export default function Home() {
       {answerTarget && (
         <AnswerQuestionModal
           target={answerTarget}
+          userId={userId}
           onSubmit={submitQuestionAnswer}
           onDontKnow={canUseDontKnow ? handleDontKnow : undefined}
           onNavigateToSource={(sourceId) => {
@@ -1817,6 +1823,7 @@ export default function Home() {
       {decisionTarget && decisionProject && (
         <DecisionWorkspace
           project={decisionProject}
+          userId={userId}
           targetNodeId={decisionTarget.nodeId}
           initialOutcome={decisionTarget.initialOutcome}
           historyTimestamp={decisionTarget.historyTimestamp}

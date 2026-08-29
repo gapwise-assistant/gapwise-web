@@ -5,6 +5,7 @@ import { StorageProvider } from '@/lib/storage/types';
 import { answerQuestion } from '@/lib/questions/answerQuestion';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { validateProjectResolution, resolutionHistoryMetadata } from '@/lib/resolutions/resolutionValidation';
 
 vi.mock('@/lib/auth/server', () => ({
   requireAuthenticatedUserId: vi.fn(),
@@ -12,6 +13,11 @@ vi.mock('@/lib/auth/server', () => ({
 
 vi.mock('@/lib/questions/answerQuestion', () => ({ answerQuestion: vi.fn() }));
 vi.mock('@/lib/decisions/workspace', () => ({ confirmDecision: vi.fn() }));
+vi.mock('@/lib/resolutions/resolutionValidation', () => ({
+  validateProjectResolution: vi.fn(),
+  resolutionHistoryMetadata: vi.fn(),
+  validationWarningResponse: vi.fn(),
+}));
 
 vi.mock('@/lib/storage', () => ({
   getStorageProvider: vi.fn(),
@@ -96,6 +102,21 @@ describe('POST /api/ask/research', () => {
     vi.mocked(saveProject).mockImplementation(async (_userId, project) => project);
     vi.mocked(answerQuestion).mockResolvedValue({} as never);
     vi.mocked(confirmDecision).mockReturnValue({} as never);
+    vi.mocked(validateProjectResolution).mockResolvedValue({
+      validation: {
+        verdict: 'sufficient',
+        reason: 'The response is specific enough.',
+        missingInformation: [],
+        confidence: 1,
+      },
+      fingerprint: 'validation-test',
+      project: {} as never,
+      node: {} as never,
+    });
+    vi.mocked(resolutionHistoryMetadata).mockReturnValue({
+      verdict: 'sufficient',
+      overridden: false,
+    });
   });
 
   it('persists Save as context with user_confirmed_ai_response for non-web responses', async () => {
@@ -138,12 +159,12 @@ describe('POST /api/ask/research', () => {
       provenance: 'user_confirmed_ai_response',
       status: 'confirmed',
     }));
-    expect(answerQuestion).toHaveBeenCalledWith({
+    expect(answerQuestion).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'demo-user',
       nodeId: 'question_1',
-      answer: 'Non-web confirmed answer.',
+      answer: 'A long conversational response with reasoning that must not become the stored answer.',
       projectId: 'project_a',
-    });
+    }));
   });
 
   it('rejects Use as my answer when the stored response is not a conclusion', async () => {
@@ -192,7 +213,7 @@ describe('POST /api/ask/research', () => {
     expect(answerQuestion).not.toHaveBeenCalled();
     expect(confirmDecision).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       decisionNodeId: 'decision_1',
-      customDecision: 'Non-web confirmed answer.',
+      customDecision: 'A long decision discussion that must not become the stored decision.',
     }));
     expect(saveProject).toHaveBeenCalledWith('demo-user', updatedProject);
     expect(storage.saveAskResearch).toHaveBeenLastCalledWith('demo-user', expect.objectContaining({
@@ -264,9 +285,9 @@ describe('POST /api/ask/research', () => {
         nodes: [{ id: 'question_1', text: 'Question 1?', type: 'UNKNOWN', status: 'RESOLVED' }],
         history: [{
           question: 'Question 1?',
-          answer: 'Non-web confirmed answer.',
+          answer: pendingRecord.text,
           timestamp: '2026-08-20T10:02:00.000Z',
-          graph_diff_summary: 'Resolved "Question 1?" -> KNOWN: "Non-web confirmed answer."',
+          graph_diff_summary: `Resolved "Question 1?" -> KNOWN: "${pendingRecord.text}"`,
         }],
       },
     ] as never);

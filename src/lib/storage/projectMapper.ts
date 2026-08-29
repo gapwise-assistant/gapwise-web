@@ -130,6 +130,7 @@ export function projectToCollections(userId: string, project: Project): ProjectC
       answer: item.answer,
       graph_diff_summary: item.graph_diff_summary,
       nodeId: item.nodeId,
+      resolutionValidation: item.resolutionValidation,
       status: 'COMPLETED',
       createdAt: item.timestamp,
       updatedAt: item.timestamp,
@@ -239,6 +240,7 @@ export function collectionsToProject(collections: ProjectCollections, projectId?
         timestamp: conversation.createdAt,
         graph_diff_summary: conversation.graph_diff_summary,
         nodeId: conversation.nodeId,
+        resolutionValidation: conversation.resolutionValidation,
         projectId: context.id,
       })),
   };

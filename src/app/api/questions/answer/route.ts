@@ -6,6 +6,13 @@ import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { saveFeedback } from '@/lib/tools/feedbackTools';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
+import { listProjects } from '@/lib/storage';
+import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
+import {
+  resolutionHistoryMetadata,
+  validateProjectResolution,
+  validationWarningResponse,
+} from '@/lib/resolutions/resolutionValidation';
 
 export const runtime = 'nodejs';
 
@@ -14,6 +21,8 @@ const requestSchema = z.object({
   nodeId: z.string().trim().min(1),
   answer: z.string().trim().min(1).max(5000),
   projectId: z.string().trim().min(1).optional(),
+  validationOverride: z.boolean().optional(),
+  validationFingerprint: z.string().trim().min(1).max(128).optional(),
   feedback: z.object({
     id: z.string().trim().min(1).optional(),
     rating: z.enum(['helpful', 'irrelevant', 'already_answered', 'too_detailed', 'wrong_framing']),
@@ -29,6 +38,8 @@ const editRequestSchema = z.object({
   question: z.string().trim().min(1).max(5000),
   previousAnswer: z.string().trim().min(1).max(5000),
   answer: z.string().trim().min(1).max(5000),
+  validationOverride: z.boolean().optional(),
+  validationFingerprint: z.string().trim().min(1).max(128).optional(),
 });
 
 const reopenRequestSchema = z.object({
@@ -65,11 +76,57 @@ function latestResolutionHistoryEventId(
     .find((event) => event.type === type && (!nodeId || event.primaryNodeId === nodeId))?.id;
 }
 
+async function nodeIdForEditedQuestion(userId: string, projectId: string, nodeId: string | undefined, question: string): Promise<string | undefined> {
+  if (nodeId) return nodeId;
+  const project = (await listProjects(userId)).find((candidate) => candidate.id === projectId);
+  return project?.nodes.find((node) =>
+    node.text === question
+    && (node.type === 'UNKNOWN' || node.type === 'ASSUMPTION')
+    && node.status === 'RESOLVED'
+  )?.id;
+}
+
+async function validateResolutionSubmission(params: {
+  userId: string;
+  projectId: string;
+  nodeId: string;
+  proposedResponse: string;
+  validationOverride?: boolean;
+  validationFingerprint?: string;
+}): Promise<{ metadata: ReturnType<typeof resolutionHistoryMetadata>; fingerprint: string } | NextResponse> {
+  const result = await validateProjectResolution(params);
+  if (params.validationFingerprint && params.validationFingerprint !== result.fingerprint) {
+    return NextResponse.json(validationWarningResponse(result.validation, result.fingerprint), { status: 409 });
+  }
+  if (result.validation.verdict === 'warning' && !params.validationOverride) {
+    return NextResponse.json(validationWarningResponse(result.validation, result.fingerprint), { status: 409 });
+  }
+  return {
+    metadata: resolutionHistoryMetadata(result.validation, params),
+    fingerprint: result.fingerprint,
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
-    const result = await answerQuestion({ ...body, userId });
+    const validation = await validateResolutionSubmission({
+      userId,
+      projectId: body.projectId ?? GENERAL_CONTEXT_ID,
+      nodeId: body.nodeId,
+      proposedResponse: body.answer,
+      validationOverride: body.validationOverride,
+      validationFingerprint: body.validationFingerprint,
+    });
+    if (validation instanceof NextResponse) return validation;
+    const result = await answerQuestion({
+      userId,
+      nodeId: body.nodeId,
+      answer: body.answer,
+      projectId: body.projectId,
+      resolutionValidation: validation.metadata,
+    });
     if (result.projectId) {
       await scheduleAskSuggestionsRefresh({ userId, project: result.context });
     }
@@ -147,7 +204,27 @@ export async function PATCH(request: Request) {
     }
     const body = editRequestSchema.parse(rawBody);
     const userId = await requireAuthenticatedUserId(request, body.userId);
-    const result = await editAnsweredQuestion({ ...body, userId });
+    const validationNodeId = await nodeIdForEditedQuestion(userId, body.projectId, body.nodeId, body.question);
+    if (!validationNodeId) throw new StorageError('The answered question could not be identified for checking.', 'VALIDATION_ERROR');
+    const validation = await validateResolutionSubmission({
+      userId,
+      projectId: body.projectId,
+      nodeId: validationNodeId,
+      proposedResponse: body.answer,
+      validationOverride: body.validationOverride,
+      validationFingerprint: body.validationFingerprint,
+    });
+    if (validation instanceof NextResponse) return validation;
+    const result = await editAnsweredQuestion({
+      userId,
+      projectId: body.projectId,
+      historyTimestamp: body.historyTimestamp,
+      nodeId: body.nodeId,
+      question: body.question,
+      previousAnswer: body.previousAnswer,
+      answer: body.answer,
+      resolutionValidation: validation.metadata,
+    });
     await scheduleAskSuggestionsRefresh({ userId, project: result.context });
     try {
       await createProjectSnapshot({

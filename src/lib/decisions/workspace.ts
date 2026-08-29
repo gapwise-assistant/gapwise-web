@@ -8,6 +8,7 @@ import {
   ensureResolutionConsistency,
   writeSemanticEdge,
 } from '@/lib/graph/relationshipSemantics';
+import type { ResolutionValidationMetadata } from '@/types/resolutionValidation';
 
 export interface DecisionEvidence {
   id: string;
@@ -58,6 +59,7 @@ export interface ConfirmDecisionInput {
   reason?: string;
   resolveQuestionIds?: string[];
   historyTimestamp?: string;
+  resolutionValidation?: ResolutionValidationMetadata;
 }
 
 /**
@@ -377,6 +379,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
     existingHistory.graph_diff_summary = historySummary;
     existingHistory.nodeId = decision.id;
     existingHistory.projectId = updated.id;
+    if (input.resolutionValidation) existingHistory.resolutionValidation = input.resolutionValidation;
   } else {
     updated.history.push({
       question: previousText,
@@ -385,6 +388,7 @@ export function confirmDecision(project: Project, input: ConfirmDecisionInput): 
       graph_diff_summary: historySummary,
       nodeId: decision.id,
       projectId: updated.id,
+      resolutionValidation: input.resolutionValidation,
     });
   }
   updated.clarity_score = calculateClarityScore(updated);

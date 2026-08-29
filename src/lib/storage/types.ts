@@ -6,6 +6,7 @@ import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import type { ProjectSnapshot, ProjectSnapshotSummary } from '@/types/projectSnapshot';
 import type { GoogleIntegrationState } from '@/types/google';
+import type { ResolutionValidationMetadata } from '@/types/resolutionValidation';
 
 export interface BaseEntity {
   id: string;
@@ -91,6 +92,7 @@ export interface FirestoreConversation extends BaseEntity {
   answer: string;
   graph_diff_summary: string;
   nodeId?: string;
+  resolutionValidation?: ResolutionValidationMetadata;
 }
 
 export interface FirestoreRecommendation extends BaseEntity {

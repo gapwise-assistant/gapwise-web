@@ -31,6 +31,7 @@ import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAs
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { publicDemoDailyDemoLimit, publicDemoUsageExpired } from '@/lib/auth/publicDemo';
 import { StorageError } from '@/lib/storage/types';
+import { nextAvailableProjectTitle } from '@/lib/projects/projectNaming';
 
 export const QUICK_DEMO_TITLE = 'Prepare a neighborhood repair workshop';
 export const QUICK_DEMO_GOAL =
@@ -76,14 +77,6 @@ async function withPublicQuickDemoLock<T>(userId: string, operation: () => Promi
     release();
     if (publicQuickDemoLocks.get(userId) === current) publicQuickDemoLocks.delete(userId);
   }
-}
-
-function nextTitle(projects: Project[]): string {
-  const existing = new Set(projects.map((project) => project.title.trim().toLowerCase()));
-  if (!existing.has(QUICK_DEMO_TITLE.toLowerCase())) return QUICK_DEMO_TITLE;
-  let suffix = 2;
-  while (existing.has(`${QUICK_DEMO_TITLE} (${suffix})`.toLowerCase())) suffix += 1;
-  return `${QUICK_DEMO_TITLE} (${suffix})`;
 }
 
 function createdAtWithoutIdCollision(
@@ -373,7 +366,11 @@ export async function createQuickDemoForUser(params: {
 }): Promise<QuickDemoResult> {
   const storage = params.storage ?? getStorageProvider();
   const projects = await storage.listProjects(params.userId);
-  const title = params.titleOverride ?? nextTitle(projects);
+  const expectedProject = params.expectedProjectId
+    ? projects.find((project) => project.id === params.expectedProjectId)
+    : undefined;
+  const title = expectedProject?.title
+    ?? nextAvailableProjectTitle(params.titleOverride ?? QUICK_DEMO_TITLE, projects);
   const createdAt = createdAtWithoutIdCollision(
     title,
     projects,
@@ -570,8 +567,14 @@ async function createOrReuseQuickDemoForUserUnlocked(params: {
   }
 
   const reservedCreatedAt = usage?.quickDemoCreatedAt ?? new Date().toISOString();
+  const existingProjects = await storage.listProjects(params.userId);
+  const registeredProject = registeredProjectId
+    ? existingProjects.find((project) => project.id === registeredProjectId)
+    : undefined;
+  const reservedTitle = registeredProject?.title
+    ?? nextAvailableProjectTitle(QUICK_DEMO_TITLE, existingProjects);
   const reservationProject = createProjectFromInput({
-    name: QUICK_DEMO_TITLE,
+    name: reservedTitle,
     goal: QUICK_DEMO_GOAL,
     deadline: QUICK_DEMO_DEADLINE,
   }, reservedCreatedAt);
@@ -611,7 +614,7 @@ async function createOrReuseQuickDemoForUserUnlocked(params: {
     const result = await createQuickDemoForUser({
       userId: params.userId,
       storage,
-      titleOverride: QUICK_DEMO_TITLE,
+      titleOverride: reservedTitle,
       now: new Date(claim.createdAt),
       expectedProjectId: claim.projectId,
     });

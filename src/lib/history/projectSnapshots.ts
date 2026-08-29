@@ -29,6 +29,7 @@ import { StorageError } from '@/lib/storage/types';
 import { hashText } from '@/lib/context/ingestion';
 import { boundedId } from '@/lib/ids/boundedId';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
+import { nextAvailableProjectTitle } from '@/lib/projects/projectNaming';
 import {
   PROJECT_SNAPSHOT_MAX_BYTES,
   isProjectSnapshotV2,
@@ -152,15 +153,6 @@ function traceIdsForProject(userId: string, project: Project): string[] {
 
 function idFor(prefix: string, value: string, projectId: string): string {
   return boundedId(prefix, `${projectId}_${value}`);
-}
-
-function nextProjectTitle(baseTitle: string, projects: Project[]): string {
-  const base = baseTitle.trim().replace(/\s+\(\d+\)$/, '').trim() || 'Project';
-  const taken = new Set(projects.map((project) => project.title.trim().toLowerCase()));
-  if (!taken.has(base.toLowerCase())) return base;
-  let suffix = 2;
-  while (taken.has(`${base} (${suffix})`.toLowerCase())) suffix += 1;
-  return `${base} (${suffix})`;
 }
 
 function mapValue(value: string | undefined, maps: Map<string, string>[]): string | undefined {
@@ -682,7 +674,7 @@ export async function branchProjectFromSnapshot(params: {
     const existingBranch = projects.find((project) => project.branch?.sourceSnapshotId === snapshot.id && project.branch.requestId === params.clientRequestId);
     if (existingBranch) return { project: existingBranch, sourceSnapshot: snapshot };
   }
-  const title = nextProjectTitle(params.requestedTitle?.trim() || materialized.project.title, projects);
+  const title = nextAvailableProjectTitle(params.requestedTitle?.trim() || materialized.project.title, projects);
   const branchId = boundedId('project', `${snapshot.id}\u0000${title}`);
   if (projects.some((project) => project.id === branchId)) {
     throw new StorageError('Cannot create project branch: generated project ID is not unique.', 'VALIDATION_ERROR');

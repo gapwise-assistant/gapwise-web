@@ -30,6 +30,7 @@ import type { ClarityNode, EdgeType, Project, ProjectHistoryEvent } from '@/type
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
 import { boundedId } from '@/lib/ids/boundedId';
+import { nextAvailableProjectTitle } from '@/lib/projects/projectNaming';
 import {
   createJourneyAnchorBook,
   hasJourneyActionCompletionHistory,
@@ -1405,7 +1406,9 @@ export async function createHarborHistoryDemoForUser(params: {
 }): Promise<HarborHistoryDemoResult> {
   const storage = getStorageProvider();
   const createdAt = new Date().toISOString();
-  let project = createProjectFromInput(projectInput(HARBOR_HISTORY_DEMO_TITLE), createdAt);
+  const existingProjects = await storage.listProjects(params.userId);
+  const title = nextAvailableProjectTitle(HARBOR_HISTORY_DEMO_TITLE, existingProjects);
+  let project = createProjectFromInput(projectInput(title), createdAt);
   const created = true;
   const pdfs: HarborHistoryDemoResult['pdfs'] = [];
   const anchors = createJourneyAnchorBook();

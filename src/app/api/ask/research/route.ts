@@ -9,6 +9,11 @@ import { AskResearchEvidence } from '@/types/ask';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { confirmDecision } from '@/lib/decisions/workspace';
 import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
+import {
+  resolutionHistoryMetadata,
+  validateProjectResolution,
+  validationWarningResponse,
+} from '@/lib/resolutions/resolutionValidation';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +26,8 @@ const requestSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
   targetQuestionId: z.string().trim().min(1).optional(),
   targetDecisionId: z.string().trim().min(1).optional(),
+  validationOverride: z.boolean().optional(),
+  validationFingerprint: z.string().trim().min(1).max(128).optional(),
 });
 
 function stableId(value: string): string {
@@ -249,9 +256,24 @@ export async function POST(request: Request) {
     const retrievedAt = webSources.map((source) => source.retrievedAt).filter((value): value is string => Boolean(value)).sort()[0]
       ?? new Date().toISOString();
     const now = new Date().toISOString();
-    const text = (isQuestionAction || isDecisionAction)
-      ? assistantMessage.conclusion!.trim()
-      : body.text;
+    const text = body.text.trim();
+
+    let resolutionValidation: ReturnType<typeof resolutionHistoryMetadata> | undefined;
+    if (isQuestionAction || isDecisionAction) {
+      const validation = await validateProjectResolution({
+        userId,
+        projectId: chat.projectId ?? GENERAL_CONTEXT_ID,
+        nodeId: (isQuestionAction ? targetQuestionId : targetDecisionId)!,
+        proposedResponse: text,
+      });
+      if (body.validationFingerprint && body.validationFingerprint !== validation.fingerprint) {
+        return NextResponse.json(validationWarningResponse(validation.validation, validation.fingerprint), { status: 409 });
+      }
+      if (validation.validation.verdict === 'warning' && !body.validationOverride) {
+        return NextResponse.json(validationWarningResponse(validation.validation, validation.fingerprint), { status: 409 });
+      }
+      resolutionValidation = resolutionHistoryMetadata(validation.validation, body);
+    }
 
     const research: AskResearchEvidence = {
       id: existingUseAsAnswer?.id ?? stableId(`${body.assistantMessageId}:${text}:${body.action}`),
@@ -280,6 +302,7 @@ export async function POST(request: Request) {
           nodeId: targetQuestionId!,
           answer: text,
           projectId: chat.projectId,
+          resolutionValidation,
         });
         if (answerResult.projectId) {
           await scheduleAskSuggestionsRefresh({ userId, project: answerResult.context });
@@ -289,6 +312,7 @@ export async function POST(request: Request) {
         const updated = confirmDecision(target.project, {
           decisionNodeId: targetDecisionId!,
           customDecision: text,
+          resolutionValidation,
         });
         if (target.isGeneral) await saveGeneralContext(userId, updated);
         else {

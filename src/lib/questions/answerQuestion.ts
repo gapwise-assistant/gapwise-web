@@ -10,6 +10,7 @@ import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { writeSemanticEdge } from '@/lib/graph/relationshipSemantics';
 import { appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
+import type { ResolutionValidationMetadata } from '@/types/resolutionValidation';
 
 export interface AnswerQuestionResult {
   ownerType: 'project' | 'global';
@@ -31,6 +32,17 @@ export interface ReopenAnsweredQuestionResult {
   projectId?: string;
   context: Project;
   historyTimestamp: string;
+}
+
+function attachResolutionValidation(
+  project: Project,
+  nodeId: string,
+  metadata: ResolutionValidationMetadata,
+): void {
+  const canonicalNodeId = canonicalQuestionGroups(project)
+    .find((group) => group.nodeIds.includes(nodeId))?.canonical.id ?? nodeId;
+  const historyItem = [...project.history].reverse().find((entry) => entry.nodeId === canonicalNodeId);
+  if (historyItem) historyItem.resolutionValidation = metadata;
 }
 
 function assertAnswerable(project: Project, nodeId: string) {
@@ -62,6 +74,7 @@ export async function answerQuestion(params: {
   nodeId: string;
   answer: string;
   projectId?: string;
+  resolutionValidation?: ResolutionValidationMetadata;
 }): Promise<AnswerQuestionResult> {
   const projects = await listProjects(params.userId);
   const candidates = params.projectId
@@ -76,8 +89,9 @@ export async function answerQuestion(params: {
       project: resolved.context,
       route: '/api/questions/answer',
       label: 'Gap Agent after question answer',
-    });
-    const context = refreshed.project;
+      });
+      const context = refreshed.project;
+      if (params.resolutionValidation) attachResolutionValidation(context, params.nodeId, params.resolutionValidation);
     await saveProject(params.userId, context);
     return {
       ownerType: 'project',
@@ -99,6 +113,7 @@ export async function answerQuestion(params: {
         label: 'Gap Agent after general-context answer',
       });
       const context = refreshed.project;
+      if (params.resolutionValidation) attachResolutionValidation(context, params.nodeId, params.resolutionValidation);
       await saveGeneralContext(params.userId, context);
       return {
         ownerType: 'global',
@@ -140,6 +155,7 @@ export async function editAnsweredQuestion(params: {
   question: string;
   previousAnswer: string;
   answer: string;
+  resolutionValidation?: ResolutionValidationMetadata;
 }): Promise<EditAnsweredQuestionResult> {
   const projects = await listProjects(params.userId);
   const owner = projects.find((project) => project.id === params.projectId);
@@ -191,6 +207,7 @@ export async function editAnsweredQuestion(params: {
   }
   historyItem.projectId ??= owner.id;
   historyItem.answer = params.answer;
+  if (params.resolutionValidation) historyItem.resolutionValidation = params.resolutionValidation;
   updated.clarity_score = calculateClarityScore(updated);
   updated.active_question = selectTopGap(updated, DEFAULT_USER_PROFILE);
   updated.updated_at = now;

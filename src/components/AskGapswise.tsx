@@ -13,6 +13,8 @@ import { formatDateTime } from '@/lib/datetime/displayDateTime';
 import type { UserMemoryProfile } from '@/types/clarity';
 import type { AccessTier } from '@/lib/auth/server';
 import { Button } from '@/components/ui/Button';
+import { ResolutionValidationNotice } from '@/components/ResolutionValidationNotice';
+import type { ResolutionValidation } from '@/types/resolutionValidation';
 import {
   normalizeAskSuggestionsAssessment,
   pollAskSuggestions,
@@ -106,6 +108,11 @@ interface ResearchActionState {
   targetQuestionText?: string;
   targetDecisionId: string;
   targetDecisionText?: string;
+}
+
+interface ResearchValidationState {
+  validation: ResolutionValidation;
+  fingerprint: string;
 }
 
 function hiddenWorkspaceKey(userId: string, scope: AppScope): string {
@@ -330,6 +337,7 @@ export function AskGapswise({
   const [researchAction, setResearchAction] = useState<ResearchActionState | null>(null);
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchError, setResearchError] = useState('');
+  const [researchValidation, setResearchValidation] = useState<ResearchValidationState | null>(null);
   const [savedResearchMessageIds, setSavedResearchMessageIds] = useState<Set<string>>(new Set());
   const [savedContextMessageIds, setSavedContextMessageIds] = useState<Set<string>>(new Set());
   const [confirmedAnswerMessageIds, setConfirmedAnswerMessageIds] = useState<Set<string>>(new Set());
@@ -541,6 +549,7 @@ export function AskGapswise({
       ? message.resolvesQuestionId
       : undefined;
     setResearchError('');
+    setResearchValidation(null);
     setResearchAction({
       message,
       mode: actionMode,
@@ -591,10 +600,27 @@ export function AskGapswise({
           ...(scope.type === 'project' ? { projectId: scope.projectId } : {}),
           ...(researchAction.mode === 'use_as_answer' ? { targetQuestionId: researchAction.targetQuestionId } : {}),
           ...(researchAction.mode === 'use_as_decision' ? { targetDecisionId: researchAction.targetDecisionId } : {}),
+          ...(researchValidation?.fingerprint ? { validationFingerprint: researchValidation.fingerprint } : {}),
+          ...(researchValidation?.validation.verdict === 'warning' ? { validationOverride: true } : {}),
         }),
       });
       const researchBody = await researchResponse.json();
-      if (!researchResponse.ok) throw new Error(researchBody.error ?? 'Action could not be completed.');
+      if (!researchResponse.ok) {
+        if (
+          researchResponse.status === 409
+          && researchBody.code === 'RESOLUTION_VALIDATION_WARNING'
+          && researchBody.resolutionValidation
+          && typeof researchBody.validationFingerprint === 'string'
+        ) {
+          setResearchValidation({
+            validation: researchBody.resolutionValidation as ResolutionValidation,
+            fingerprint: researchBody.validationFingerprint,
+          });
+          return;
+        }
+        throw new Error(researchBody.error ?? 'Action could not be completed.');
+      }
+      setResearchValidation(null);
       if (researchAction.mode === 'save_as_context') {
         setSavedContextMessageIds((current) => new Set(current).add(researchAction.message.id));
       } else if (researchAction.mode === 'use_as_answer') {
@@ -1205,7 +1231,10 @@ export function AskGapswise({
                 Question to answer
                 <select
                   value={researchAction.targetQuestionId}
-                  onChange={(event) => setResearchAction((current) => current ? { ...current, targetQuestionId: event.target.value } : current)}
+                  onChange={(event) => {
+                    setResearchValidation(null);
+                    setResearchAction((current) => current ? { ...current, targetQuestionId: event.target.value } : current);
+                  }}
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal text-slate-200 outline-none focus:border-cyan-700"
                 >
                   <option value="">Select an open question</option>
@@ -1241,7 +1270,10 @@ export function AskGapswise({
               {researchAction.mode === 'save_as_context' ? 'Confirmed context statement' : researchAction.mode === 'use_as_decision' ? 'Your confirmed decision' : researchAction.mode === 'use_as_answer' ? 'Your confirmed conclusion' : 'Research statement'}
               <textarea
                 value={researchAction.text}
-                onChange={(event) => setResearchAction((current) => current ? { ...current, text: event.target.value } : current)}
+                onChange={(event) => {
+                  setResearchValidation(null);
+                  setResearchAction((current) => current ? { ...current, text: event.target.value } : current);
+                }}
                 placeholder={researchAction.mode === 'use_as_decision' ? 'For example: I will ask someone to act as a spotter.' : undefined}
                 rows={5}
                 className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-sm font-normal leading-relaxed text-slate-200 outline-none focus:border-cyan-700"
@@ -1263,13 +1295,26 @@ export function AskGapswise({
 
             {researchError && <p className="mt-4 text-sm text-rose-300" role="alert">{researchError}</p>}
 
+            {researchValidation && researchValidation.validation.verdict !== 'sufficient' && (
+              <div className="mt-4">
+                <ResolutionValidationNotice
+                  validation={researchValidation.validation}
+                  onEdit={() => setResearchValidation(null)}
+                  onSave={() => void submitResearchAction()}
+                  saving={researchBusy}
+                />
+              </div>
+            )}
+
             <div className="mt-5 flex flex-wrap justify-end gap-2">
               <Button variant="ghost" size="md" onClick={() => setResearchAction(null)} disabled={researchBusy}>
                 Cancel
               </Button>
-              <Button variant="primary" size="md" onClick={() => void submitResearchAction()} disabled={!researchAction.text.trim()} loading={researchBusy}>
-                {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Confirm decision' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
-              </Button>
+              {!researchValidation && (
+                <Button variant="primary" size="md" onClick={() => void submitResearchAction()} disabled={!researchAction.text.trim()} loading={researchBusy}>
+                  {researchAction.mode === 'save_as_context' ? 'Save as context' : researchAction.mode === 'use_as_decision' ? 'Confirm decision' : researchAction.mode === 'use_as_answer' ? 'Confirm answer' : 'Save research'}
+                </Button>
+              )}
             </div>
           </section>
         </div>

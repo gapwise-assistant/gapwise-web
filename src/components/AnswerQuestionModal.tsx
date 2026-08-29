@@ -5,6 +5,9 @@ import { CheckCircle2, ChevronRight, FileText, HelpCircle, Map, X } from 'lucide
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { Button } from '@/components/ui/Button';
 import type { QuestionWhyExplanation } from '@/lib/questions/whyQuestion';
+import { requestResolutionValidation, validationSubmission } from '@/lib/resolutions/validationClient';
+import { ResolutionValidationNotice } from '@/components/ResolutionValidationNotice';
+import type { ResolutionValidation, ResolutionValidationSubmission } from '@/types/resolutionValidation';
 
 export interface AnswerQuestionDecisionOption {
   id: string;
@@ -48,7 +51,8 @@ export interface AnswerQuestionTarget {
 
 interface AnswerQuestionModalProps {
   target: AnswerQuestionTarget;
-  onSubmit: (answer: string) => Promise<void>;
+  userId?: string;
+  onSubmit: (answer: string, validation?: ResolutionValidationSubmission) => Promise<void>;
   onDontKnow?: () => void;
   onNavigateToSource?: (sourceId: string) => void;
   onViewDecisionMap?: (nodeId: string) => void;
@@ -93,6 +97,7 @@ function presentationImpact(value: string): string {
 
 export function AnswerQuestionModal({
   target,
+  userId,
   onSubmit,
   onDontKnow,
   onNavigateToSource,
@@ -101,6 +106,8 @@ export function AnswerQuestionModal({
 }: AnswerQuestionModalProps) {
   const [answer, setAnswer] = useState(target.initialAnswer ?? '');
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationCheck, setValidationCheck] = useState<{ validation: ResolutionValidation; fingerprint: string } | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [openSections, setOpenSections] = useState<ResolveSection[]>([]);
@@ -115,6 +122,8 @@ export function AnswerQuestionModal({
     setAnswer(target.initialAnswer ?? '');
     setError('');
     setSaved(false);
+    setIsValidating(false);
+    setValidationCheck(null);
     setOpenSections([]);
     setExpandedSourceIds([]);
     const recommendedOptionId = target.decisionSupport?.recommendation?.optionId ?? target.decisionSupport?.options[0]?.id ?? '';
@@ -145,20 +154,61 @@ export function AnswerQuestionModal({
     onClose();
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const saveAnswer = async (submission?: ResolutionValidationSubmission) => {
     if (!answer.trim() || isSaving) return;
     setError('');
     setIsSaving(true);
     try {
-      await onSubmit(answer.trim());
+      await onSubmit(answer.trim(), submission);
       setSaved(true);
     } catch (caught) {
+      setValidationCheck(null);
       setError(caught instanceof Error ? caught.message : 'The answer could not be saved.');
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!answer.trim() || isSaving || isValidating || validationCheck) return;
+    if (!userId || !target.nodeId) {
+      await saveAnswer();
+      return;
+    }
+
+    setError('');
+    setIsValidating(true);
+    try {
+      const result = await requestResolutionValidation({
+        userId,
+        projectId: target.projectId ?? '__general_context__',
+        nodeId: target.nodeId,
+        proposedResponse: answer.trim(),
+      });
+      setValidationCheck(result);
+      if (result.validation.verdict === 'sufficient') {
+        await saveAnswer(validationSubmission(result.fingerprint));
+      }
+    } catch {
+      setValidationCheck({
+        validation: {
+          verdict: 'unavailable',
+          reason: 'Gapwise could not check this response right now.',
+          missingInformation: [],
+          confidence: 0,
+        },
+        fingerprint: '',
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const saveAnyway = () => saveAnswer(validationSubmission(
+    validationCheck?.fingerprint,
+    validationCheck?.validation.verdict === 'warning',
+  ));
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/75 p-2 backdrop-blur-sm sm:items-center sm:p-4">
@@ -297,13 +347,29 @@ export function AnswerQuestionModal({
               <textarea
                 id="question-answer"
                 value={answer}
-                onChange={(event) => setAnswer(event.target.value)}
+                onChange={(event) => {
+                  setAnswer(event.target.value);
+                  setValidationCheck(null);
+                }}
                 rows={4}
                 autoFocus
                 placeholder={target.intent === 'correct' ? 'Explain what should replace this assumption.' : 'Type your answer...'}
                 className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600"
               />
             </section>
+
+            {isValidating && (
+              <p className="text-xs text-slate-400" role="status">Checking whether this response resolves the item…</p>
+            )}
+
+            {validationCheck && validationCheck.validation.verdict !== 'sufficient' && (
+              <ResolutionValidationNotice
+                validation={validationCheck.validation}
+                onEdit={() => setValidationCheck(null)}
+                onSave={() => void saveAnyway()}
+                saving={isSaving}
+              />
+            )}
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               {onDontKnow && <Button variant="ghost" onClick={onDontKnow} icon={<HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />}>I don&apos;t know yet</Button>}
@@ -312,7 +378,7 @@ export function AnswerQuestionModal({
             {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}
 
             <div className="flex justify-end border-t border-slate-800 pt-4">
-              <Button type="submit" variant="primary" loading={isSaving} disabled={!answer.trim()}>
+              <Button type="submit" variant="primary" loading={isSaving || isValidating} disabled={!answer.trim() || Boolean(validationCheck)}>
                 Save answer
               </Button>
             </div>

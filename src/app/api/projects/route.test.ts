@@ -95,6 +95,27 @@ describe('/api/projects', () => {
     ]);
   });
 
+  it('does not count an archived workspace when choosing a new workspace title', async () => {
+    const archived = { ...createGoldenDemoProject(), title: 'Find a new job', status: 'archived' as const };
+    vi.mocked(saveProject).mockImplementation(async (_userId, project) => project);
+    vi.mocked(setAppScope).mockResolvedValue(undefined);
+    vi.mocked(listProjects).mockResolvedValue([archived]);
+
+    const response = await POST(
+      jsonRequest({
+        userId: 'demo-user',
+        name: 'Find a new job',
+        goal: 'Find a higher-paying backend/AI role by November.',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(saveProject).toHaveBeenCalledWith(
+      'demo-user',
+      expect.objectContaining({ title: 'Find a new job' }),
+    );
+  });
+
   it('persists the optional initial context and leaves an empty deadline unset', async () => {
     const previousDemoMode = process.env.GAPSWISE_DEMO_MODE;
     process.env.GAPSWISE_DEMO_MODE = 'true';

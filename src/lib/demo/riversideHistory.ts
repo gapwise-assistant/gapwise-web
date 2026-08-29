@@ -28,6 +28,7 @@ import type { EdgeType, Project, ProjectHistoryEvent } from '@/types/clarity';
 import type { AskChatMessage, AskChatSession, AskContextProposal, AskResult } from '@/types/ask';
 import { normalizeAskContextProposals } from '@/types/ask';
 import { boundedId } from '@/lib/ids/boundedId';
+import { nextAvailableProjectTitle } from '@/lib/projects/projectNaming';
 import {
   createJourneyAnchorBook,
   hasJourneyOutcomeHistory,
@@ -762,7 +763,9 @@ export interface RiversideHistoryDemoResult {
 export async function createRiversideHistoryDemoForUser(params: { userId: string; fresh?: boolean }): Promise<RiversideHistoryDemoResult> {
   const storage = getStorageProvider();
   const createdAt = new Date().toISOString();
-  let project = createProjectFromInput(projectInput(RIVERSIDE_HISTORY_DEMO_TITLE), createdAt);
+  const existingProjects = await storage.listProjects(params.userId);
+  const title = nextAvailableProjectTitle(RIVERSIDE_HISTORY_DEMO_TITLE, existingProjects);
+  let project = createProjectFromInput(projectInput(title), createdAt);
   const anchors = createJourneyAnchorBook();
   const recorder = await startDeveloperGenerationRun({ userId: params.userId, projectId: project.id, generator: 'Riverside history demo' });
   try {

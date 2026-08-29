@@ -9,10 +9,14 @@ import { normalizeQuestionGrammar, resolveQuestionReferences } from '@/lib/quest
 import { relevantSourceExcerpt } from '@/lib/questions/whyQuestion';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
 import { Button } from '@/components/ui/Button';
+import { requestResolutionValidation, validationSubmission } from '@/lib/resolutions/validationClient';
+import { ResolutionValidationNotice } from '@/components/ResolutionValidationNotice';
+import type { ResolutionValidation, ResolutionValidationSubmission } from '@/types/resolutionValidation';
 
 interface DecisionWorkspaceProps {
   project: Project;
   targetNodeId: string;
+  userId?: string;
   initialOutcome?: string;
   historyTimestamp?: string;
   onClose: () => void;
@@ -59,6 +63,7 @@ function DecisionHelp({
 export function DecisionWorkspace({
   project,
   targetNodeId,
+  userId,
   initialOutcome,
   historyTimestamp,
   onClose,
@@ -73,6 +78,8 @@ export function DecisionWorkspace({
   const [customDecision, setCustomDecision] = useState(initialRecordedOutcome);
   const [reason, setReason] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationCheck, setValidationCheck] = useState<{ validation: ResolutionValidation; fingerprint: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
   const [showChangeFactors, setShowChangeFactors] = useState(false);
@@ -91,6 +98,8 @@ export function DecisionWorkspace({
     setCustomDecision(initialRecordedOutcome);
     setReason('');
     setIsSaving(false);
+    setIsValidating(false);
+    setValidationCheck(null);
     setSaved(false);
     setError('');
     setShowChangeFactors(false);
@@ -135,7 +144,10 @@ export function DecisionWorkspace({
     onClose();
   };
 
-  const handleConfirm = async () => {
+  const saveDecision = async (
+    submission?: ResolutionValidationSubmission,
+    check: { validation: ResolutionValidation; fingerprint: string } | null = validationCheck,
+  ) => {
     if (!finalDecision || isSaving) return;
     setError('');
     setIsSaving(true);
@@ -145,15 +157,64 @@ export function DecisionWorkspace({
         customDecision,
         reason,
         historyTimestamp,
+        resolutionValidation: check
+          ? {
+              verdict: check.validation.verdict,
+              overridden: Boolean(submission?.validationOverride && check.validation.verdict === 'warning'),
+              reason: check.validation.reason,
+              confidence: check.validation.confidence,
+            }
+          : undefined,
       });
       await onConfirm(updated);
       setSaved(true);
     } catch (caught) {
+      setValidationCheck(null);
       setError(caught instanceof Error ? caught.message : 'The decision could not be saved.');
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleConfirm = async () => {
+    if (!finalDecision || isSaving || isValidating || validationCheck) return;
+    if (!userId) {
+      await saveDecision();
+      return;
+    }
+
+    setError('');
+    setIsValidating(true);
+    try {
+      const result = await requestResolutionValidation({
+        userId,
+        projectId: project.id,
+        nodeId: model.decision.id,
+        proposedResponse: finalDecision,
+      });
+      setValidationCheck(result);
+      if (result.validation.verdict === 'sufficient') {
+        await saveDecision(validationSubmission(result.fingerprint), result);
+      }
+    } catch {
+      setValidationCheck({
+        validation: {
+          verdict: 'unavailable',
+          reason: 'Gapwise could not check this response right now.',
+          missingInformation: [],
+          confidence: 0,
+        },
+        fingerprint: '',
+      });
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  const saveAnyway = () => saveDecision(validationSubmission(
+    validationCheck?.fingerprint,
+    validationCheck?.validation.verdict === 'warning',
+  ));
 
   const startDecisionChat = () => {
     onStartChat?.(
@@ -301,7 +362,7 @@ export function DecisionWorkspace({
               <h3 className="text-sm font-extrabold text-slate-100">{isResolved ? 'Edit previous decision' : 'Your decision'}</h3>
               <p className="mt-1 text-xs text-slate-500">{isResolved ? 'You are editing a decision already saved in this workspace. Enter the updated wording only if the decision has changed.' : 'Record what you decided and why.'}</p>
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="custom-decision">{isResolved ? 'Updated decision' : 'Your decision'}</label>
-              <textarea id="custom-decision" value={customDecision} onChange={(event) => setCustomDecision(event.target.value)} rows={3} placeholder={isResolved ? 'Enter the updated decision' : 'Write your decision…'} className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
+              <textarea id="custom-decision" value={customDecision} onChange={(event) => { setCustomDecision(event.target.value); setValidationCheck(null); }} rows={3} placeholder={isResolved ? 'Enter the updated decision' : 'Write your decision…'} className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               <label className="mt-4 block text-xs font-bold text-slate-300" htmlFor="decision-reason">Reason <span className="font-normal text-slate-500">(optional)</span></label>
               <input id="decision-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Add a short reason" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600" />
               {(!isResolved || !onDontKnow) && (
@@ -314,13 +375,26 @@ export function DecisionWorkspace({
                   I don&apos;t know yet
                 </Button>
               )}
+              {isValidating && (
+                <p className="mt-3 text-xs text-slate-400" role="status">Checking whether this decision is specific enough…</p>
+              )}
+              {validationCheck && validationCheck.validation.verdict !== 'sufficient' && (
+                <div className="mt-4">
+                  <ResolutionValidationNotice
+                    validation={validationCheck.validation}
+                    onEdit={() => setValidationCheck(null)}
+                    onSave={() => void saveAnyway()}
+                    saving={isSaving}
+                  />
+                </div>
+              )}
               {error && <p className="mt-3 text-xs text-rose-300" role="alert">{error}</p>}
               <Button
                 variant="primary"
                 size="md"
                 className="mt-4 w-full"
-                loading={isSaving}
-                disabled={!finalDecision}
+                loading={isSaving || isValidating}
+                disabled={!finalDecision || Boolean(validationCheck)}
                 onClick={() => void handleConfirm()}
               >
                 {isResolved ? 'Update decision' : 'Make decision'}

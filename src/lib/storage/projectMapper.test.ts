@@ -35,6 +35,12 @@ describe('project storage mapper', () => {
       graph_diff_summary: 'Resolved the pilot scope.',
       nodeId: 'decision_round_trip',
       projectId: project.id,
+      resolutionValidation: {
+        verdict: 'warning',
+        overridden: true,
+        reason: 'The outcome was saved after the user reviewed the warning.',
+        confidence: 0.42,
+      },
     }];
 
     const collections = projectToCollections('mapper-user', project);
@@ -51,6 +57,9 @@ describe('project storage mapper', () => {
       reconciliation_classification: 'EQUIVALENT',
     });
     expect(loadedProject?.history).toEqual(project.history);
+    expect(collections.conversations[0]).toMatchObject({
+      resolutionValidation: project.history[0].resolutionValidation,
+    });
 
     const generalCollections = generalContextToCollections('mapper-user', project);
     const loadedGeneralContext = collectionsToGeneralContext(generalCollections);

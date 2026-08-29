@@ -13,6 +13,7 @@ import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { resolveScope } from '@/lib/scope/projectScope';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
 import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
+import { nextAvailableProjectTitle } from '@/lib/projects/projectNaming';
 
 export const runtime = 'nodejs';
 
@@ -95,7 +96,11 @@ export async function POST(request: NextRequest) {
     const body = createProjectSchema.parse(await request.json());
     const userId = await requireAuthenticatedUserId(request, body.userId);
     const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
-    let project = createProjectFromInput(body);
+    const existingProjects = await listProjects(userId);
+    let project = createProjectFromInput({
+      ...body,
+      name: nextAvailableProjectTitle(body.name, existingProjects),
+    });
     if (body.description) {
       // Persist the goal-only state first so the creation snapshot is a true
       // starting point, then process the optional initial context as its own

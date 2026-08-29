@@ -13,6 +13,7 @@ import { focusAssessmentCacheId, focusProjectStateVersion } from '@/lib/focus/fo
 import { overviewProjectStateVersion, projectOverviewAssessmentCacheId } from '@/lib/overview/projectOverviewCache';
 import { buildContextPack } from '@/lib/retrieval/contextPack';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
+import { createProjectFromInput } from '@/lib/projects/createProject';
 
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 const originalStorageMode = process.env.USE_FIRESTORE;
@@ -134,6 +135,25 @@ describe('quick Gapwise demo', () => {
     expect(await storage.listProjects('quick-demo-user')).toHaveLength(2);
     expect(first.project.historyEvents).toHaveLength(2);
     expect(second.project.historyEvents).toHaveLength(2);
+  });
+
+  it('ignores archived workspaces when choosing the Quick Demo title', async () => {
+    const storage = await isolatedStorage();
+    const archived = createProjectFromInput({ name: QUICK_DEMO_TITLE, goal: 'An archived workshop.' }, '2026-08-28T14:00:00.000Z');
+    archived.status = 'archived';
+    await storage.saveProject('quick-demo-user', archived);
+
+    const result = await createQuickDemoForUser({
+      userId: 'quick-demo-user',
+      storage,
+      now: new Date('2026-08-28T15:00:00.000Z'),
+    });
+
+    expect(result.project.title).toBe(QUICK_DEMO_TITLE);
+    expect((await storage.listProjects('quick-demo-user')).find((project) => project.id === archived.id)).toMatchObject({
+      title: QUICK_DEMO_TITLE,
+      status: 'archived',
+    });
   });
 
   it('atomically registers one public Quick Demo when creation is requested concurrently', async () => {

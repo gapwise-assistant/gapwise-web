@@ -367,6 +367,8 @@ export interface ProjectHistoryEvent {
   focusAfter?: ProjectHistoryFocus;
 }
 
+export type { ResolutionValidationMetadata } from '@/types/resolutionValidation';
+
 export interface GapGuidance {
   focus: string;
   whyNow: string;
@@ -422,6 +424,7 @@ export interface Project {
     /** Stable identity for the canonical question this answer resolves. */
     nodeId?: string;
     projectId?: string;
+    resolutionValidation?: import('@/types/resolutionValidation').ResolutionValidationMetadata;
   }[];
   historyEvents?: ProjectHistoryEvent[];
   branch?: {
