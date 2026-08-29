@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { getStorageProvider } from '@/lib/storage';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { assertPublicDemoProject, isPublicDemoPrincipal } from '@/lib/auth/publicDemo';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { AskResearchEvidence } from '@/types/ask';
 
@@ -84,11 +85,18 @@ function chatMatchesScope(
 
 export async function GET(request: Request) {
   try {
-    const userId = await requireAuthenticatedUserId(request, new URL(request.url).searchParams.get('userId') ?? undefined);
     const searchParams = new URL(request.url).searchParams;
     const projectId = searchParams.get('projectId')?.trim() || undefined;
     const chatId = searchParams.get('chatId')?.trim() || undefined;
-    const storage = getStorageProvider();
+    const principal = await requireAuthenticatedPrincipal(request, searchParams.get('userId') ?? undefined);
+    const userId = principal.uid;
+    const storage = isPublicDemoPrincipal(principal)
+      ? requireFirestoreStorage()
+      : getStorageProvider();
+    if (isPublicDemoPrincipal(principal)) {
+      const usage = await storage.getPublicDemoUsage(userId);
+      assertPublicDemoProject(principal, projectId, usage);
+    }
     const [allChats, allMessages, allResearch] = await Promise.all([
       storage.getAskChats(userId),
       storage.getAskMessages(userId),

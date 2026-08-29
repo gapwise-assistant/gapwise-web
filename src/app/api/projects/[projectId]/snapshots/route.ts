@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { requireFirestoreStorage } from '@/lib/storage';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { assertPublicDemoProject, isPublicDemoPrincipal } from '@/lib/auth/publicDemo';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 
@@ -52,7 +53,7 @@ function errorResponse(error: unknown) {
   }, { status: statusFor(error) });
 }
 
-async function assertProjectAccess(userId: string, projectId: string, storage = requireFirestoreStorage()): Promise<void> {
+async function assertProjectAccess(userId: string, projectId: string, storage: ReturnType<typeof getStorageProvider>): Promise<void> {
   const project = await storage.getProject(userId, projectId);
   if (!project) throw new StorageError('The workspace does not exist.', 'NOT_FOUND');
 }
@@ -63,8 +64,13 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
-    const userId = await requireAuthenticatedUserId(request, new URL(request.url).searchParams.get('userId') ?? undefined);
-    const storage = requireFirestoreStorage();
+    const principal = await requireAuthenticatedPrincipal(request, new URL(request.url).searchParams.get('userId') ?? undefined);
+    const userId = principal.uid;
+    const storage = isPublicDemoPrincipal(principal)
+      ? requireFirestoreStorage()
+      : getStorageProvider();
+    const usage = isPublicDemoPrincipal(principal) ? await storage.getPublicDemoUsage(userId) : null;
+    assertPublicDemoProject(principal, projectId, usage);
     await assertProjectAccess(userId, projectId, storage);
     const snapshots = await storage.listProjectSnapshots(userId, projectId);
     return NextResponse.json({ snapshots });

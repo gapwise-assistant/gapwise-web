@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
 import { isDemoMode } from '@/lib/runtime/demoMode';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { isPublicDemoPrincipal, loadPublicDemoProject } from '@/lib/auth/publicDemo';
+import { requireFirestoreStorage } from '@/lib/storage';
+import { StorageError } from '@/lib/storage/types';
 import {
   localQuestionSuggestions,
   localQuestionPresentations,
@@ -69,6 +72,35 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid question planning request.', issues: normalized.error.issues }, { status: 400 });
   }
 
+  let principal: Awaited<ReturnType<typeof requireAuthenticatedPrincipal>>;
+  try {
+    principal = await requireAuthenticatedPrincipal(request, normalized.data.userId);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
+  }
+
+  const questions = normalized.data.questions;
+  if (isPublicDemoPrincipal(principal)) {
+    try {
+      const storage = requireFirestoreStorage();
+      await loadPublicDemoProject(principal, storage, normalized.data.projectId);
+      return NextResponse.json({
+        suggestions: localQuestionSuggestions(questions),
+        presentations: localQuestionPresentations(questions),
+        generatedBy: 'public-demo-local',
+      });
+    } catch (error) {
+      const status = error instanceof StorageError
+        ? error.code === 'NOT_FOUND'
+          ? 404
+          : error.code === 'PERMISSION_DENIED'
+            ? 403
+            : 503
+        : 503;
+      return NextResponse.json({ error: 'Today question suggestions are unavailable.' }, { status });
+    }
+  }
+
   let userId: string;
   try {
     userId = await requireAuthenticatedUserId(request, normalized.data.userId);
@@ -76,7 +108,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
   }
 
-  const questions = normalized.data.questions;
   if (isDemoMode()) {
     return NextResponse.json({
       suggestions: localQuestionSuggestions(questions),

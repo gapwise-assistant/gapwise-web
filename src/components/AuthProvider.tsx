@@ -1,7 +1,8 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { AuthUser, getFirebaseAuth, signOutFromGoogle, subscribeToAuth } from '@/lib/auth/client';
+import { AuthUser, authFetch, getFirebaseAuth, signOutFromGoogle, subscribeToAuth } from '@/lib/auth/client';
+import type { AccessTier } from '@/lib/auth/server';
 import { getRedirectResult } from 'firebase/auth';
 
 interface AuthContextValue {
@@ -9,6 +10,8 @@ interface AuthContextValue {
   userId: string | null;
   demoMode: boolean;
   localAuth: boolean;
+  accessTier: AccessTier | null;
+  publicDemoMessagesRemaining: number | null;
   isReady: boolean;
   error: string;
   signOut: () => Promise<void>;
@@ -20,6 +23,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthUser | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [localAuth, setLocalAuth] = useState(false);
+  const [accessTier, setAccessTier] = useState<AccessTier | null>(null);
+  const [publicDemoMessagesRemaining, setPublicDemoMessagesRemaining] = useState<number | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState('');
 
@@ -37,7 +42,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (runtime.demoMode === true || runtime.localAuth === true) {
           setDemoMode(runtime.demoMode === true);
           setLocalAuth(runtime.localAuth === true);
-          setUser({ uid: 'demo-user', displayName: runtime.localAuth ? 'Local development user' : 'Local demo', email: '' });
+          setAccessTier('local_development');
+          setPublicDemoMessagesRemaining(null);
+          setUser({ uid: 'demo-user', displayName: runtime.localAuth ? 'Local development user' : 'Local demo', email: '', isAnonymous: false });
           setIsReady(true);
           return;
         }
@@ -56,7 +63,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             unsubscribe = subscribeToAuth((nextUser) => {
               if (disposed) return;
               setUser(nextUser);
-              setIsReady(true);
+              if (!nextUser) {
+                setAccessTier(null);
+                setPublicDemoMessagesRemaining(null);
+                setIsReady(true);
+                return;
+              }
+              setIsReady(false);
+              void authFetch('/api/auth/access')
+                .then(async (response) => {
+                  if (!response.ok) throw new Error('Access configuration could not be loaded.');
+                  return response.json() as Promise<{ accessTier?: AccessTier; publicDemoMessagesRemaining?: number | null }>;
+                })
+                .then((access) => {
+                  if (disposed) return;
+                  const tier = access.accessTier ?? (nextUser.isAnonymous ? 'public_demo' : 'public_demo');
+                  setAccessTier(tier);
+                  setPublicDemoMessagesRemaining(typeof access.publicDemoMessagesRemaining === 'number' ? access.publicDemoMessagesRemaining : null);
+                  setIsReady(true);
+                })
+                .catch(() => {
+                  if (disposed) return;
+                  // Fail closed in the UI; server routes remain authoritative.
+                  setAccessTier(nextUser.isAnonymous ? 'public_demo' : 'public_demo');
+                  setPublicDemoMessagesRemaining(3);
+                  setIsReady(true);
+                });
             });
           });
       })
@@ -77,12 +109,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     userId: user?.uid ?? null,
     demoMode,
     localAuth,
+    accessTier,
+    publicDemoMessagesRemaining,
     isReady,
     error,
     signOut: async () => {
       if (!demoMode && !localAuth) await signOutFromGoogle();
     },
-  }), [demoMode, error, isReady, localAuth, user]);
+  }), [accessTier, demoMode, error, isReady, localAuth, publicDemoMessagesRemaining, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

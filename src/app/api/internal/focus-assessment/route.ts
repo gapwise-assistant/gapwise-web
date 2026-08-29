@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { isPublicDemoPrincipal, loadPublicDemoProject } from '@/lib/auth/publicDemo';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
 import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
-import { getStorageProvider, loadProjectForScope } from '@/lib/storage';
+import { getStorageProvider, loadProjectForScope, requireFirestoreStorage } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
 
@@ -51,8 +52,12 @@ export async function GET(request: Request) {
   });
   if (!parsed.success) return NextResponse.json({ error: 'Invalid focus assessment request.' }, { status: 400 });
   try {
-    const userId = await requireAuthenticatedUserId(request, parsed.data.userId);
-    const { project } = await loadProjectForScope(userId, parsed.data.projectId);
+    const principal = await requireAuthenticatedPrincipal(request, parsed.data.userId);
+    const userId = principal.uid;
+    const storage = isPublicDemoPrincipal(principal) ? requireFirestoreStorage() : getStorageProvider();
+    const project = isPublicDemoPrincipal(principal)
+      ? await loadPublicDemoProject(principal, storage, parsed.data.projectId)
+      : (await loadProjectForScope(userId, parsed.data.projectId)).project;
     const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
     const durableMemories = await loadDurableMemories(userId, profile);
     const contextPack = await buildContextPackForUser({
@@ -66,7 +71,7 @@ export async function GET(request: Request) {
     });
     const projectStateVersion = await focusProjectStateVersion(project, contextPack, profile);
     const cacheId = focusAssessmentCacheId(project.id, projectStateVersion);
-    const cached = await getStorageProvider().getFocusAssessment(userId, cacheId);
+    const cached = await storage.getFocusAssessment(userId, cacheId);
     return NextResponse.json({
       focusAssessment: cached?.assessment
         ? normalizeFocusAssessment(project, cached.assessment)
@@ -74,7 +79,15 @@ export async function GET(request: Request) {
       cached: Boolean(cached),
     });
   } catch (error) {
-    const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED' ? 403 : 400;
+    const status = error instanceof StorageError
+      ? error.code === 'UNAUTHENTICATED'
+        ? 401
+        : error.code === 'PERMISSION_DENIED'
+          ? 403
+          : error.code === 'NOT_FOUND'
+            ? 404
+            : 503
+      : 503;
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Focus assessment lookup failed.' }, { status });
   }
 }

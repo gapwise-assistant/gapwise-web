@@ -14,7 +14,7 @@ interface ProjectSnapshotModalProps {
   error?: string;
   onRetry?: () => void;
   onClose: () => void;
-  onBranch: () => void;
+  onBranch?: () => void;
 }
 
 function countNodes(project: MaterializedProjectSnapshot['project'], type: string, status?: string): number {
@@ -158,9 +158,11 @@ export function ProjectSnapshotModal({ snapshot: materialized, summary, isLoadin
           {error && onRetry && (
             <button type="button" onClick={onRetry} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-bold text-slate-300 hover:border-slate-500 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80">Retry</button>
           )}
-          <button type="button" onClick={onBranch} disabled={isBranching || isLoading || !materialized} className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-wait disabled:opacity-60">
-            {isBranching ? 'Creating workspace…' : 'Create a new workspace from here'}
-          </button>
+          {onBranch && (
+            <button type="button" onClick={onBranch} disabled={isBranching || isLoading || !materialized} className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 disabled:cursor-wait disabled:opacity-60">
+              {isBranching ? 'Creating workspace…' : 'Create a new workspace from here'}
+            </button>
+          )}
         </footer>
       </section>
     </div>

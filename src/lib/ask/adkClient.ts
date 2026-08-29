@@ -1351,6 +1351,58 @@ export function isFocusQuestion(message: string): boolean {
   ].some((phrase) => normalized.includes(phrase));
 }
 
+/**
+ * Public-demo Ask intentionally bypasses routing, research, Context Agent,
+ * focus generation, and project mutation. It is a bounded direct Partner
+ * turn over the registered Quick Demo workspace.
+ */
+export async function askPublicDemo(params: {
+  userId: string;
+  message: string;
+  project: import('@/types/clarity').Project;
+  sessionId?: string;
+  chatId?: string;
+}): Promise<AskResult> {
+  assertExternalServicesAllowed('Google ADK / Gemini');
+  const sessionId = params.sessionId ?? await createSession(params.userId, params.project.id, params.chatId);
+  const nodes = params.project.nodes
+    .filter((node) => node.status !== 'DEPRECATED')
+    .sort((left, right) => right.impact - left.impact)
+    .slice(0, 12)
+    .map((node) => ({
+      type: node.type,
+      status: node.status,
+      text: compactContextText(node.text, 320),
+      ...(node.decision_outcome ? { outcome: compactContextText(node.decision_outcome, 320) } : {}),
+    }));
+  const prompt = [
+    'PRELOADED GAPWISE CONTEXT PACK',
+    'PUBLIC GAPWISE DEMO PARTNER TURN',
+    'Answer only about the supplied demo workspace. Do not search the web, route to another agent, invent project facts, propose canonical updates, or suggest saving context.',
+    'Keep the answer concise and conversational, within approximately 512 output tokens. You may ask one useful follow-up question.',
+    `Workspace goal: ${compactContextText(params.project.goal, 500)}`,
+    `Workspace state:\n${JSON.stringify(nodes)}`,
+    `User message:\n${params.message}`,
+    structuredAskResponseInstructions([]),
+  ].join('\n\n');
+  const turn = await runAdkTurn(params.userId, sessionId, prompt, true);
+  const answer = turn.response?.answer ?? turn.answer;
+  return {
+    answer,
+    outcome: turn.response?.outcome ?? 'exploration',
+    sessionId,
+    sources: [],
+    promptUsed: prompt,
+    contextUsed: {
+      projectTitle: params.project.title,
+      items: nodes.map((node) => `${node.type}: ${node.text}`),
+    },
+    contextProposals: [],
+    proposals: [],
+    execution: { route: 'internal_context', agent: 'Partner Agent', toolCalls: ['ADK /run_sse'] },
+  };
+}
+
 export type AskRoutingDecision = AskRoute;
 
 function isRefusal(answer: string): boolean {

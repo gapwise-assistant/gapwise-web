@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createOrReuseQuickDemoForUser,
   createQuickDemoForUser,
   QUICK_DEMO_GOAL,
   QUICK_DEMO_TITLE,
@@ -16,6 +17,7 @@ import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 const originalStorageMode = process.env.USE_FIRESTORE;
 const originalStoragePath = process.env.GAPSWISE_MOCK_STORAGE_PATH;
+const originalDailyDemoLimit = process.env.GAPSWISE_PUBLIC_DAILY_DEMO_LIMIT;
 const temporaryDirectories: string[] = [];
 
 function restoreEnv(key: string, value: string | undefined): void {
@@ -28,6 +30,7 @@ afterEach(async () => {
   restoreEnv('GAPSWISE_DEMO_MODE', originalDemoMode);
   restoreEnv('USE_FIRESTORE', originalStorageMode);
   restoreEnv('GAPSWISE_MOCK_STORAGE_PATH', originalStoragePath);
+  restoreEnv('GAPSWISE_PUBLIC_DAILY_DEMO_LIMIT', originalDailyDemoLimit);
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -36,6 +39,7 @@ async function isolatedStorage() {
   temporaryDirectories.push(directory);
   process.env.GAPSWISE_DEMO_MODE = 'true';
   process.env.USE_FIRESTORE = 'false';
+  process.env.GAPSWISE_PUBLIC_DAILY_DEMO_LIMIT = '50';
   process.env.GAPSWISE_MOCK_STORAGE_PATH = path.join(directory, 'storage.json');
   resetStorageProviderForTests();
   return getStorageProvider();
@@ -130,5 +134,19 @@ describe('quick Gapwise demo', () => {
     expect(await storage.listProjects('quick-demo-user')).toHaveLength(2);
     expect(first.project.historyEvents).toHaveLength(2);
     expect(second.project.historyEvents).toHaveLength(2);
+  });
+
+  it('atomically registers one public Quick Demo when creation is requested concurrently', async () => {
+    const storage = await isolatedStorage();
+    const [first, second] = await Promise.all([
+      createOrReuseQuickDemoForUser({ userId: 'public-demo-user', storage }),
+      createOrReuseQuickDemoForUser({ userId: 'public-demo-user', storage }),
+    ]);
+
+    expect(first.project.id).toBe(second.project.id);
+    expect(await storage.listProjects('public-demo-user')).toHaveLength(1);
+    expect(await storage.getPublicDemoUsage('public-demo-user')).toMatchObject({
+      quickDemoProjectId: first.project.id,
+    });
   });
 });

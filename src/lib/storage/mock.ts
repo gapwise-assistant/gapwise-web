@@ -20,6 +20,10 @@ import {
   ProjectOverviewAssessmentCacheRecord,
   DeveloperGenerationRun,
   DeveloperGenerationStep,
+  PublicDemoAskConsumption,
+  PublicDemoDailyUsage,
+  PublicDemoQuickDemoClaim,
+  PublicDemoUsage,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
@@ -60,8 +64,64 @@ interface MockDatabase {
       developerGenerationRuns: DeveloperGenerationRun[];
       developerGenerationSteps: DeveloperGenerationStep[];
       googleIntegrations: Array<GoogleIntegrationState & { id: string; userId: string }>;
+      publicDemoUsage?: PublicDemoUsage;
     }
   >;
+  publicDemoDailyUsage?: Record<string, PublicDemoDailyUsage>;
+}
+
+const PUBLIC_DEMO_MAX_ASK_MESSAGES = 3;
+const PUBLIC_DEMO_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function normalizedPublicDemoUsage(
+  value: Partial<PublicDemoUsage> | undefined,
+  userId: string,
+  now = new Date().toISOString(),
+): PublicDemoUsage {
+  const askMessagesUsed = value?.askMessagesUsed;
+  const createdAt = typeof value?.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
+    ? value.createdAt
+    : now;
+  return {
+    userId,
+    ...(value?.quickDemoProjectId ? { quickDemoProjectId: value.quickDemoProjectId } : {}),
+    ...(value?.quickDemoCreatedAt ? { quickDemoCreatedAt: value.quickDemoCreatedAt } : {}),
+    ...(value?.quickDemoStatus ? { quickDemoStatus: value.quickDemoStatus } : {}),
+    askMessagesUsed: typeof askMessagesUsed === 'number' && Number.isInteger(askMessagesUsed) && askMessagesUsed >= 0
+      ? askMessagesUsed
+      : 0,
+    askOperationIds: Array.isArray(value?.askOperationIds)
+      ? value.askOperationIds.filter((item): item is string => typeof item === 'string')
+      : [],
+    createdAt,
+    updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
+      ? value.updatedAt
+      : now,
+    expiresAt: typeof value?.expiresAt === 'string' && Number.isFinite(Date.parse(value.expiresAt))
+      ? value.expiresAt
+      : new Date(Date.parse(createdAt) + PUBLIC_DEMO_RETENTION_MS).toISOString(),
+  };
+}
+
+function normalizedPublicDemoDailyUsage(
+  value: Partial<PublicDemoDailyUsage> | undefined,
+  date: string,
+  now: string,
+): PublicDemoDailyUsage {
+  const demosCreated = value?.demosCreated;
+  const askMessagesUsed = value?.askMessagesUsed;
+  return {
+    date,
+    demosCreated: typeof demosCreated === 'number' && Number.isInteger(demosCreated) && demosCreated >= 0
+      ? demosCreated
+      : 0,
+    askMessagesUsed: typeof askMessagesUsed === 'number' && Number.isInteger(askMessagesUsed) && askMessagesUsed >= 0
+      ? askMessagesUsed
+      : 0,
+    updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
+      ? value.updatedAt
+      : now,
+  };
 }
 
 type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
@@ -88,7 +148,28 @@ const EMPTY_USER = {
   developerGenerationRuns: [],
   developerGenerationSteps: [],
   googleIntegrations: [],
+  publicDemoUsage: undefined,
 };
+
+// The JSON provider has no database transaction primitive. Serialize the
+// public-demo allowance mutation per file so concurrent local requests obey
+// the same single-consumer semantics as the Firestore transaction.
+const mockAtomicWriteQueues = new Map<string, Promise<void>>();
+
+async function withMockAtomicWrite<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const previous = mockAtomicWriteQueues.get(filePath) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const current = previous.then(() => gate);
+  mockAtomicWriteQueues.set(filePath, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (mockAtomicWriteQueues.get(filePath) === current) mockAtomicWriteQueues.delete(filePath);
+  }
+}
 
 function snapshotReferences(
   snapshots: ProjectSnapshot[],
@@ -187,6 +268,7 @@ export class MockStorageProvider implements StorageProvider {
       developerGenerationRuns: current.developerGenerationRuns ?? [],
       developerGenerationSteps: current.developerGenerationSteps ?? [],
       googleIntegrations: current.googleIntegrations ?? [],
+      publicDemoUsage: current.publicDemoUsage,
     };
     await this.writeDb(db);
   }
@@ -379,6 +461,160 @@ export class MockStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
+  }
+
+  async getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null> {
+    const usage = (await this.getUser(userId)).publicDemoUsage;
+    return usage ? normalizedPublicDemoUsage(usage, userId) : null;
+  }
+
+  async savePublicDemoUsage(userId: string, usage: PublicDemoUsage): Promise<void> {
+    const db = await this.readDb();
+    const user = db.users[userId] ?? { ...EMPTY_USER };
+    user.publicDemoUsage = { ...usage, userId };
+    db.users[userId] = user;
+    await this.writeDb(db);
+  }
+
+  async reservePublicDemoQuickDemo(params: {
+    userId: string;
+    projectId: string;
+    createdAt: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoQuickDemoClaim> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is temporarily unavailable.', 'CONFIGURATION_ERROR');
+    }
+    return withMockAtomicWrite(this.filePath, async () => {
+      const db = await this.readDb();
+      const user = db.users[params.userId] ?? { ...EMPTY_USER };
+      const existing = user.publicDemoUsage
+        ? normalizedPublicDemoUsage(user.publicDemoUsage, params.userId)
+        : undefined;
+      if (existing?.quickDemoProjectId) {
+        if (existing.quickDemoStatus === 'failed' && existing.quickDemoProjectId === params.projectId) {
+          user.publicDemoUsage = {
+            ...existing,
+            quickDemoStatus: 'creating',
+            updatedAt: params.now ?? new Date().toISOString(),
+          };
+          db.users[params.userId] = user;
+          await this.writeDb(db);
+          return { claimed: true, projectId: existing.quickDemoProjectId, createdAt: existing.quickDemoCreatedAt ?? existing.createdAt };
+        }
+        return {
+          claimed: false,
+          projectId: existing.quickDemoProjectId,
+          createdAt: existing.quickDemoCreatedAt ?? existing.createdAt,
+        };
+      }
+      const now = params.now ?? new Date().toISOString();
+      const date = now.slice(0, 10);
+      const daily = normalizedPublicDemoDailyUsage(db.publicDemoDailyUsage?.[date], date, now);
+      if (daily.demosCreated >= params.dailyLimit) {
+        throw new StorageError('The public demo is temporarily unavailable.', 'UNAVAILABLE');
+      }
+      const parsedCreatedAt = Date.parse(params.createdAt);
+      user.publicDemoUsage = {
+        userId: params.userId,
+        quickDemoProjectId: params.projectId,
+        quickDemoCreatedAt: params.createdAt,
+        quickDemoStatus: 'creating',
+        askMessagesUsed: existing?.askMessagesUsed ?? 0,
+        askOperationIds: existing?.askOperationIds ?? [],
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        expiresAt: existing?.expiresAt ?? new Date(
+          (Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : Date.parse(now)) + PUBLIC_DEMO_RETENTION_MS,
+        ).toISOString(),
+      };
+      db.publicDemoDailyUsage = {
+        ...(db.publicDemoDailyUsage ?? {}),
+        [date]: { ...daily, demosCreated: daily.demosCreated + 1, updatedAt: now },
+      };
+      db.users[params.userId] = user;
+      await this.writeDb(db);
+      return { claimed: true, projectId: params.projectId, createdAt: params.createdAt };
+    });
+  }
+
+  async setPublicDemoQuickDemoStatus(params: {
+    userId: string;
+    projectId: string;
+    status: 'creating' | 'ready' | 'failed';
+  }): Promise<void> {
+    return withMockAtomicWrite(this.filePath, async () => {
+      const db = await this.readDb();
+      const user = db.users[params.userId] ?? { ...EMPTY_USER };
+      const current = user.publicDemoUsage;
+      if (!current || current.quickDemoProjectId !== params.projectId) return;
+      user.publicDemoUsage = { ...current, quickDemoStatus: params.status, updatedAt: new Date().toISOString() };
+      db.users[params.userId] = user;
+      await this.writeDb(db);
+    });
+  }
+
+  async consumePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoAskConsumption> {
+    return withMockAtomicWrite(this.filePath, () => this.consumePublicDemoAskUnlocked(params));
+  }
+
+  private async consumePublicDemoAskUnlocked(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoAskConsumption> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    const db = await this.readDb();
+    const now = params.now ?? new Date().toISOString();
+    const date = now.slice(0, 10);
+    const user = db.users[params.userId] ?? { ...EMPTY_USER };
+    const existing = normalizedPublicDemoUsage(user.publicDemoUsage, params.userId, now);
+    const daily = normalizedPublicDemoDailyUsage(db.publicDemoDailyUsage?.[date], date, now);
+    const alreadyConsumed = existing.askOperationIds.includes(params.operationId);
+    if (alreadyConsumed) {
+      return {
+        accepted: true,
+        alreadyConsumed: true,
+        messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+        usage: existing,
+      };
+    }
+    if (existing.askMessagesUsed >= PUBLIC_DEMO_MAX_ASK_MESSAGES || daily.askMessagesUsed >= params.dailyLimit) {
+      return {
+        accepted: false,
+        alreadyConsumed: false,
+        messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+        usage: existing,
+      };
+    }
+    const usage: PublicDemoUsage = {
+      ...existing,
+      askMessagesUsed: existing.askMessagesUsed + 1,
+      askOperationIds: [...existing.askOperationIds, params.operationId].slice(-PUBLIC_DEMO_MAX_ASK_MESSAGES),
+      updatedAt: now,
+    };
+    db.publicDemoDailyUsage = {
+      ...(db.publicDemoDailyUsage ?? {}),
+      [date]: { ...daily, askMessagesUsed: daily.askMessagesUsed + 1, updatedAt: now },
+    };
+    user.publicDemoUsage = usage;
+    db.users[params.userId] = user;
+    await this.writeDb(db);
+    return {
+      accepted: true,
+      alreadyConsumed: false,
+      messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - usage.askMessagesUsed),
+      usage,
+    };
   }
 
   async beginAskSuggestionsRefresh(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean> {
@@ -630,6 +866,7 @@ export class MockStorageProvider implements StorageProvider {
       developerGenerationRuns: user?.developerGenerationRuns ?? [],
       developerGenerationSteps: user?.developerGenerationSteps ?? [],
       googleIntegrations: user?.googleIntegrations ?? [],
+      publicDemoUsage: user?.publicDemoUsage,
     };
   }
 

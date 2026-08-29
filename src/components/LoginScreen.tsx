@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import NextImage from 'next/image';
 import { LogIn } from 'lucide-react';
-import { signInWithGoogle } from '@/lib/auth/client';
+import { signInAsGuest, signInWithGoogle } from '@/lib/auth/client';
 
 interface LoginScreenProps {
   error?: string;
@@ -12,6 +12,7 @@ interface LoginScreenProps {
 export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError }) => {
   const [error, setError] = useState(initialError ?? '');
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isTryingDemo, setIsTryingDemo] = useState(false);
 
   const handleSignIn = async () => {
     setIsSigningIn(true);
@@ -21,6 +22,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Google sign-in could not be completed.');
       setIsSigningIn(false);
+    }
+  };
+
+  const handleTryDemo = async () => {
+    setIsTryingDemo(true);
+    setError('');
+    try {
+      await signInAsGuest();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The demo could not be opened.');
+      setIsTryingDemo(false);
     }
   };
 
@@ -44,11 +56,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ error: initialError })
         <button
           type="button"
           onClick={() => void handleSignIn()}
-          disabled={isSigningIn}
+          disabled={isSigningIn || isTryingDemo}
           className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-200 disabled:cursor-wait disabled:opacity-60"
         >
           <LogIn className="h-4 w-4" />
-          {isSigningIn ? 'Signing in...' : 'Sign in with Google'}
+          {isSigningIn ? 'Signing in...' : 'Continue with Google'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleTryDemo()}
+          disabled={isSigningIn || isTryingDemo}
+          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-transparent px-4 py-3 text-sm font-bold text-slate-200 transition hover:border-cyan-700 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
+        >
+          {isTryingDemo ? 'Opening demo...' : 'Try demo as guest'}
         </button>
         {error && <p className="mt-4 text-left text-xs leading-5 text-rose-300">{error}</p>}
       </section>

@@ -29,6 +29,8 @@ import {
 } from '@/lib/overview/projectOverviewCache';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
+import { publicDemoDailyDemoLimit, publicDemoUsageExpired } from '@/lib/auth/publicDemo';
+import { StorageError } from '@/lib/storage/types';
 
 export const QUICK_DEMO_TITLE = 'Prepare a neighborhood repair workshop';
 export const QUICK_DEMO_GOAL =
@@ -47,7 +49,7 @@ export interface QuickDemoResult {
   projects: Project[];
   activeProjectId: string;
   scope: AppScope;
-  created: true;
+  created: boolean;
   snapshotCount: number;
   historyEventCount: number;
   finalNodeCount: number;
@@ -57,6 +59,23 @@ export interface QuickDemoResult {
     overview: 'ready';
     askSuggestions: 'ready';
   };
+}
+
+const publicQuickDemoLocks = new Map<string, Promise<void>>();
+
+async function withPublicQuickDemoLock<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = publicQuickDemoLocks.get(userId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const current = previous.then(() => gate);
+  publicQuickDemoLocks.set(userId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (publicQuickDemoLocks.get(userId) === current) publicQuickDemoLocks.delete(userId);
+  }
 }
 
 function nextTitle(projects: Project[]): string {
@@ -71,6 +90,7 @@ function createdAtWithoutIdCollision(
   title: string,
   projects: Project[],
   baseTime = Date.now(),
+  expectedProjectId?: string,
 ): string {
   const ids = new Set(projects.map((project) => project.id));
   let offset = 0;
@@ -81,7 +101,7 @@ function createdAtWithoutIdCollision(
       goal: QUICK_DEMO_GOAL,
       deadline: QUICK_DEMO_DEADLINE,
     }, createdAt);
-    if (!ids.has(candidate.id)) return createdAt;
+    if (!ids.has(candidate.id) || candidate.id === expectedProjectId) return createdAt;
     offset += 1;
   }
   throw new Error('Could not allocate a unique workspace identity for the quick demo.');
@@ -348,11 +368,18 @@ export async function createQuickDemoForUser(params: {
   userId: string;
   storage?: StorageProvider;
   now?: Date;
+  titleOverride?: string;
+  expectedProjectId?: string;
 }): Promise<QuickDemoResult> {
   const storage = params.storage ?? getStorageProvider();
   const projects = await storage.listProjects(params.userId);
-  const title = nextTitle(projects);
-  const createdAt = createdAtWithoutIdCollision(title, projects, params.now?.getTime());
+  const title = params.titleOverride ?? nextTitle(projects);
+  const createdAt = createdAtWithoutIdCollision(
+    title,
+    projects,
+    params.now?.getTime(),
+    params.expectedProjectId,
+  );
   let project = createProjectFromInput({
     name: title,
     goal: QUICK_DEMO_GOAL,
@@ -468,4 +495,142 @@ export async function createQuickDemoForUser(params: {
       askSuggestions: 'ready',
     },
   };
+}
+
+/**
+ * Public users get one stable Quick Demo workspace. The usage record is the
+ * authority for which workspace is exposed, so unrelated historical projects
+ * can never leak into the public-demo list.
+ */
+export async function createOrReuseQuickDemoForUser(params: {
+  userId: string;
+  storage?: StorageProvider;
+}): Promise<QuickDemoResult> {
+  return withPublicQuickDemoLock(params.userId, () => createOrReuseQuickDemoForUserUnlocked(params));
+}
+
+async function createOrReuseQuickDemoForUserUnlocked(params: {
+  userId: string;
+  storage?: StorageProvider;
+}): Promise<QuickDemoResult> {
+  const storage = params.storage ?? getStorageProvider();
+  const usage = await storage.getPublicDemoUsage(params.userId);
+  if (publicDemoUsageExpired(usage)) {
+    throw new StorageError('The public demo workspace is no longer available.', 'UNAVAILABLE');
+  }
+  const registeredProjectId = usage?.quickDemoProjectId;
+  const existing = registeredProjectId
+    ? await storage.getProject(params.userId, registeredProjectId)
+    : null;
+
+  if (existing && usage?.quickDemoStatus !== 'failed' && usage?.quickDemoStatus !== 'creating') {
+    await storage.setAppScope(params.userId, { type: 'project', projectId: existing.id });
+    return {
+      project: existing,
+      projects: [existing],
+      activeProjectId: existing.id,
+      scope: { type: 'project', projectId: existing.id },
+      created: false,
+      snapshotCount: (await storage.listProjectSnapshots(params.userId, existing.id)).length,
+      historyEventCount: existing.historyEvents?.length ?? 0,
+      finalNodeCount: existing.nodes.length,
+      finalEdgeCount: existing.edges.length,
+      assessmentStatus: { focus: 'ready', overview: 'ready', askSuggestions: 'ready' },
+    };
+  }
+
+  if (usage?.quickDemoStatus === 'creating') {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const currentUsage = await storage.getPublicDemoUsage(params.userId);
+      const currentProject = currentUsage?.quickDemoProjectId
+        ? await storage.getProject(params.userId, currentUsage.quickDemoProjectId)
+        : null;
+      if (currentProject && currentUsage && currentUsage.quickDemoStatus !== 'creating') {
+        if (currentUsage.quickDemoStatus === 'failed') break;
+        await storage.setAppScope(params.userId, { type: 'project', projectId: currentProject.id });
+        return {
+          project: currentProject,
+          projects: [currentProject],
+          activeProjectId: currentProject.id,
+          scope: { type: 'project', projectId: currentProject.id },
+          created: false,
+          snapshotCount: (await storage.listProjectSnapshots(params.userId, currentProject.id)).length,
+          historyEventCount: currentProject.historyEvents?.length ?? 0,
+          finalNodeCount: currentProject.nodes.length,
+          finalEdgeCount: currentProject.edges.length,
+          assessmentStatus: { focus: 'ready', overview: 'ready', askSuggestions: 'ready' },
+        };
+      }
+    }
+    const currentUsage = await storage.getPublicDemoUsage(params.userId);
+    if (currentUsage?.quickDemoStatus !== 'failed') {
+      throw new StorageError('The public demo workspace is still being prepared.', 'UNAVAILABLE');
+    }
+  }
+
+  const reservedCreatedAt = usage?.quickDemoCreatedAt ?? new Date().toISOString();
+  const reservationProject = createProjectFromInput({
+    name: QUICK_DEMO_TITLE,
+    goal: QUICK_DEMO_GOAL,
+    deadline: QUICK_DEMO_DEADLINE,
+  }, reservedCreatedAt);
+  if (registeredProjectId && reservationProject.id !== registeredProjectId) {
+    throw new StorageError('The registered public demo workspace identity is invalid.', 'VALIDATION_ERROR');
+  }
+  const claim = await storage.reservePublicDemoQuickDemo({
+    userId: params.userId,
+    projectId: reservationProject.id,
+    createdAt: reservedCreatedAt,
+    dailyLimit: publicDemoDailyDemoLimit(),
+  });
+  if (!claim.claimed) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const claimedProject = await storage.getProject(params.userId, claim.projectId);
+      if (claimedProject) {
+        await storage.setAppScope(params.userId, { type: 'project', projectId: claimedProject.id });
+        return {
+          project: claimedProject,
+          projects: [claimedProject],
+          activeProjectId: claimedProject.id,
+          scope: { type: 'project', projectId: claimedProject.id },
+          created: false,
+          snapshotCount: (await storage.listProjectSnapshots(params.userId, claimedProject.id)).length,
+          historyEventCount: claimedProject.historyEvents?.length ?? 0,
+          finalNodeCount: claimedProject.nodes.length,
+          finalEdgeCount: claimedProject.edges.length,
+          assessmentStatus: { focus: 'ready', overview: 'ready', askSuggestions: 'ready' },
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new StorageError('The public demo workspace is still being prepared.', 'UNAVAILABLE');
+  }
+
+  try {
+    const result = await createQuickDemoForUser({
+      userId: params.userId,
+      storage,
+      titleOverride: QUICK_DEMO_TITLE,
+      now: new Date(claim.createdAt),
+      expectedProjectId: claim.projectId,
+    });
+    await storage.setPublicDemoQuickDemoStatus({
+      userId: params.userId,
+      projectId: claim.projectId,
+      status: 'ready',
+    });
+    return { ...result, projects: [result.project] };
+  } catch (error) {
+    try {
+      await storage.setPublicDemoQuickDemoStatus({
+        userId: params.userId,
+        projectId: claim.projectId,
+        status: 'failed',
+      });
+    } catch (statusError) {
+      console.error('[Public Quick Demo] failed to record creation status', statusError);
+    }
+    throw error;
+  }
 }

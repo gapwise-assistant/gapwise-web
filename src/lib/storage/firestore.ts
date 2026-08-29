@@ -20,6 +20,10 @@ import {
   ProjectOverviewAssessmentCacheRecord,
   DeveloperGenerationRun,
   DeveloperGenerationStep,
+  PublicDemoAskConsumption,
+  PublicDemoDailyUsage,
+  PublicDemoQuickDemoClaim,
+  PublicDemoUsage,
   StorageError,
   StorageProvider,
 } from '@/lib/storage/types';
@@ -40,6 +44,60 @@ import {
   createAskSuggestionsLease,
   hasValidAskSuggestionsLease,
 } from '@/lib/ask/suggestionsLease';
+
+const PUBLIC_DEMO_MAX_ASK_MESSAGES = 3;
+const PUBLIC_DEMO_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function normalizedPublicDemoUsage(
+  value: Partial<PublicDemoUsage> | undefined,
+  userId: string,
+  now = new Date().toISOString(),
+): PublicDemoUsage {
+  const askMessagesUsed = value?.askMessagesUsed;
+  const createdAt = typeof value?.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
+    ? value.createdAt
+    : now;
+  return {
+    userId,
+    ...(value?.quickDemoProjectId ? { quickDemoProjectId: value.quickDemoProjectId } : {}),
+    ...(value?.quickDemoCreatedAt ? { quickDemoCreatedAt: value.quickDemoCreatedAt } : {}),
+    ...(value?.quickDemoStatus ? { quickDemoStatus: value.quickDemoStatus } : {}),
+    askMessagesUsed: typeof askMessagesUsed === 'number' && Number.isInteger(askMessagesUsed) && askMessagesUsed >= 0
+      ? askMessagesUsed
+      : 0,
+    askOperationIds: Array.isArray(value?.askOperationIds)
+      ? value.askOperationIds.filter((item): item is string => typeof item === 'string')
+      : [],
+    createdAt,
+    updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
+      ? value.updatedAt
+      : now,
+    expiresAt: typeof value?.expiresAt === 'string' && Number.isFinite(Date.parse(value.expiresAt))
+      ? value.expiresAt
+      : new Date(Date.parse(createdAt) + PUBLIC_DEMO_RETENTION_MS).toISOString(),
+  };
+}
+
+function normalizedPublicDemoDailyUsage(
+  value: Partial<PublicDemoDailyUsage> | undefined,
+  date: string,
+  now: string,
+): PublicDemoDailyUsage {
+  const demosCreated = value?.demosCreated;
+  const askMessagesUsed = value?.askMessagesUsed;
+  return {
+    date,
+    demosCreated: typeof demosCreated === 'number' && Number.isInteger(demosCreated) && demosCreated >= 0
+      ? demosCreated
+      : 0,
+    askMessagesUsed: typeof askMessagesUsed === 'number' && Number.isInteger(askMessagesUsed) && askMessagesUsed >= 0
+      ? askMessagesUsed
+      : 0,
+    updatedAt: typeof value?.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt))
+      ? value.updatedAt
+      : now,
+  };
+}
 
 type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
@@ -434,6 +492,209 @@ export class FirestoreStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.save(userId, 'askSuggestionAssessments', record);
+  }
+
+  async getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null> {
+    try {
+      const snapshot = await this.db.collection('users').doc(userId).collection('preferences').doc('publicDemoUsage').get();
+      if (!snapshot.exists) return null;
+      return normalizedPublicDemoUsage(this.fromFirestore<PublicDemoUsage>(snapshot.data()!), userId);
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async savePublicDemoUsage(userId: string, usage: PublicDemoUsage): Promise<void> {
+    try {
+      await this.db.collection('users').doc(userId).collection('preferences').doc('publicDemoUsage').set(
+        firestoreSafeRecord(this.withServerUpdatedAt({ ...usage, userId })),
+        { merge: false },
+      );
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async reservePublicDemoQuickDemo(params: {
+    userId: string;
+    projectId: string;
+    createdAt: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoQuickDemoClaim> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is temporarily unavailable.', 'CONFIGURATION_ERROR');
+    }
+    try {
+      const ref = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      const date = (params.now ?? new Date().toISOString()).slice(0, 10);
+      const dailyRef = this.db.collection('publicDemoDailyUsage').doc(date);
+      let result: PublicDemoQuickDemoClaim | undefined;
+      await this.db.runTransaction(async (transaction) => {
+        const [snapshot, dailySnapshot] = await transaction.getAll(ref, dailyRef);
+        const existing = snapshot.exists
+          ? normalizedPublicDemoUsage(this.fromFirestore<PublicDemoUsage>(snapshot.data()!), params.userId)
+          : undefined;
+        if (existing?.quickDemoProjectId) {
+          // A failed reservation may be retried with the same stable project
+          // identity without consuming another daily creation allowance.
+          if (existing.quickDemoStatus === 'failed' && existing.quickDemoProjectId === params.projectId) {
+            const now = params.now ?? new Date().toISOString();
+            transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
+              ...existing,
+              quickDemoStatus: 'creating' as const,
+              updatedAt: now,
+            })), { merge: false });
+            result = { claimed: true, projectId: existing.quickDemoProjectId, createdAt: existing.quickDemoCreatedAt ?? existing.createdAt };
+            return;
+          }
+          result = {
+            claimed: false,
+            projectId: existing.quickDemoProjectId,
+            createdAt: existing.quickDemoCreatedAt ?? existing.createdAt,
+          };
+          return;
+        }
+
+        const now = params.now ?? new Date().toISOString();
+        const daily = normalizedPublicDemoDailyUsage(
+          dailySnapshot.exists ? this.fromFirestore<PublicDemoDailyUsage>(dailySnapshot.data()!) : undefined,
+          date,
+          now,
+        );
+        if (daily.demosCreated >= params.dailyLimit) {
+          throw new StorageError('The public demo is temporarily unavailable.', 'UNAVAILABLE');
+        }
+        const parsedCreatedAt = Date.parse(params.createdAt);
+        const expiresAt = new Date(
+          (Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : Date.parse(now)) + PUBLIC_DEMO_RETENTION_MS,
+        ).toISOString();
+        const usage: PublicDemoUsage = {
+          userId: params.userId,
+          quickDemoProjectId: params.projectId,
+          quickDemoCreatedAt: params.createdAt,
+          quickDemoStatus: 'creating',
+          askMessagesUsed: existing?.askMessagesUsed ?? 0,
+          askOperationIds: existing?.askOperationIds ?? [],
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          expiresAt: existing?.expiresAt ?? expiresAt,
+        };
+        transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt(usage)), { merge: false });
+        transaction.set(dailyRef, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...daily,
+          date,
+          demosCreated: daily.demosCreated + 1,
+          updatedAt: now,
+        })));
+        result = { claimed: true, projectId: params.projectId, createdAt: params.createdAt };
+      });
+      if (!result) throw new StorageError('The public demo workspace reservation failed.', 'UNAVAILABLE');
+      return result;
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw this.toStorageError(error);
+    }
+  }
+
+  async setPublicDemoQuickDemoStatus(params: {
+    userId: string;
+    projectId: string;
+    status: 'creating' | 'ready' | 'failed';
+  }): Promise<void> {
+    try {
+      const ref = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      await this.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (!snapshot.exists) return;
+        const current = this.fromFirestore<PublicDemoUsage>(snapshot.data()!);
+        if (current.quickDemoProjectId !== params.projectId) return;
+        transaction.set(ref, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...current,
+          quickDemoStatus: params.status,
+          updatedAt: new Date().toISOString(),
+        })), { merge: false });
+      });
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async consumePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoAskConsumption> {
+    if (!Number.isInteger(params.dailyLimit) || params.dailyLimit <= 0) {
+      throw new StorageError('The public demo is unavailable.', 'CONFIGURATION_ERROR');
+    }
+    try {
+      const userUsageRef = this.db.collection('users').doc(params.userId).collection('preferences').doc('publicDemoUsage');
+      const now = params.now ?? new Date().toISOString();
+      const date = now.slice(0, 10);
+      const dailyUsageRef = this.db.collection('publicDemoDailyUsage').doc(date);
+      let result: PublicDemoAskConsumption | undefined;
+      await this.db.runTransaction(async (transaction) => {
+        const [userSnapshot, dailySnapshot] = await transaction.getAll(
+          userUsageRef,
+          dailyUsageRef,
+        );
+        const existing = normalizedPublicDemoUsage(
+          userSnapshot.exists ? this.fromFirestore<PublicDemoUsage>(userSnapshot.data()!) : undefined,
+          params.userId,
+          now,
+        );
+        const daily = normalizedPublicDemoDailyUsage(
+          dailySnapshot.exists ? this.fromFirestore<PublicDemoDailyUsage>(dailySnapshot.data()!) : undefined,
+          date,
+          now,
+        );
+        const alreadyConsumed = existing.askOperationIds.includes(params.operationId);
+        if (alreadyConsumed) {
+          result = {
+            accepted: true,
+            alreadyConsumed: true,
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+        if (existing.askMessagesUsed >= PUBLIC_DEMO_MAX_ASK_MESSAGES || daily.askMessagesUsed >= params.dailyLimit) {
+          result = {
+            accepted: false,
+            alreadyConsumed: false,
+            messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - existing.askMessagesUsed),
+            usage: existing,
+          };
+          return;
+        }
+        const usage: PublicDemoUsage = {
+          ...existing,
+          askMessagesUsed: existing.askMessagesUsed + 1,
+          askOperationIds: [...existing.askOperationIds, params.operationId].slice(-PUBLIC_DEMO_MAX_ASK_MESSAGES),
+          updatedAt: now,
+        };
+        transaction.set(userUsageRef, firestoreSafeRecord(this.withServerUpdatedAt(usage)));
+        transaction.set(dailyUsageRef, firestoreSafeRecord(this.withServerUpdatedAt({
+          ...daily,
+          date,
+          askMessagesUsed: daily.askMessagesUsed + 1,
+          updatedAt: now,
+        })));
+        result = {
+          accepted: true,
+          alreadyConsumed: false,
+          messagesRemaining: Math.max(0, PUBLIC_DEMO_MAX_ASK_MESSAGES - usage.askMessagesUsed),
+          usage,
+        };
+      });
+      if (!result) throw new StorageError('The public demo usage check failed.', 'UNAVAILABLE');
+      return result;
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw this.toStorageError(error);
+    }
   }
 
   async beginAskSuggestionsRefresh(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean> {

@@ -563,6 +563,7 @@ export default function Home() {
     historyTimestamp?: string;
   } | null>(null);
   const demoMode = auth.demoMode;
+  const isPublicDemo = auth.accessTier === 'public_demo';
   useEffect(() => {
     setIsLocalhostDeveloper(isLocalhostBrowser());
   }, []);
@@ -613,7 +614,10 @@ export default function Home() {
       setProfile(settings.profile);
       setMemories(settings.memories);
     });
-    Promise.all([loadProjectsFromAPI(userId), loadGeneralContextFromAPI(userId)]).then(([loaded, loadedGeneralContext]) => {
+    Promise.all([
+      loadProjectsFromAPI(userId),
+      isPublicDemo ? Promise.resolve(emptyGeneralContext()) : loadGeneralContextFromAPI(userId),
+    ]).then(([loaded, loadedGeneralContext]) => {
       if (!active) return;
       const nextProjects = loaded.projects;
       const nextScope = resolveScope(loaded.scope, nextProjects, loaded.activeProjectId);
@@ -635,7 +639,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, [auth.isReady, auth.userId]);
+  }, [auth.isReady, auth.userId, isPublicDemo]);
 
   const scopedProject = useMemo(
     () => projectForScope(scope, projects, generalContext),
@@ -1587,10 +1591,11 @@ export default function Home() {
         <NewUserOnboarding
           isLoadingDemo={isLoadingQuickDemo}
           error={storageMessage}
+          isPublicDemo={isPublicDemo}
           onCreateProject={() => setIsNewProjectOpen(true)}
           onLoadDemo={() => void handleCreateQuickDemo()}
         />
-        {isNewProjectOpen && (
+        {isNewProjectOpen && !isPublicDemo && (
           <NewProjectModal
             onCreateProject={async (input) => {
               await handleCreateProject(input);
@@ -1624,6 +1629,7 @@ export default function Home() {
         isSettingsOpen={isSettingsOpen}
         accountLabel={auth.user?.displayName}
         demoMode={demoMode}
+        accessTier={auth.accessTier}
       />
 
       <main className="pb-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] md:pb-16">
@@ -1684,6 +1690,7 @@ export default function Home() {
             }}
             onViewResolvedGaps={openResolvedGaps}
             onReviewDecision={openDecisionWorkspace}
+            readOnly={isPublicDemo}
             onNavigateToSource={(sourceId) => {
               openContext({ sourceId, tab: 'recent' });
             }}
@@ -1708,8 +1715,10 @@ export default function Home() {
             onInitialPromptSent={() => setAskInitialPrompt('')}
             newChatPrompt={askNewChatPrompt}
             onNewChatPromptOpened={() => setAskNewChatPrompt(null)}
-            onProjectContextChanged={refreshProjectData}
-            onProjectUpdated={refreshProjectData}
+            onProjectContextChanged={isPublicDemo ? undefined : refreshProjectData}
+            onProjectUpdated={isPublicDemo ? undefined : refreshProjectData}
+            accessTier={auth.accessTier}
+            publicDemoMessagesRemaining={auth.publicDemoMessagesRemaining}
           />
         )}
         {activeTab === 'scope' && (
@@ -1743,6 +1752,7 @@ export default function Home() {
             onViewToday={() => setActiveTab('today')}
             onProjectBranched={handleProjectBranched}
             onNoActiveWorkspace={handleNoActiveWorkspace}
+            readOnly={isPublicDemo}
             gapsNavigationRequest={gapsNavigationRequest}
             onGapsNavigationHandled={() => setGapsNavigationRequest(null)}
             reasoningPathNodeId={reasoningPathRequest?.projectId === project.id ? reasoningPathRequest.nodeId : null}
@@ -1751,7 +1761,7 @@ export default function Home() {
         </>}
       </main>
 
-      {isSettingsOpen && (
+      {isSettingsOpen && !isPublicDemo && (
         <SettingsDrawer
           onClose={() => setIsSettingsOpen(false)}
             userId={userId}

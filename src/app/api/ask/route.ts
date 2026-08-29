@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
+import { askGapswise, askPublicDemo, AskAgentError } from '@/lib/ask/adkClient';
 import { askGapswiseLocally } from '@/lib/ask/localDemoAdapter';
 import { isDemoMode, isLocalhostRequest } from '@/lib/runtime/demoMode';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { assertPublicDemoProject, isPublicDemoPrincipal, publicDemoDailyAskLimit, publicDemoMessagesRemaining } from '@/lib/auth/publicDemo';
+import { requirePublicDemoAppCheck } from '@/lib/auth/appCheck';
 import { getConfiguredGeminiModel } from '@/lib/google/genai';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { persistAskConversationContext } from '@/lib/ask/conversationContext';
-import { getStorageProvider } from '@/lib/storage';
-import { StorageError } from '@/lib/storage/types';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
+import { StorageError, type StorageProvider } from '@/lib/storage/types';
 import { AskChatMessage, AskChatSession, AskContextProposal, AskOpenQuestion, AskSearchSuggestions, AskTarget, normalizeAskContextProposals } from '@/types/ask';
 import { logAskDebug } from '@/lib/ask/debug';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
@@ -59,6 +61,8 @@ const askRequestSchema = z.object({
     text: z.string().trim().min(1).max(1000),
   }).optional(),
 });
+
+const PUBLIC_DEMO_MAX_MESSAGE_LENGTH = 300;
 
 function titleForMessage(message: string): string {
   const compact = message.replace(/\s+/g, ' ').trim();
@@ -150,8 +154,145 @@ async function loadAskChatBinding(
 }
 
 function storageErrorResponse(error: StorageError): NextResponse {
-  const status = error.code === 'PERMISSION_DENIED' ? 403 : error.code === 'VALIDATION_ERROR' ? 400 : 503;
+  const status = error.code === 'NOT_FOUND'
+    ? 404
+    : error.code === 'PERMISSION_DENIED'
+      ? 403
+      : error.code === 'VALIDATION_ERROR'
+        ? 400
+        : error.code === 'UNAUTHENTICATED'
+          ? 401
+          : 503;
   return NextResponse.json({ error: error.message, code: error.code }, { status });
+}
+
+async function runPublicDemoAsk(
+  request: Request,
+  principal: Awaited<ReturnType<typeof requireAuthenticatedPrincipal>>,
+  parsed: z.infer<typeof askRequestSchema>,
+): Promise<NextResponse> {
+  if (parsed.message.length > PUBLIC_DEMO_MAX_MESSAGE_LENGTH) {
+    return NextResponse.json({ error: `Public demo messages must be ${PUBLIC_DEMO_MAX_MESSAGE_LENGTH} characters or fewer.` }, { status: 400 });
+  }
+  if (!parsed.projectId || !parsed.chatId || !parsed.userMessageId) {
+    return NextResponse.json({ error: 'The public demo requires a workspace chat.' }, { status: 400 });
+  }
+
+  const storage = requireFirestoreStorage();
+  const usage = await storage.getPublicDemoUsage(principal.uid);
+  assertPublicDemoProject(principal, parsed.projectId, usage);
+  await requirePublicDemoAppCheck(request);
+  const project = await storage.getProject(principal.uid, parsed.projectId);
+  if (!project) throw new StorageError('The public demo workspace was not found.', 'NOT_FOUND');
+
+  const assistantId = assistantMessageId(parsed.userMessageId);
+  const existingAssistant = (await storage.getAskMessages(principal.uid)).find(
+    (message) => message.id === assistantId && message.role === 'assistant',
+  );
+  const consumed = existingAssistant
+    ? {
+      accepted: true,
+      alreadyConsumed: true,
+      messagesRemaining: publicDemoMessagesRemaining(usage),
+      usage: usage!,
+    }
+    : await storage.consumePublicDemoAsk({
+      userId: principal.uid,
+      operationId: `ask:${parsed.chatId}:${parsed.userMessageId}`,
+      dailyLimit: publicDemoDailyAskLimit(),
+    });
+  if (consumed.alreadyConsumed && !existingAssistant) {
+    return NextResponse.json({
+      error: 'This public demo message has already been used.',
+      publicDemo: {
+        messagesRemaining: consumed.messagesRemaining,
+        complete: consumed.messagesRemaining === 0,
+      },
+    }, { status: 409 });
+  }
+  if (!consumed.accepted) {
+    return NextResponse.json({
+      error: 'Public demo complete. Full Gapwise access is currently private.',
+      publicDemo: { messagesRemaining: consumed.messagesRemaining, complete: true },
+    }, { status: 429 });
+  }
+
+  const chats = await storage.getAskChats(principal.uid);
+  const existingChat = chats.find((chat) => chat.id === parsed.chatId);
+  assertAskChatBinding(existingChat, parsed.projectId, parsed.sessionId, parsed.target);
+  const now = new Date().toISOString();
+  const chat: AskChatSession = {
+    id: parsed.chatId,
+    userId: principal.uid,
+    scopeType: 'project',
+    projectId: parsed.projectId,
+    title: existingChat?.title || titleForMessage(parsed.message),
+    ...(existingChat?.adkSessionId || parsed.sessionId ? { adkSessionId: existingChat?.adkSessionId ?? parsed.sessionId } : {}),
+    createdAt: existingChat?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  if (!existingAssistant) {
+    await storage.saveAskChat(principal.uid, chat);
+    await storage.saveAskMessage(principal.uid, {
+      id: parsed.userMessageId,
+      chatId: parsed.chatId,
+      userId: principal.uid,
+      projectId: parsed.projectId,
+      role: 'user',
+      text: parsed.message,
+      sources: [],
+      createdAt: now,
+    });
+  }
+
+  const result = existingAssistant
+    ? {
+      answer: existingAssistant.text,
+      sessionId: chat.adkSessionId,
+      sources: existingAssistant.sources,
+      outcome: existingAssistant.outcome,
+      resolvesQuestionId: existingAssistant.resolvesQuestionId,
+      conclusion: existingAssistant.conclusion,
+      contextProposals: [],
+      proposals: [],
+      execution: existingAssistant.execution,
+      openQuestionIds: existingAssistant.openQuestionIds ?? [],
+      openQuestions: existingAssistant.openQuestions ?? [],
+      promptUsed: undefined,
+    }
+    : await askPublicDemo({
+      userId: principal.uid,
+      message: parsed.message,
+      project,
+      sessionId: chat.adkSessionId,
+      chatId: chat.id,
+    });
+
+  if (!existingAssistant) {
+    await persistAssistantAskMessage({
+      userId: principal.uid,
+      chat,
+      userMessageId: parsed.userMessageId,
+      answer: result.answer,
+      sources: [],
+      openQuestionIds: [],
+      openQuestions: [],
+      outcome: result.outcome,
+      execution: result.execution,
+      sessionId: result.sessionId,
+      storage,
+    });
+  }
+
+  return NextResponse.json({
+    ...result,
+    assistantMessageId: assistantId,
+    publicDemo: {
+      messagesRemaining: consumed.messagesRemaining,
+      complete: consumed.messagesRemaining === 0,
+    },
+  });
 }
 
 async function persistAssistantAskMessage(params: {
@@ -169,10 +310,11 @@ async function persistAssistantAskMessage(params: {
   searchSuggestions?: AskSearchSuggestions;
   execution?: AskChatMessage['execution'];
   sessionId?: string;
+  storage?: StorageProvider;
 }): Promise<string> {
   const now = new Date().toISOString();
   const id = assistantMessageId(params.userMessageId);
-  const storage = getStorageProvider();
+  const storage = params.storage ?? getStorageProvider();
   await storage.saveAskMessage(params.userId, {
     id,
     chatId: params.chat.id,
@@ -233,12 +375,22 @@ export async function POST(request: Request) {
     localhost: isLocalhostRequest(request),
   });
 
-  let userId: string;
+  let principal: Awaited<ReturnType<typeof requireAuthenticatedPrincipal>>;
   try {
-    userId = await requireAuthenticatedUserId(request, parsed.data.userId);
+    principal = await requireAuthenticatedPrincipal(request, parsed.data.userId);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
   }
+  if (isPublicDemoPrincipal(principal)) {
+    try {
+      return await runPublicDemoAsk(request, principal, parsed.data);
+    } catch (error) {
+      if (error instanceof StorageError) return storageErrorResponse(error);
+      console.error('[Gapwise public demo Ask] failed', error);
+      return NextResponse.json({ error: 'The public demo could not answer right now.' }, { status: 503 });
+    }
+  }
+  const userId = principal.uid;
 
   let existingChat: AskChatSession | undefined;
   try {

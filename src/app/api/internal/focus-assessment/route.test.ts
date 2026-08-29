@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET } from './route';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getStorageProvider, loadProjectForScope } from '@/lib/storage';
 import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
 import { createBakeryDemoProject } from '@/lib/demo/bakery';
 
-vi.mock('@/lib/auth/server', () => ({ requireAuthenticatedUserId: vi.fn() }));
+vi.mock('@/lib/auth/server', () => ({
+  requireAuthenticatedPrincipal: vi.fn(),
+  requireAuthenticatedUserId: vi.fn(),
+}));
 vi.mock('@/lib/storage', () => ({
   getStorageProvider: vi.fn(),
   loadProjectForScope: vi.fn(),
@@ -32,6 +35,12 @@ describe('GET /api/internal/focus-assessment', () => {
       confidence: 0.8,
     } as const;
     vi.mocked(requireAuthenticatedUserId).mockResolvedValue('focus-user');
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'focus-user',
+      emailVerified: false,
+      provider: 'local',
+      accessTier: 'local_development',
+    });
     vi.mocked(loadProjectForScope).mockResolvedValue({ project, scope: { type: 'project', projectId: project.id } });
     vi.mocked(focusProjectStateVersion).mockResolvedValue('project-state-version');
     vi.mocked(focusAssessmentCacheId).mockReturnValue('focus-cache-id');

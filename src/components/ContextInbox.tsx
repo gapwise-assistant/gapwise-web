@@ -23,6 +23,7 @@ interface ContextInboxProps {
   onUpdateGeneralContext: (updated: Project) => void;
   focusedSourceId?: string;
   entryTab?: 'recent' | 'documents' | 'add';
+  readOnly?: boolean;
 }
 
 export type ContextEntry = {
@@ -106,6 +107,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   onUpdateGeneralContext,
   focusedSourceId,
   entryTab,
+  readOnly = false,
 }) => {
   const [activeTab, setActiveTab] = useState<ContextTab>(entryTab ?? 'recent');
   const [pasteText, setPasteText] = useState('');
@@ -122,7 +124,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   useDismissibleModal(() => setSelectedSource(null), sourceDetailsRef, Boolean(selectedSource));
 
   useEffect(() => {
-    if (entryTab) setActiveTab(entryTab);
+    if (entryTab) setActiveTab(readOnly && entryTab === 'add' ? 'recent' : entryTab);
     if (!focusedSourceId) return;
     setActiveTab('recent');
     const frame = window.requestAnimationFrame(() => {
@@ -132,7 +134,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [entryTab, focusedSourceId]);
+  }, [entryTab, focusedSourceId, readOnly]);
 
   useEffect(() => {
     if (!selectedSource) return;
@@ -191,6 +193,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
 
   const handleAddTextSource = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     if (!pasteText.trim() && !selectedFile) return;
 
     setIsProcessing(true);
@@ -257,11 +260,13 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   };
 
   const handleDeleteSource = async (sourceId: string) => {
+    if (readOnly) return;
     const owner = visibleProjects.find((item) => item.sources.some((source) => source.id === sourceId));
     if (owner) updateTargetProject(discardContextSource(owner, sourceId, profile));
   };
 
   const handleRestoreSource = (sourceId: string) => {
+    if (readOnly) return;
     const owner = visibleProjects.find((item) => item.sources.some((source) => source.id === sourceId));
     if (owner) updateTargetProject(restoreContextSource(owner, sourceId, profile));
   };
@@ -312,6 +317,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             </span>
           )}
           {discarded ? (
+            readOnly ? null : (
             <button
               type="button"
               onClick={(event) => {
@@ -324,7 +330,9 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
+            )
           ) : (
+            readOnly ? null : (
             <button
               type="button"
               onClick={(event) => {
@@ -337,6 +345,7 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
+            )
           )}
         </div>
       </div>
@@ -696,21 +705,23 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             {scope.type === 'project' ? `Focused on: ${projectTitlePresentation(project.title).title}` : 'Focused on: General context'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setActiveTab('add')}
-          className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 sm:min-h-0 sm:w-auto"
-        >
-          <Plus className="w-4 h-4" />
-          Add context
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('add')}
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 sm:min-h-0 sm:w-auto"
+          >
+            <Plus className="w-4 h-4" />
+            Add context
+          </button>
+        )}
       </div>
 
       <div className="touch-scroll flex gap-2 overflow-x-auto border-b border-slate-800 pb-2">
         {([
           ['recent', 'Recent'],
           ['documents', 'Documents'],
-          ['add', 'Add context'],
+          ...(!readOnly ? [['add', 'Add context'] as const] : []),
         ] as const).map(([id, label]) => (
           <button
             key={id}

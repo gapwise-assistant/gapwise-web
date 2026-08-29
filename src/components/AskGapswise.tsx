@@ -11,6 +11,7 @@ import { authFetch } from '@/lib/auth/client';
 import { AskSourceModal } from '@/components/AskSourceModal';
 import { formatDateTime } from '@/lib/datetime/displayDateTime';
 import type { UserMemoryProfile } from '@/types/clarity';
+import type { AccessTier } from '@/lib/auth/server';
 import { Button } from '@/components/ui/Button';
 import {
   normalizeAskSuggestionsAssessment,
@@ -31,6 +32,8 @@ interface AskGapswiseProps {
   onNewChatPromptOpened?: () => void;
   onProjectContextChanged?: () => Promise<void>;
   onProjectUpdated?: () => void | Promise<void>;
+  accessTier?: AccessTier | null;
+  publicDemoMessagesRemaining?: number | null;
 }
 
 interface ChatMessage {
@@ -306,6 +309,8 @@ export function AskGapswise({
   onNewChatPromptOpened,
   onProjectContextChanged,
   onProjectUpdated,
+  accessTier = null,
+  publicDemoMessagesRemaining = null,
 }: AskGapswiseProps) {
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -332,6 +337,7 @@ export function AskGapswise({
   const [proposalBusyIds, setProposalBusyIds] = useState<Set<string>>(new Set());
   const [hiddenProposalKeys, setHiddenProposalKeys] = useState<Set<string>>(new Set());
   const [shownProposalKeys, setShownProposalKeys] = useState<Set<string>>(new Set());
+  const [publicMessagesRemaining, setPublicMessagesRemaining] = useState<number | null>(publicDemoMessagesRemaining);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -347,7 +353,14 @@ export function AskGapswise({
     return draftChat ?? chats[0] ?? null;
   }, [activeChatId, chats, draftChat]);
   const suggestionProjectId = scope.type === 'project' ? scope.projectId : null;
+  const isPublicDemo = accessTier === 'public_demo';
   suggestionProjectIdRef.current = suggestionProjectId;
+
+  useEffect(() => {
+    if (typeof publicDemoMessagesRemaining === 'number') {
+      setPublicMessagesRemaining(publicDemoMessagesRemaining);
+    }
+  }, [publicDemoMessagesRemaining]);
 
   useEffect(() => {
     setHasLoadedRemoteState(false);
@@ -467,7 +480,7 @@ export function AskGapswise({
   }, [hasLoadedPersistedState, suggestionProjectId, suggestionsPollNonce, userId]);
 
   const retrySuggestions = async () => {
-    if (scope.type !== 'project' || isSuggestionRetrying) return;
+    if (isPublicDemo || scope.type !== 'project' || isSuggestionRetrying) return;
     const retryProjectId = scope.projectId;
     setIsSuggestionRetrying(true);
     setSuggestionsError('');
@@ -664,6 +677,14 @@ export function AskGapswise({
   const sendMessage = async (promptText: string, chatOverride?: ChatSession, allowWhileLoading = false) => {
     const text = promptText.trim();
     if (!text || (isLoading && !allowWhileLoading)) return;
+    if (isPublicDemo && text.length > 300) {
+      setError('Public demo messages must be 300 characters or fewer.');
+      return;
+    }
+    if (isPublicDemo && publicMessagesRemaining === 0) {
+      setError('Public demo complete. Full Gapwise access is currently private.');
+      return;
+    }
     const userMsgId = `user_${Date.now()}`;
     const userMsg: ChatMessage = { id: userMsgId, role: 'user', text };
     const chatToUse = chatOverride ?? activeChat ?? newChat();
@@ -710,7 +731,11 @@ export function AskGapswise({
       const data = await response.json();
       logAskBrowserDebug('api-response', { status: response.status, body: data });
       if (!response.ok) throw new Error(data.error ?? 'Ask failed.');
-      await onProjectContextChanged?.();
+      if (!isPublicDemo) await onProjectContextChanged?.();
+
+      if (isPublicDemo && typeof data.publicDemo?.messagesRemaining === 'number') {
+        setPublicMessagesRemaining(data.publicDemo.messagesRemaining);
+      }
 
       const assistantMsg: ChatMessage = {
         id: data.assistantMessageId ?? `assistant_${Date.now()}`,
@@ -722,7 +747,7 @@ export function AskGapswise({
         sources: data.sources,
         openQuestionIds: data.openQuestionIds,
         openQuestions: data.openQuestions,
-        contextProposals: normalizeAskContextProposals(data.contextProposals ?? data.proposals),
+        contextProposals: isPublicDemo ? [] : normalizeAskContextProposals(data.contextProposals ?? data.proposals),
         searchSuggestions: data.searchSuggestions,
         execution: data.execution,
         responseDetails: {
@@ -835,11 +860,18 @@ export function AskGapswise({
             <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
           </button>
         </div>
-        <p className="mt-2 max-w-2xl text-sm text-slate-400">
-          Gapwise uses your goals, memories, documents, calendar and other context to answer.
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <p className="text-xs font-semibold text-cyan-300">Focused on: {scopeLabel}</p>
+          <p className="mt-2 max-w-2xl text-sm text-slate-400">
+            Gapwise uses your goals, memories, documents, calendar and other context to answer.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold text-cyan-300">Focused on: {scopeLabel}</p>
+            {isPublicDemo && (
+              <p className="text-xs font-semibold text-slate-500" role="status">
+                {publicMessagesRemaining === 0
+                  ? 'Public demo complete. Full Gapwise access is currently private.'
+                  : `Demo messages remaining: ${publicMessagesRemaining ?? 3}`}
+              </p>
+            )}
           {(chats.length > 0 || draftChat) && (
             <select
               aria-label="Choose chat"
@@ -931,7 +963,7 @@ export function AskGapswise({
         {activeChat?.messages.map((message) => {
           const hasWebSources = Boolean(message.sources?.some((s) => s.kind === 'web' && s.url));
           const isClarification = message.role === 'assistant' && isClarificationResponse(message);
-          const responseAction = message.role === 'assistant' ? askResponseAction(message) : null;
+          const responseAction = !isPublicDemo && message.role === 'assistant' ? askResponseAction(message) : null;
 
           return (
             <div
@@ -985,7 +1017,9 @@ export function AskGapswise({
                     )}
 
                     {(() => {
-                      const contextProposals = normalizeAskContextProposals(message.contextProposals ?? message.proposals);
+                      const contextProposals = isPublicDemo
+                        ? []
+                        : normalizeAskContextProposals(message.contextProposals ?? message.proposals);
                       const isHidden = (proposal: AskContextProposal) =>
                         (proposal.confirmationStatus === 'dismissed'
                           && !shownProposalKeys.has(proposalUiKey(message.id, proposal)))
@@ -1118,7 +1152,8 @@ export function AskGapswise({
             rows={2}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Gapwise anything about your workspaces, goals, or external knowledge..."
+            maxLength={isPublicDemo ? 300 : undefined}
+            placeholder={isPublicDemo ? 'Ask about this demo workspace…' : 'Ask Gapwise anything about your workspaces, goals, or external knowledge...'}
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm text-slate-100 outline-none focus:border-cyan-500"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -1129,7 +1164,7 @@ export function AskGapswise({
           />
           <button
             type="submit"
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || (isPublicDemo && publicMessagesRemaining === 0)}
             title="Send message"
             className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-cyan-500 text-slate-950 disabled:opacity-40"
           >

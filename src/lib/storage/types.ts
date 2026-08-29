@@ -170,6 +170,40 @@ export interface AskSuggestionsCacheRecord {
   status?: AskSuggestionAssessmentStatus;
 }
 
+export interface PublicDemoUsage {
+  userId: string;
+  quickDemoProjectId?: string;
+  /** The creation timestamp reserved for the public Quick Demo identity. */
+  quickDemoCreatedAt?: string;
+  quickDemoStatus?: 'creating' | 'ready' | 'failed';
+  askMessagesUsed: number;
+  askOperationIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  /** Public-demo records are retained for seven days before administrative cleanup. */
+  expiresAt: string;
+}
+
+export interface PublicDemoQuickDemoClaim {
+  claimed: boolean;
+  projectId: string;
+  createdAt: string;
+}
+
+export interface PublicDemoDailyUsage {
+  date: string;
+  demosCreated: number;
+  askMessagesUsed: number;
+  updatedAt: string;
+}
+
+export interface PublicDemoAskConsumption {
+  accepted: boolean;
+  alreadyConsumed: boolean;
+  messagesRemaining: number;
+  usage: PublicDemoUsage;
+}
+
 export type DeveloperGenerationRunStatus = 'running' | 'completed' | 'failed';
 
 export type DeveloperGenerationStepCategory =
@@ -281,6 +315,27 @@ export interface StorageProvider {
   beginAskSuggestionsRefresh?(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean>;
   publishAskSuggestionsCache?(userId: string, record: AskSuggestionsCacheRecord, generationId: string): Promise<boolean>;
   markAskSuggestionsStale?(userId: string, projectId: string, requestedSemanticProjectVersion: string): Promise<void>;
+
+  getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null>;
+  savePublicDemoUsage(userId: string, usage: PublicDemoUsage): Promise<void>;
+  reservePublicDemoQuickDemo(params: {
+    userId: string;
+    projectId: string;
+    createdAt: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoQuickDemoClaim>;
+  setPublicDemoQuickDemoStatus(params: {
+    userId: string;
+    projectId: string;
+    status: 'creating' | 'ready' | 'failed';
+  }): Promise<void>;
+  consumePublicDemoAsk(params: {
+    userId: string;
+    operationId: string;
+    dailyLimit: number;
+    now?: string;
+  }): Promise<PublicDemoAskConsumption>;
 
   listDeveloperGenerationRuns(userId: string, projectId?: string): Promise<DeveloperGenerationRun[]>;
   getDeveloperGenerationRun(userId: string, runId: string): Promise<DeveloperGenerationRun | null>;

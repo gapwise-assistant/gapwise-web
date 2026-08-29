@@ -9,6 +9,7 @@ import { AppDestination, PRIMARY_NAVIGATION } from '@/lib/navigation';
 import { closeOpenMenus, useDismissibleMenu } from '@/lib/ui/useDismissibleMenu';
 import { formatCompactDateTime, formatDateTime } from '@/lib/datetime/displayDateTime';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
+import type { AccessTier } from '@/lib/auth/server';
 
 type AppTab = AppDestination;
 
@@ -32,6 +33,7 @@ interface HeaderProps {
   isSettingsOpen: boolean;
   accountLabel?: string;
   demoMode?: boolean;
+  accessTier?: AccessTier | null;
 }
 
 const NAV_ITEMS = PRIMARY_NAVIGATION;
@@ -56,6 +58,7 @@ export const Header: React.FC<HeaderProps> = ({
   isSettingsOpen,
   accountLabel,
   demoMode = false,
+  accessTier = null,
 }) => {
   const [demoMenuOpen, setDemoMenuOpen] = useState(false);
   const demoMenuRef = useRef<HTMLDivElement>(null);
@@ -63,6 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
   const isAnyDemoLoading = isLoadingQuickDemo || isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isCleaningUpLocalData;
   const hasDeveloperDemoActions = Boolean(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCleanupLocalData);
+  const isPublicDemo = accessTier === 'public_demo';
   const selectedScopeValue = scope && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '';
@@ -105,6 +109,11 @@ export const Header: React.FC<HeaderProps> = ({
                   Demo mode
                 </span>
               )}
+              {isPublicDemo && (
+                <span className="rounded border border-cyan-800 bg-cyan-950/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-cyan-300">
+                  Demo access
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-400 hidden lg:block">
               Find the question that unlocks the next decision.
@@ -130,12 +139,16 @@ export const Header: React.FC<HeaderProps> = ({
                 </option>
               ))}
             </optgroup>
-            <option disabled className="bg-slate-900">
-              ─────────────
-            </option>
-            <option value="__new_project__" className="bg-slate-900">
-              + New workspace
-            </option>
+            {!isPublicDemo && (
+              <>
+                <option disabled className="bg-slate-900">
+                  ─────────────
+                </option>
+                <option value="__new_project__" className="bg-slate-900">
+                  + New workspace
+                </option>
+              </>
+            )}
           </select>
         </div>
 
@@ -186,7 +199,7 @@ export const Header: React.FC<HeaderProps> = ({
                         className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
                       >
                         {isLoadingQuickDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-cyan-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />}
-                        {isLoadingQuickDemo ? 'Creating quick demo…' : 'Create quick Gapwise demo'}
+                        {isLoadingQuickDemo ? 'Loading demo…' : isPublicDemo ? 'Load demo' : 'Create quick Gapwise demo'}
                       </button>
                     </div>
                   )}
@@ -247,7 +260,7 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className="w-4 h-4" />
             </button>
           )}
-          <button
+          {!isPublicDemo && <button
             type="button"
             onClick={onOpenSettings}
             title={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
@@ -257,7 +270,7 @@ export const Header: React.FC<HeaderProps> = ({
             className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-300 sm:h-auto sm:w-auto"
           >
             <Settings2 className="w-4 h-4" />
-          </button>
+          </button>}
         </div>
       </div>
     </header>

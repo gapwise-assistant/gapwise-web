@@ -47,6 +47,7 @@ interface TodayProps {
   onReviewDecision?: (nodeId: string) => void;
   onNavigateToSource?: (sourceId: string) => void;
   onViewReasoningPath?: (nodeId: string) => void;
+  readOnly?: boolean;
 }
 
 type TodayLoadState = 'loading' | 'ready' | 'error';
@@ -232,7 +233,7 @@ function questionSectionSummary(items: OpenQuestionRowItem[], project: Project):
   return 'Resolve these before the next important workspace decision.';
 }
 
-export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath }) => {
+export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, feedbackEvents, onUpdateMemories, onFeedbackEvent, onUpdateProfile, profile, onAnswerQuestion, onViewResolvedGaps, onReviewDecision, onNavigateToSource, onViewReasoningPath, readOnly = false }) => {
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [serverBrief, setServerBrief] = useState<DailyBrief | null>(null);
   const [focusAssessment, setFocusAssessment] = useState<FocusAssessment | null>(null);
@@ -614,9 +615,11 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       {showRecommendedFocus && focusGuidance && (
         <RecommendedFocus
           guidance={focusGuidance}
-          onResolve={canResolveFocus && focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
-          onDecide={canDecideFocus && focusTargetNode && onReviewDecision ? () => onReviewDecision(focusTargetNode.id) : undefined}
-          onViewDecisionMap={focusTargetNode && onViewReasoningPath ? () => onViewReasoningPath(focusTargetNode.id) : undefined}
+          onResolve={!readOnly && canResolveFocus && focusQuestion && onAnswerQuestion ? () => onAnswerQuestion(focusQuestion) : undefined}
+          onDecide={!readOnly && canDecideFocus && focusTargetNode && onReviewDecision ? () => onReviewDecision(focusTargetNode.id) : undefined}
+          onViewGap={readOnly && canResolveFocus && focusTargetNode && onViewReasoningPath ? () => onViewReasoningPath(focusTargetNode.id) : undefined}
+          onViewDecision={readOnly && canDecideFocus && focusTargetNode && onViewReasoningPath ? () => onViewReasoningPath(focusTargetNode.id) : undefined}
+          onViewDecisionMap={!readOnly && focusTargetNode && onViewReasoningPath ? () => onViewReasoningPath(focusTargetNode.id) : undefined}
         />
       )}
 
@@ -636,13 +639,22 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
                     {decision.why_it_matters?.[0] ?? 'This workspace choice is still open and needs a recorded decision.'}
                   </p>
                 </div>
-                {onReviewDecision && (
-                <Button
+                {!readOnly && onReviewDecision && (
+                  <Button
                     variant="primary"
                     size="sm"
                     onClick={() => onReviewDecision(decision.id)}
                   >
                     Decide
+                  </Button>
+                )}
+                {readOnly && onViewReasoningPath && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onViewReasoningPath(decision.id)}
+                  >
+                    View decision
                   </Button>
                 )}
               </article>
@@ -655,8 +667,15 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         <OpenQuestions
           items={visibleQuestions}
           summary={questionSectionSummary(visibleQuestions, project)}
-          onAnswer={(question) => onAnswerQuestion?.(question)}
-          onHide={handleHideQuestion}
+          onAnswer={!readOnly ? (question) => onAnswerQuestion?.(question) : undefined}
+          onView={readOnly && onViewReasoningPath
+            ? (question) => {
+              const nodeId = question.sourceNodeIds.find((id) => project.nodes.some((node) => node.id === id));
+              if (nodeId) onViewReasoningPath(nodeId);
+            }
+            : undefined}
+          onHide={!readOnly ? handleHideQuestion : undefined}
+          readOnly={readOnly}
         />
       )}
 

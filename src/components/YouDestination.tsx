@@ -50,6 +50,7 @@ interface ScopeDestinationProps {
   gapsNavigationRequest?: { status: GapStatusFilter; key: number } | null;
   onGapsNavigationHandled?: () => void;
   reasoningPathNodeId?: string | null;
+  readOnly?: boolean;
 }
 
 type ScopeSection = 'projects' | 'priorities' | 'unclear' | 'context';
@@ -97,6 +98,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
   gapsNavigationRequest,
   onGapsNavigationHandled,
   reasoningPathNodeId,
+  readOnly = false,
 }) => {
   const [section, setSection] = useState<ScopeSection>('projects');
   const [projectSection, setProjectSection] = useState<ProjectSection>('overview');
@@ -239,7 +241,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           </h3>
           <p className="mt-2 line-clamp-2 text-sm font-semibold text-slate-300">{summary.primaryGoal}</p>
         </div>
-        <div className="relative flex-shrink-0">
+        {!readOnly && <div className="relative flex-shrink-0">
           <button
             type="button"
             onClick={(event) => {
@@ -285,7 +287,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
               )}
             </div>
           )}
-        </div>
+        </div>}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
         <span>{summary.openImportantCount} open question{summary.openImportantCount === 1 ? '' : 's'}</span>
@@ -326,24 +328,26 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                   <p className="text-xs font-semibold text-cyan-300">Related to: {projectTitlePresentation(relatedProject.title).title}</p>
                 )}
                 <p className="text-xs text-slate-400">{node.why_it_matters?.[0] ?? 'This remains unresolved in your context.'}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => onAnswerQuestion(node)}
-                  >
-                    Resolve
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => {
-                      if (relatedProject) onUpdateProject(dismissNode(relatedProject, node.id));
-                    }}
-                  >
-                    Dismiss / Not relevant
-                  </Button>
-                </div>
+                {!readOnly && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => onAnswerQuestion(node)}
+                    >
+                      Resolve
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => {
+                        if (relatedProject) onUpdateProject(dismissNode(relatedProject, node.id));
+                      }}
+                    >
+                      Dismiss / Not relevant
+                    </Button>
+                  </div>
+                )}
               </article>
             );
           })}
@@ -404,6 +408,7 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       onReviewDecision={onReviewDecision}
       onOpenResolvedGap={onOpenResolvedGap}
       initialStatusFilter={gapsStatusFilter}
+      readOnly={readOnly}
     />
   );
 
@@ -415,14 +420,16 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           <h2 className="mt-2 text-xl font-extrabold text-slate-100">Your workspaces</h2>
           <p className="mt-1 text-sm text-slate-500">Choose a workspace to open it.</p>
         </div>
-        <Button
-          variant="primary"
-          size="md"
-          onClick={onOpenNewProject}
-          icon={<Plus className="h-4 w-4" aria-hidden="true" />}
-        >
-          New workspace
-        </Button>
+        {!readOnly && (
+          <Button
+            variant="primary"
+            size="md"
+            onClick={onOpenNewProject}
+            icon={<Plus className="h-4 w-4" aria-hidden="true" />}
+          >
+            New workspace
+          </Button>
+        )}
       </div>
 
       <section>
@@ -441,15 +448,17 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             <p className="mx-auto mt-2 max-w-sm text-sm text-slate-400">
               Create a workspace and give Gapwise some context.
             </p>
-            <Button
-              variant="primary"
-              size="md"
-              onClick={onOpenNewProject}
-              className="mt-4"
-              icon={<Plus className="h-4 w-4" aria-hidden="true" />}
-            >
-              New workspace
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={onOpenNewProject}
+                className="mt-4"
+                icon={<Plus className="h-4 w-4" aria-hidden="true" />}
+              >
+                New workspace
+              </Button>
+            )}
           </div>
         )}
       </section>
@@ -484,20 +493,22 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
             <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-cyan-400">WORKSPACE</p>
             <div className="relative mt-2 flex items-center gap-2">
               <h1 className="text-2xl font-extrabold text-slate-100">{projectTitlePresentation(project.title).title}</h1>
-              <button
-                type="button"
-                onClick={() => setOpenProjectMenuId(openProjectMenuId === project.id ? null : project.id)}
-                className="min-h-11 min-w-11 rounded-lg p-2 text-slate-500 hover:bg-slate-900 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
-                aria-label={`Workspace actions for ${projectTitlePresentation(project.title).title}`}
-                aria-expanded={openProjectMenuId === project.id}
-              >
-                <MoreHorizontal className="h-5 w-5" />
-              </button>
-              {openProjectMenuId === project.id && (
-                <div
-                  className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl"
-                  onClick={(event) => event.stopPropagation()}
-                >
+              {!readOnly && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setOpenProjectMenuId(openProjectMenuId === project.id ? null : project.id)}
+                    className="min-h-11 min-w-11 rounded-lg p-2 text-slate-500 hover:bg-slate-900 hover:text-slate-100 sm:min-h-0 sm:min-w-0"
+                    aria-label={`Workspace actions for ${projectTitlePresentation(project.title).title}`}
+                    aria-expanded={openProjectMenuId === project.id}
+                  >
+                    <MoreHorizontal className="h-5 w-5" />
+                  </button>
+                  {openProjectMenuId === project.id && (
+                    <div
+                      className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border border-slate-700 bg-slate-950 p-1 shadow-xl"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                   <button
                     type="button"
                     onClick={() => {
@@ -515,7 +526,9 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
                   >
                     Archive workspace
                   </button>
-                </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">{project.goal}</p>
@@ -547,8 +560,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       </header>
       {projectSection === 'overview' && renderProjectOverview()}
       {projectSection === 'gaps' && renderProjectQuestions()}
-      {projectSection === 'history' && <ProjectHistory userId={userId} project={project} onNavigateToSource={onNavigateToSource} onProjectBranched={onProjectBranched} />}
-      {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={(node) => onReviewDecision(node.id)} onResolveQuestion={onAnswerQuestion} />}
+      {projectSection === 'history' && <ProjectHistory userId={userId} project={project} onNavigateToSource={onNavigateToSource} onProjectBranched={readOnly ? undefined : onProjectBranched} readOnly={readOnly} />}
+      {projectSection === 'graph' && <ClarityGraphCanvas userId={userId} project={project} focusNodeId={reasoningPathNodeId} onSelectNode={() => {}} onSelectSource={onNavigateToSource} onReviewDecision={readOnly ? undefined : (node) => onReviewDecision(node.id)} onResolveQuestion={readOnly ? undefined : onAnswerQuestion} />}
       {projectSection === 'context' && (
         <ContextInbox
           project={project}
@@ -561,9 +574,10 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
           entryTab={contextEntry?.tab}
           onUpdateProject={onUpdateProject}
           onUpdateGeneralContext={onUpdateGeneralContext}
+          readOnly={readOnly}
         />
       )}
-      {isProjectEditOpen && (
+      {isProjectEditOpen && !readOnly && (
         <ProjectSettingsPanel
           project={project}
           mode="modal"

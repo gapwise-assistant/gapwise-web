@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { askGapswise, AskAgentError } from '@/lib/ask/adkClient';
+import { askGapswise, askPublicDemo, AskAgentError } from '@/lib/ask/adkClient';
 import { boundedId } from '@/lib/ids/boundedId';
 import { POST } from './route';
 import { askGapswiseLocally } from '@/lib/ask/localDemoAdapter';
-import { getStorageProvider } from '@/lib/storage';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
 import { StorageProvider } from '@/lib/storage/types';
 import { persistAskConversationContext } from '@/lib/ask/conversationContext';
+import { requireAuthenticatedPrincipal } from '@/lib/auth/server';
+import { requirePublicDemoAppCheck } from '@/lib/auth/appCheck';
+
+vi.mock('@/lib/history/projectSnapshots', () => ({
+  createProjectSnapshot: vi.fn(),
+}));
 
 vi.mock('@/lib/ask/adkClient', () => ({
   AskAgentError: class AskAgentError extends Error {
@@ -17,16 +23,24 @@ vi.mock('@/lib/ask/adkClient', () => ({
     }
   },
   askGapswise: vi.fn(),
+  askPublicDemo: vi.fn(),
 }));
 vi.mock('@/lib/ask/localDemoAdapter', () => ({ askGapswiseLocally: vi.fn() }));
-vi.mock('@/lib/storage', () => ({ getStorageProvider: vi.fn() }));
+vi.mock('@/lib/storage', () => ({ getStorageProvider: vi.fn(), requireFirestoreStorage: vi.fn() }));
 vi.mock('@/lib/ask/conversationContext', () => ({ persistAskConversationContext: vi.fn() }));
+vi.mock('@/lib/auth/server', () => ({ requireAuthenticatedPrincipal: vi.fn() }));
+vi.mock('@/lib/auth/appCheck', () => ({ requirePublicDemoAppCheck: vi.fn() }));
 
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 const askStorage = {
   getAskChats: vi.fn(),
+  getAskMessages: vi.fn(),
+  getProject: vi.fn(),
+  getPublicDemoUsage: vi.fn(),
+  consumePublicDemoAsk: vi.fn(),
   saveAskChat: vi.fn(),
   saveAskMessage: vi.fn(),
+  listProjectSnapshots: vi.fn(),
 };
 
 function jsonRequest(body: unknown): Request {
@@ -41,9 +55,21 @@ describe('POST /api/ask', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getStorageProvider).mockReturnValue(askStorage as unknown as StorageProvider);
+    vi.mocked(requireFirestoreStorage).mockReturnValue(askStorage as unknown as StorageProvider);
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'demo-user',
+      emailVerified: false,
+      provider: 'local',
+      accessTier: 'local_development',
+    });
+    vi.mocked(requirePublicDemoAppCheck).mockResolvedValue(undefined);
     askStorage.getAskChats.mockResolvedValue([]);
+    askStorage.getAskMessages.mockResolvedValue([]);
+    askStorage.getProject.mockResolvedValue({ id: 'project_hackathon', title: 'Demo', goal: 'Demo goal', nodes: [], edges: [], sources: [] });
+    askStorage.getPublicDemoUsage.mockResolvedValue(null);
     askStorage.saveAskChat.mockResolvedValue(undefined);
     askStorage.saveAskMessage.mockResolvedValue(undefined);
+    askStorage.listProjectSnapshots.mockResolvedValue([]);
     vi.mocked(persistAskConversationContext).mockResolvedValue({
       sourceId: 'ask_chat_1_message_1',
       openQuestionIds: [],
@@ -51,6 +77,7 @@ describe('POST /api/ask', () => {
     });
     if (originalDemoMode === undefined) delete process.env.GAPSWISE_DEMO_MODE;
     else process.env.GAPSWISE_DEMO_MODE = originalDemoMode;
+    vi.mocked(askPublicDemo).mockReset();
   });
 
   it('uses local Ask and never calls ADK in demo mode', async () => {
@@ -60,6 +87,107 @@ describe('POST /api/ask', () => {
     expect(response.status).toBe(200);
     expect(askGapswiseLocally).toHaveBeenCalledOnce();
     expect(askGapswise).not.toHaveBeenCalled();
+  });
+
+  it('sends public-demo Ask directly to the Partner Agent and persists no project mutation', async () => {
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'public-user',
+      emailVerified: false,
+      provider: 'anonymous',
+      accessTier: 'public_demo',
+    });
+    askStorage.getPublicDemoUsage.mockResolvedValue({
+      userId: 'public-user',
+      quickDemoProjectId: 'quick-project',
+      askMessagesUsed: 0,
+      askOperationIds: [],
+      createdAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-28T12:00:00.000Z',
+    });
+    askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
+    askStorage.consumePublicDemoAsk.mockResolvedValue({
+      accepted: true,
+      alreadyConsumed: false,
+      messagesRemaining: 2,
+      usage: {
+        userId: 'public-user',
+        quickDemoProjectId: 'quick-project',
+        askMessagesUsed: 1,
+        askOperationIds: ['ask:chat-1:message-1'],
+        createdAt: '2026-08-28T12:00:00.000Z',
+        updatedAt: '2026-08-28T12:01:00.000Z',
+      },
+    });
+    vi.stubEnv('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT', '30');
+    vi.mocked(askPublicDemo).mockResolvedValue({
+      answer: 'The workshop has one unresolved supply choice.',
+      outcome: 'exploration',
+      sessionId: 'public-session',
+      sources: [],
+      contextProposals: [],
+    });
+
+    const response = await POST(jsonRequest({
+      userId: 'public-user',
+      message: 'What should I think about first?',
+      projectId: 'quick-project',
+      chatId: 'chat-1',
+      userMessageId: 'message-1',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(askPublicDemo).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'public-user',
+      project: expect.objectContaining({ id: 'quick-project' }),
+    }));
+    expect(askGapswise).not.toHaveBeenCalled();
+    expect(persistAskConversationContext).not.toHaveBeenCalled();
+    expect(askStorage.saveAskMessage).toHaveBeenCalledTimes(2);
+    await expect(response.json()).resolves.toMatchObject({
+      answer: 'The workshop has one unresolved supply choice.',
+      publicDemo: { messagesRemaining: 2, complete: false },
+      contextProposals: [],
+    });
+  });
+
+  it('rejects a fourth public-demo Ask before calling the Partner Agent', async () => {
+    vi.mocked(requireAuthenticatedPrincipal).mockResolvedValue({
+      uid: 'public-user',
+      emailVerified: false,
+      provider: 'google',
+      accessTier: 'public_demo',
+    });
+    askStorage.getPublicDemoUsage.mockResolvedValue({
+      userId: 'public-user',
+      quickDemoProjectId: 'quick-project',
+      askMessagesUsed: 3,
+      askOperationIds: ['one', 'two', 'three'],
+      createdAt: '2026-08-28T12:00:00.000Z',
+      updatedAt: '2026-08-28T12:00:00.000Z',
+    });
+    askStorage.getProject.mockResolvedValue({ id: 'quick-project', title: 'Quick Demo', goal: 'Explore Gapwise', nodes: [], edges: [], sources: [] });
+    askStorage.consumePublicDemoAsk.mockResolvedValue({
+      accepted: false,
+      alreadyConsumed: false,
+      messagesRemaining: 0,
+      usage: await askStorage.getPublicDemoUsage('public-user'),
+    });
+    vi.stubEnv('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT', '30');
+
+    const response = await POST(jsonRequest({
+      userId: 'public-user',
+      message: 'One more question',
+      projectId: 'quick-project',
+      chatId: 'chat-4',
+      userMessageId: 'message-4',
+    }));
+
+    expect(response.status).toBe(429);
+    expect(askPublicDemo).not.toHaveBeenCalled();
+    expect(askStorage.saveAskMessage).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      publicDemo: { messagesRemaining: 0, complete: true },
+    });
   });
 
   it('returns the real ADK Ask result payload', async () => {

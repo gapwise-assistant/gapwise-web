@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { getStorageProvider } from '@/lib/storage';
+import { requireAuthenticatedPrincipal } from '@/lib/auth/server';
+import { isPublicDemoPrincipal, loadPublicDemoProject } from '@/lib/auth/publicDemo';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
+import { StorageError } from '@/lib/storage/types';
 import { hasValidAskSuggestionsLease } from '@/lib/ask/suggestionsLease';
 
 export const runtime = 'nodejs';
@@ -35,15 +37,20 @@ async function readSavedSuggestions(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid suggestions request.' }, { status: 400 });
   }
 
-  let userId: string;
+  let principal: Awaited<ReturnType<typeof requireAuthenticatedPrincipal>>;
   try {
-    userId = await requireAuthenticatedUserId(request, parsed.userId);
+    principal = await requireAuthenticatedPrincipal(request, parsed.userId);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status: 401 });
+    const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED' ? 403 : 401;
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Sign in is required.' }, { status });
   }
 
   try {
-    const storage = getStorageProvider();
+    const userId = principal.uid;
+    const storage = isPublicDemoPrincipal(principal) ? requireFirestoreStorage() : getStorageProvider();
+    if (isPublicDemoPrincipal(principal)) {
+      await loadPublicDemoProject(principal, storage, parsed.projectId);
+    }
     const currentProjectVersion = await storage.getProjectSemanticVersion(userId, parsed.projectId);
     if (currentProjectVersion === null) {
       return NextResponse.json({ error: 'The requested workspace was not found.' }, { status: 404 });

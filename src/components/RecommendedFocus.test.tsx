@@ -52,4 +52,14 @@ describe('RecommendedFocus', () => {
     expect(html).not.toContain('Resolve question');
     expect(html).toContain('View in Decision Map');
   });
+
+  it('renders a read-only view action when mutation is unavailable', () => {
+    const html = renderToStaticMarkup(
+      <RecommendedFocus guidance={guidance} onViewDecision={vi.fn()} />,
+    );
+
+    expect(html).toContain('View decision');
+    expect(html).not.toContain('>Decide<');
+    expect(html).not.toContain('Resolve question');
+  });
 });

@@ -38,11 +38,13 @@ export function questionOverflowLabels(params: {
 interface OpenQuestionsProps {
   items: OpenQuestionRowItem[];
   summary: string;
-  onAnswer: (question: TodayQuestion) => void;
+  onAnswer?: (question: TodayQuestion) => void;
+  onView?: (question: TodayQuestion) => void;
   onHide?: (question: TodayQuestion, recommendation?: AttentionCandidate) => void;
+  readOnly?: boolean;
 }
 
-function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAnswer' | 'onHide'> & { item: OpenQuestionRowItem }) {
+function QuestionRow({ item, onAnswer, onView, onHide, readOnly }: Pick<OpenQuestionsProps, 'onAnswer' | 'onView' | 'onHide' | 'readOnly'> & { item: OpenQuestionRowItem }) {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
   useDismissibleMenu(menuOpen, setMenuOpen, menuRef);
@@ -82,13 +84,24 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            variant={item.answered ? 'secondary' : 'primary'}
-            size="sm"
-            onClick={() => onAnswer(item.question)}
-          >
-            {item.answered ? 'Edit' : 'Resolve'}
-          </Button>
+          {!readOnly && onAnswer && (
+            <Button
+              variant={item.answered ? 'secondary' : 'primary'}
+              size="sm"
+              onClick={() => onAnswer(item.question)}
+            >
+              {item.answered ? 'Edit' : 'Resolve'}
+            </Button>
+          )}
+          {readOnly && onView && !item.answered && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onView(item.question)}
+            >
+              View gap
+            </Button>
+          )}
           {overflowLabels.length > 0 && (
             <div ref={menuRef} className="relative">
               <button
@@ -118,7 +131,7 @@ function QuestionRow({ item, onAnswer, onHide }: Pick<OpenQuestionsProps, 'onAns
   );
 }
 
-export function OpenQuestions({ items, summary, onAnswer, onHide }: OpenQuestionsProps) {
+export function OpenQuestions({ items, summary, onAnswer, onView, onHide, readOnly = false }: OpenQuestionsProps) {
   const { openCount, answeredCount } = openQuestionProgress(items);
 
   return (
@@ -136,7 +149,9 @@ export function OpenQuestions({ items, summary, onAnswer, onHide }: OpenQuestion
             key={item.question.id}
             item={item}
             onAnswer={onAnswer}
+            onView={onView}
             onHide={onHide}
+            readOnly={readOnly}
           />
         )) : (
           <p className="px-3 py-3 text-xs text-slate-500 sm:px-4">No visible questions right now.</p>

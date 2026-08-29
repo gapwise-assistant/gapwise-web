@@ -82,4 +82,18 @@ describe('OpenQuestions', () => {
     expect(html).toContain('The role may conflict with your preferred direction.');
     expect(html).not.toContain('Does this role remain acceptable?');
   });
+
+  it('renders a read-only View gap action instead of Resolve', () => {
+    const html = renderToStaticMarkup(
+      <OpenQuestions
+        items={[row('availability', 'Is the venue available?')]}
+        summary="Review the remaining gap."
+        onView={vi.fn()}
+        readOnly
+      />,
+    );
+
+    expect(html).toContain('View gap');
+    expect(html).not.toContain('Resolve');
+  });
 });

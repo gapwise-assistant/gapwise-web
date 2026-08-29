@@ -18,6 +18,7 @@ interface ProjectQuestionsListProps {
   onReviewDecision: (nodeId: string) => void;
   onOpenResolvedGap?: (record: ResolvedGapRecord) => void;
   initialStatusFilter?: GapStatusFilter;
+  readOnly?: boolean;
 }
 
 export type GapStatusFilter = 'all' | 'open' | 'resolved';
@@ -32,6 +33,7 @@ interface GapRow {
   answeredQuestion?: AnsweredQuestion;
   node?: ClarityNode;
   resolvedGap?: ResolvedGapRecord;
+  resolution?: string;
 }
 
 function rowKey(item: AnsweredQuestion): string {
@@ -43,24 +45,41 @@ function sortGaps(left: GapRow, right: GapRow): number {
   return left.text.localeCompare(right.text);
 }
 
-function GapRowButton({ gap, onOpen }: { gap: GapRow; onOpen: () => void }) {
+function GapRowButton({ gap, onOpen, showResolution = false }: { gap: GapRow; onOpen?: () => void; showResolution?: boolean }) {
   const resolved = gap.status === 'resolved';
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500 sm:px-5 ${resolved ? 'bg-slate-950/25' : ''}`}
-      title={resolved ? 'View resolved gap details' : 'Open gap details'}
-    >
+  const className = `flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors ${onOpen ? 'hover:bg-slate-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500' : ''} sm:px-5 ${resolved ? 'bg-slate-950/25' : ''}`;
+  const content = (
+    <>
       <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${resolved ? 'border-slate-700 text-slate-500' : 'border-cyan-700 text-cyan-400'}`} aria-hidden="true">
         {resolved ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />}
       </span>
-      <span className={`line-clamp-2 min-w-0 flex-1 text-sm font-bold leading-snug sm:text-[15px] ${resolved ? 'text-slate-500' : 'text-slate-100'}`}>
-        {gap.displayText}
+      <span className="min-w-0 flex-1">
+        <span className={`line-clamp-2 block text-sm font-bold leading-snug sm:text-[15px] ${resolved ? 'text-slate-500' : 'text-slate-100'}`}>
+          {gap.displayText}
+        </span>
+        {showResolution && resolved && gap.resolution && (
+          <span className="mt-1 block whitespace-pre-wrap break-words text-xs font-normal leading-relaxed text-slate-500">
+            {gap.resolution}
+          </span>
+        )}
       </span>
-      <span className={`shrink-0 text-xs ${resolved ? 'text-slate-700' : 'text-slate-600'}`} aria-hidden="true">›</span>
+      {onOpen && <span className={`shrink-0 text-xs ${resolved ? 'text-slate-700' : 'text-slate-600'}`} aria-hidden="true">›</span>}
+    </>
+  );
+
+  return onOpen ? (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={className}
+      title={resolved ? 'View resolved gap details' : 'Open gap details'}
+    >
+      {content}
     </button>
+  ) : (
+    <div className={className} aria-label={resolved ? 'Resolved workspace gap' : 'Open workspace gap'}>
+      {content}
+    </div>
   );
 }
 
@@ -77,6 +96,7 @@ export function ProjectQuestionsList({
   onReviewDecision,
   onOpenResolvedGap,
   initialStatusFilter,
+  readOnly = false,
 }: ProjectQuestionsListProps) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<GapStatusFilter>(initialStatusFilter ?? 'all');
@@ -99,6 +119,7 @@ export function ProjectQuestionsList({
         status: 'resolved' as const,
         kind: 'question' as const,
         answeredQuestion: item,
+        resolution: item.answer,
       }));
     const legacyDecisionFallback = resolvedGaps.length === 0
       ? resolvedDecisions.map((node) => ({
@@ -108,6 +129,7 @@ export function ProjectQuestionsList({
         status: 'resolved' as const,
         kind: 'decision' as const,
         node,
+        resolution: node.decision_outcome,
       }))
       : [];
     return [
@@ -134,6 +156,7 @@ export function ProjectQuestionsList({
         status: 'resolved' as const,
         kind: record.kind === 'decision' ? 'decision' as const : 'question' as const,
         resolvedGap: record,
+        resolution: record.resolution,
       })),
       ...resolvedHistoryFallback,
       ...legacyDecisionFallback,
@@ -153,6 +176,7 @@ export function ProjectQuestionsList({
   const visibleResolvedGaps = filteredGaps.filter((gap) => gap.status === 'resolved');
 
   const openGap = (gap: GapRow) => {
+    if (readOnly) return;
     if (gap.resolvedGap && onOpenResolvedGap) {
       onOpenResolvedGap(gap.resolvedGap);
       return;
@@ -189,7 +213,7 @@ export function ProjectQuestionsList({
         )}
       </div>
       <div className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-        {items.length ? items.map((gap) => <GapRowButton key={gap.id} gap={gap} onOpen={() => openGap(gap)} />) : (
+        {items.length ? items.map((gap) => <GapRowButton key={gap.id} gap={gap} onOpen={readOnly ? undefined : () => openGap(gap)} showResolution={readOnly} />) : (
           <p className="px-4 py-4 text-sm text-slate-500 sm:px-5">{emptyText}</p>
         )}
       </div>

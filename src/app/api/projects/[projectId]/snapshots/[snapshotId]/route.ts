@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
-import { requireFirestoreStorage } from '@/lib/storage';
+import { requireAuthenticatedPrincipal } from '@/lib/auth/server';
+import { assertPublicDemoProject, isPublicDemoPrincipal } from '@/lib/auth/publicDemo';
+import { getStorageProvider, requireFirestoreStorage } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
 import { materializeProjectSnapshot } from '@/lib/history/projectSnapshots';
 
@@ -19,8 +20,13 @@ export async function GET(
 ) {
   try {
     const { projectId, snapshotId } = await params;
-    const userId = await requireAuthenticatedUserId(request, new URL(request.url).searchParams.get('userId') ?? undefined);
-    const storage = requireFirestoreStorage();
+    const principal = await requireAuthenticatedPrincipal(request, new URL(request.url).searchParams.get('userId') ?? undefined);
+    const userId = principal.uid;
+    const storage = isPublicDemoPrincipal(principal)
+      ? requireFirestoreStorage()
+      : getStorageProvider();
+    const usage = isPublicDemoPrincipal(principal) ? await storage.getPublicDemoUsage(userId) : null;
+    assertPublicDemoProject(principal, projectId, usage);
     const project = await storage.getProject(userId, projectId);
     const snapshot = await storage.getProjectSnapshot(userId, snapshotId);
     if (!project) throw new StorageError('The workspace does not exist.', 'NOT_FOUND');

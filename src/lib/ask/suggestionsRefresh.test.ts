@@ -194,9 +194,8 @@ describe('Ask suggestions refresh', () => {
       memories: [],
       storage: raceStorage as never,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
 
-    expect(releases).toHaveLength(2);
     releases[1]!();
     await expect(secondRefresh).resolves.toMatchObject({ top: ['Generated 2?'] });
     releases[0]!();
@@ -259,9 +258,8 @@ describe('Ask suggestions refresh', () => {
       memories: [],
       storage: raceStorage as never,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
 
-    expect(releases).toHaveLength(2);
     releases[1]!();
     await expect(secondRefresh).resolves.toMatchObject({ top: ['Profile result 2?'] });
     releases[0]!();

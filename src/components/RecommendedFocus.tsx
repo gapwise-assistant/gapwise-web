@@ -9,10 +9,19 @@ interface RecommendedFocusProps {
   guidance: GapGuidance;
   onResolve?: () => void;
   onDecide?: () => void;
+  onViewGap?: () => void;
+  onViewDecision?: () => void;
   onViewDecisionMap?: () => void;
 }
 
-export function RecommendedFocus({ guidance, onResolve, onDecide, onViewDecisionMap }: RecommendedFocusProps) {
+export function RecommendedFocus({
+  guidance,
+  onResolve,
+  onDecide,
+  onViewGap,
+  onViewDecision,
+  onViewDecisionMap,
+}: RecommendedFocusProps) {
   return (
     <section className="overflow-hidden rounded-xl border border-teal-900/70 bg-gradient-to-br from-teal-950/35 to-slate-900" aria-labelledby="recommended-focus-heading">
       <div className="px-3 py-3 sm:px-4">
@@ -24,7 +33,7 @@ export function RecommendedFocus({ guidance, onResolve, onDecide, onViewDecision
         </div>
         <h2 className="mt-1.5 text-base font-extrabold leading-snug text-slate-100 sm:text-lg">{guidance.focus}</h2>
 
-        {(onResolve || onDecide || onViewDecisionMap) && (
+        {(onResolve || onDecide || onViewGap || onViewDecision || onViewDecisionMap) && (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {onResolve && (
               <Button variant="primary" onClick={onResolve} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
@@ -34,6 +43,16 @@ export function RecommendedFocus({ guidance, onResolve, onDecide, onViewDecision
             {onDecide && (
               <Button variant="primary" onClick={onDecide} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
                 Decide
+              </Button>
+            )}
+            {onViewGap && (
+              <Button variant="secondary" onClick={onViewGap} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
+                View gap
+              </Button>
+            )}
+            {onViewDecision && (
+              <Button variant="secondary" onClick={onViewDecision} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
+                View decision
               </Button>
             )}
             {onViewDecisionMap && (

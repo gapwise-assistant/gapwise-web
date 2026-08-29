@@ -5,7 +5,9 @@ import { processContextSource } from '@/lib/context/contextAnalysis';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { listProjects, loadProjectState, saveProject, setActiveProjectId, setAppScope } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal, requireAuthenticatedUserId } from '@/lib/auth/server';
+import { isPublicDemoPrincipal, publicDemoUsageExpired } from '@/lib/auth/publicDemo';
+import { requireFirestoreStorage } from '@/lib/storage';
 import { isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { resolveScope } from '@/lib/scope/projectScope';
@@ -63,7 +65,24 @@ async function readUserId(request: NextRequest): Promise<string> {
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = await readUserId(request);
+    const principal = await requireAuthenticatedPrincipal(request, request.nextUrl.searchParams.get('userId')?.trim());
+    const userId = principal.uid;
+    if (isPublicDemoPrincipal(principal)) {
+      const storage = requireFirestoreStorage();
+      const usage = await storage.getPublicDemoUsage(userId);
+      if (
+        !usage?.quickDemoProjectId
+        || usage.quickDemoStatus === 'creating'
+        || usage.quickDemoStatus === 'failed'
+        || publicDemoUsageExpired(usage)
+      ) {
+        return NextResponse.json({ projects: [], activeProjectId: null, scope: null });
+      }
+      const quickDemo = await storage.getProject(userId, usage.quickDemoProjectId);
+      if (!quickDemo) return NextResponse.json({ projects: [], activeProjectId: null, scope: null });
+      const scope = { type: 'project' as const, projectId: quickDemo.id };
+      return NextResponse.json({ projects: [quickDemo], activeProjectId: quickDemo.id, scope });
+    }
     const state = await loadProjectState(userId);
     return NextResponse.json(state);
   } catch (error) {

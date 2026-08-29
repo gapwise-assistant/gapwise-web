@@ -17,6 +17,7 @@ interface ProjectHistoryProps {
   userId?: string;
   onNavigateToSource?: (sourceId: string) => void;
   onProjectBranched?: (project: Project) => void;
+  readOnly?: boolean;
 }
 
 /**
@@ -368,7 +369,7 @@ function focusFromAssessment(assessment: FocusAssessment): ProjectHistoryFocus {
   };
 }
 
-export function ProjectHistory({ project, userId, onNavigateToSource, onProjectBranched }: ProjectHistoryProps) {
+export function ProjectHistory({ project, userId, onNavigateToSource, onProjectBranched, readOnly = false }: ProjectHistoryProps) {
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [sharedFocus, setSharedFocus] = useState<ProjectHistoryFocus | null | undefined>(undefined);
   const [snapshots, setSnapshots] = useState<ProjectSnapshotSummary[]>([]);
@@ -624,7 +625,7 @@ export function ProjectHistory({ project, userId, onNavigateToSource, onProjectB
           error={snapshotError}
           onRetry={visibleSelectedSnapshot ? undefined : () => void loadSnapshot(visibleSelectedSnapshotSummary)}
           onClose={closeSnapshot}
-          onBranch={branchSelectedSnapshot}
+          onBranch={readOnly ? undefined : branchSelectedSnapshot}
         />
       )}
     </section>

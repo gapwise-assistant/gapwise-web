@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
-import { loadProjectForScope } from '@/lib/storage';
+import { loadProjectForScope, requireFirestoreStorage } from '@/lib/storage';
 import { generateDailyBrief } from '@/lib/attention/generateBrief';
 import { StorageError } from '@/lib/storage/types';
 import { recordTrace } from '@/lib/observability/trace';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
 import { loadDurableMemories, loadUserMemoryProfile } from '@/lib/memory/serverStore';
-import { requireAuthenticatedUserId } from '@/lib/auth/server';
+import { requireAuthenticatedPrincipal } from '@/lib/auth/server';
+import { isPublicDemoPrincipal, loadPublicDemoProject } from '@/lib/auth/publicDemo';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
-import { getCachedFocusAssessment } from '@/lib/focus/focusCache';
+import { focusAssessmentCacheId, focusProjectStateVersion, getCachedFocusAssessment } from '@/lib/focus/focusCache';
+import { normalizeFocusAssessment } from '@/lib/focus/normalizeFocusAssessment';
 
 export const runtime = 'nodejs';
 
@@ -27,7 +29,45 @@ export async function POST(request: Request) {
       userId = body.userId?.trim() ?? '';
       if (!userId) throw new StorageError('Missing userId.', 'UNAUTHENTICATED');
     } else {
-      userId = await requireAuthenticatedUserId(request, body.userId?.trim());
+      const principal = await requireAuthenticatedPrincipal(request, body.userId?.trim());
+      userId = principal.uid;
+      if (isPublicDemoPrincipal(principal)) {
+        const storage = requireFirestoreStorage();
+        const project = await loadPublicDemoProject(principal, storage, body.projectId?.trim());
+        const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+        const memories = await loadDurableMemories(userId, profile);
+        const now = new Date();
+        const contextPack = await buildContextPackForUser({
+          userId,
+          query: 'What needs my attention today?',
+          project,
+          profile,
+          durableMemories: memories,
+          scope: { type: 'project', projectId: project.id },
+          reasoningMode: 'focus',
+        }, { now });
+        const brief = generateDailyBrief({
+          userId,
+          project,
+          memories,
+          profile,
+          period: body.period,
+          force: false,
+          contextPack,
+          now,
+        });
+        const focusVersion = await focusProjectStateVersion(project, contextPack, profile);
+        const focusCache = await storage.getFocusAssessment(
+          userId,
+          focusAssessmentCacheId(project.id, focusVersion),
+        );
+        return NextResponse.json({
+          brief,
+          focusAssessment: focusCache?.assessment
+            ? normalizeFocusAssessment(project, focusCache.assessment)
+            : null,
+        });
+      }
     }
 
     const { project, scope } = await loadProjectForScope(userId, body.projectId?.trim() || undefined);
