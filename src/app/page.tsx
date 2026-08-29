@@ -1761,7 +1761,7 @@ export default function Home() {
         </>}
       </main>
 
-      {isSettingsOpen && !isPublicDemo && (
+      {isSettingsOpen && (
         <SettingsDrawer
           onClose={() => setIsSettingsOpen(false)}
             userId={userId}

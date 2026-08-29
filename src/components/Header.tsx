@@ -260,7 +260,7 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className="w-4 h-4" />
             </button>
           )}
-          {!isPublicDemo && <button
+          <button
             type="button"
             onClick={onOpenSettings}
             title={accountLabel ? `Settings for ${accountLabel}` : 'Settings'}
@@ -270,7 +270,7 @@ export const Header: React.FC<HeaderProps> = ({
             className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:border-cyan-800/50 hover:text-cyan-300 sm:h-auto sm:w-auto"
           >
             <Settings2 className="w-4 h-4" />
-          </button>}
+          </button>
         </div>
       </div>
     </header>
