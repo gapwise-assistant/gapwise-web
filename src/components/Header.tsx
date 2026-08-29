@@ -101,23 +101,12 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div className="min-w-0">
             <div className="flex items-center space-x-2">
-              <span className="hidden lg:inline px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase bg-cyan-950/80 text-cyan-300 border border-cyan-800/60 rounded-full">
-                Persistent v1.0
-              </span>
               {demoMode && (
                 <span className="rounded border border-amber-800 bg-amber-950/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-300">
                   Demo mode
                 </span>
               )}
-              {isPublicDemo && (
-                <span className="rounded border border-cyan-800 bg-cyan-950/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-cyan-300">
-                  Demo access
-                </span>
-              )}
             </div>
-            <p className="text-xs text-slate-400 hidden lg:block">
-              Find the question that unlocks the next decision.
-            </p>
           </div>
           <select
             value={selectedScopeValue}
