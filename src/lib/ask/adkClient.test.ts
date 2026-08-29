@@ -40,6 +40,115 @@ afterEach(() => {
 });
 
 describe('determineAskRoute', () => {
+  it('accepts web research routes without a reasoning mode', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'web_research',
+      reason: 'The request asks for online verification.',
+    })));
+
+    await expect(determineAskRoute('demo-user', 'Search online for current information.', null))
+      .resolves.toEqual({
+        route: 'web_research',
+        reason: 'The request asks for online verification.',
+      });
+  });
+
+  it('accepts a nullable reasoning mode without retaining null downstream', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const target = String(url);
+      if (target.endsWith('/internal/ask-route')) {
+        return jsonResponse({
+          route: 'web_research',
+          reason: 'The request asks for online verification.',
+          reasoningMode: null,
+        });
+      }
+      if (target.endsWith('/internal/web-research')) {
+        return jsonResponse({
+          sessionId: 'web-session-null-mode',
+          events: [{
+            content: { parts: [{ text: 'Verified answer.' }] },
+            groundingMetadata: {
+              groundingChunks: [{ web: { uri: 'https://example.com/verified', title: 'Verified source', snippet: 'Verified answer.' } }],
+              groundingSupports: [{ segment: { text: 'Verified answer.' }, groundingChunkIndices: [0], confidenceScores: [0.95] }],
+            },
+          }],
+        });
+      }
+      if (target.endsWith('/api/internal/context-pack')) {
+        return jsonResponse({ contextPack: { relevantEvidence: [], upcomingCommitments: [], researchEvidence: [] } });
+      }
+      throw new Error(`Unexpected fetch ${target} ${String(init?.body ?? '')}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await askGapswise({
+      userId: 'demo-user',
+      message: 'Search online for current information.',
+    });
+
+    expect(result.answer).toBe('Verified answer.');
+    expect(result.execution?.route).toBe('web_research');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/internal/web-research'))).toBe(true);
+  });
+
+  it('keeps internal context valid when reasoning mode is null', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'internal_context',
+      reason: 'The saved project context is relevant.',
+      reasoningMode: null,
+    })));
+
+    await expect(determineAskRoute('demo-user', 'Can you summarize the saved project context?', null))
+      .resolves.toEqual({
+        route: 'internal_context',
+        reason: 'The saved project context is relevant.',
+      });
+  });
+
+  it('preserves a supplied graph reasoning mode', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'graph_reasoning',
+      reason: 'The question requires graph analysis.',
+      reasoningMode: 'decision',
+    })));
+
+    await expect(determineAskRoute('demo-user', 'What should I choose?', null))
+      .resolves.toMatchObject({ route: 'graph_reasoning', reasoningMode: 'decision' });
+  });
+
+  it('uses the graph reasoning default when its mode is null', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'graph_reasoning',
+      reason: 'The question requires graph analysis.',
+      reasoningMode: null,
+    })));
+
+    await expect(determineAskRoute('demo-user', 'How are these project items related?', null))
+      .resolves.toMatchObject({ route: 'graph_reasoning', reasoningMode: 'reasoning' });
+  });
+
+  it('rejects invalid routes through the existing fallback policy', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'not_a_route',
+      reason: 'Malformed route.',
+    })));
+
+    await expect(determineAskRoute('demo-user', 'Help me think this through.', null))
+      .resolves.toMatchObject({ route: 'internal_context' });
+  });
+
+  it('rejects invalid non-null reasoning modes through the existing fallback policy', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      route: 'graph_reasoning',
+      reason: 'Malformed reasoning mode.',
+      reasoningMode: 'unsupported',
+    })));
+
+    await expect(determineAskRoute('demo-user', 'Help me think this through.', null))
+      .resolves.toMatchObject({ route: 'internal_context' });
+  });
+
   it('uses the structured ADK routing decision for explicit and unfamiliar questions', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toContain('/internal/ask-route');

@@ -375,7 +375,7 @@ async def route_ask(
     except Exception as error:
         startup_logger.warning("Ask routing agent failed safely: %s", type(error).__name__)
         raise HTTPException(status_code=502, detail="Ask routing could not produce a valid decision.") from error
-    return decision.model_dump()
+    return decision.model_dump(exclude_none=True)
 
 
 # Main execution

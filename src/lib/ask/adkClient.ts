@@ -190,7 +190,7 @@ type AskContextPack = z.infer<typeof contextPackResponseSchema>['contextPack'];
 const askRouteResponseSchema = z.object({
   route: z.enum(['web_research', 'internal_context', 'graph_reasoning', 'ask_clarification']),
   reason: z.string().default(''),
-  reasoningMode: z.enum(['factual', 'reasoning', 'impact', 'decision', 'focus']).optional(),
+  reasoningMode: z.enum(['factual', 'reasoning', 'impact', 'decision', 'focus']).nullable().optional(),
 });
 
 const askProposalTypeSchema = z.enum([
