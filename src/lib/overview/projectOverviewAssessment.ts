@@ -11,6 +11,7 @@ import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { getVertexGenAIClient } from '@/lib/google/genai';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { isNextActionSatisfied } from '@/lib/actions/completion';
+import { retrieveProjectReasoningContext } from '@/lib/retrieval/projectReasoningContext';
 
 export type ProjectTrajectory =
   | 'exploring'
@@ -79,6 +80,7 @@ export interface ProjectOverviewReasoningPackage {
     impact: number;
     confidence: number;
     why_it_matters: string[];
+    decision_outcome?: string;
   }>;
   canonicalRelationships: Array<{
     source: string;
@@ -125,6 +127,11 @@ export interface ProjectOverviewReasoningPackage {
     id: string;
     text: string;
     status: ClarityNode['status'];
+  }>;
+  supportingEvidence: Array<{
+    filename: string;
+    excerpt: string;
+    supports: string[];
   }>;
 }
 
@@ -188,22 +195,6 @@ function parseModelJson(text: string): unknown {
   return JSON.parse(trimmed || '{}');
 }
 
-function meaningfulTokens(value: string): Set<string> {
-  const ignored = new Set([
-    'what', 'where', 'when', 'which', 'who', 'how', 'why', 'does', 'could',
-    'would', 'should', 'the', 'and', 'for', 'from', 'with', 'this', 'that',
-    'about', 'into', 'your', 'you', 'can', 'will', 'have', 'need', 'know',
-  ]);
-  return new Set(value.toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(' ')
-    .filter((token) => token.length >= 4 && !ignored.has(token)));
-}
-
-function recentEventIds(history: ProjectHistoryEvent[]): Set<string> {
-  return new Set(history.slice(0, 10).map((event) => event.id));
-}
-
 function activeHistory(history: ProjectHistoryEvent[]): ProjectHistoryEvent[] {
   return history
     .filter((event) => Boolean(
@@ -218,28 +209,12 @@ function activeHistory(history: ProjectHistoryEvent[]): ProjectHistoryEvent[] {
     .slice(0, 10);
 }
 
-function goalConnectedNodeIds(project: Project): Set<string> {
-  const related = new Set(
-    project.nodes
-      .filter((node) => node.type === 'GOAL')
-      .map((node) => node.id),
-  );
-  let changed = true;
-  while (changed) {
-    changed = false;
-    project.edges.forEach((edge) => {
-      if (related.has(edge.source) && !related.has(edge.target)) {
-        related.add(edge.target);
-        changed = true;
-      }
-      if (related.has(edge.target) && !related.has(edge.source)) {
-        related.add(edge.source);
-        changed = true;
-      }
-    });
-  }
-  return related;
-}
+const OVERVIEW_REASONING_QUERY = [
+  'What is this workspace trying to accomplish?',
+  'What meaningful progress has been made?',
+  'What remains unresolved?',
+  'Which dependency, blocker, risk, constraint, or consequence matters most to the goal?',
+].join(' ');
 
 function buildPackage(
   project: Project,
@@ -249,7 +224,6 @@ function buildPackage(
 ): ProjectOverviewReasoningPackage {
   const reasoningProject = projectForReasoning(project);
   const recent = activeHistory(history);
-  const recentIds = recentEventIds(recent);
   const recentNodeIds = new Set(
     recent.flatMap((event) => [
       ...(event.sourceNodeIds ?? []),
@@ -258,42 +232,51 @@ function buildPackage(
       event.primaryNodeId ?? '',
     ]).filter(Boolean),
   );
-  const goalNodeIds = goalConnectedNodeIds(reasoningProject);
   const focusNodeIds = new Set([
     ...(focusAssessment?.sourceNodeIds ?? []),
     ...(focusAssessment?.targetNodeId ? [focusAssessment.targetNodeId] : []),
     ...(focusAssessment?.executionNodeId ? [focusAssessment.executionNodeId] : []),
     ...(focusAssessment?.representedNodeIds ?? []),
   ]);
-  const goalTokens = meaningfulTokens(`${reasoningProject.goal} ${reasoningProject.title}`);
-  const edgeDegree = new Map<string, number>();
-  reasoningProject.edges.forEach((edge) => {
-    edgeDegree.set(edge.source, (edgeDegree.get(edge.source) ?? 0) + 1);
-    edgeDegree.set(edge.target, (edgeDegree.get(edge.target) ?? 0) + 1);
-  });
 
-  const scoreNode = (node: ClarityNode): number => {
-    const nodeTokens = meaningfulTokens(`${node.text} ${node.why_it_matters?.join(' ') ?? ''}`);
-    const overlap = [...nodeTokens].filter((token) => goalTokens.has(token)).length;
-    const isOpenPriority = node.status === 'OPEN' && [
-      'DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK', 'NEXT_ACTION',
-    ].includes(node.type)
-      && !(node.type === 'NEXT_ACTION' && isNextActionSatisfied(reasoningProject, node));
-    return (goalNodeIds.has(node.id) ? 40 : 0)
-      + (focusNodeIds.has(node.id) ? 35 : 0)
-      + (recentNodeIds.has(node.id) ? 30 : 0)
-      + (isOpenPriority ? 25 : 0)
-      + (node.type === 'GOAL' ? 20 : 0)
-      + Math.min(edgeDegree.get(node.id) ?? 0, 4) * 4
-      + overlap * 3
-      + node.impact * 10
-      + node.confidence * 5;
-  };
-
-  const selectedNodes = reasoningProject.nodes
-    .filter((node) => node.status !== 'DEPRECATED')
-    .sort((left, right) => scoreNode(right) - scoreNode(left))
-    .slice(0, 40);
+  // Reuse the bounded graph retrieval already used by Ask. The overview gets
+  // the same canonical, project-scoped evidence without serializing the full
+  // graph or any raw source documents.
+  const reasoningContext = contextPack?.projectReasoningContext
+    ?? retrieveProjectReasoningContext({
+      project: reasoningProject,
+      query: OVERVIEW_REASONING_QUERY,
+      mode: 'reasoning',
+      limits: {
+        seedNodes: 5,
+        directNeighbors: 5,
+        secondHopNodes: 3,
+        totalNodes: 12,
+        sources: 6,
+      },
+    });
+  const nodesById = new Map(reasoningProject.nodes.map((node) => [node.id, node]));
+  const retrievedNodes = [...reasoningContext.seedNodes, ...reasoningContext.expandedNodes]
+    .map((node) => nodesById.get(node.id))
+    .filter((node): node is ClarityNode => node !== undefined && node.status !== 'DEPRECATED');
+  const preferredIds = [
+    ...reasoningProject.nodes.filter((node) => node.type === 'GOAL').map((node) => node.id),
+    ...focusNodeIds,
+    ...recentNodeIds,
+    ...reasoningProject.nodes
+      .filter((node) => node.status === 'OPEN' && ['DECISION', 'UNKNOWN', 'ASSUMPTION', 'RISK'].includes(node.type))
+      .map((node) => node.id),
+    ...reasoningProject.nodes
+      .filter((node) => node.status === 'RESOLVED' && node.type === 'DECISION')
+      .map((node) => node.id),
+  ];
+  const selectedNodes = Array.from(new Set([
+    ...preferredIds,
+    ...retrievedNodes.map((node) => node.id),
+  ]))
+    .map((id) => nodesById.get(id))
+    .filter((node): node is ClarityNode => node !== undefined && node.status !== 'DEPRECATED')
+    .slice(0, 12);
   const selectedNodeIds = new Set(selectedNodes.map((node) => node.id));
   const summarizeNode = (node: ClarityNode) => ({
     id: node.id,
@@ -303,7 +286,19 @@ function buildPackage(
     impact: node.impact,
     confidence: node.confidence,
     why_it_matters: node.why_it_matters?.slice(0, 2) ?? [],
+    ...(node.decision_outcome ? { decision_outcome: node.decision_outcome } : {}),
   });
+  const evidenceCandidates = (reasoningContext.evidence.length > 0
+    ? reasoningContext.evidence
+    : (contextPack?.relevantEvidence ?? []))
+    .filter((evidence) => evidence.derived_node_ids.some((id) => selectedNodeIds.has(id)));
+  const supportingEvidence = evidenceCandidates
+    .slice(0, 6)
+    .map((evidence) => ({
+      filename: evidence.filename,
+      excerpt: evidence.excerpt.slice(0, 360),
+      supports: (evidence.supports ?? []).slice(0, 4),
+    }));
 
   return {
     project: {
@@ -324,7 +319,7 @@ function buildPackage(
       .map((node) => ({ id: node.id, type: node.type, text: node.text, impact: node.impact })),
     recentlyResolved: selectedNodes
       .filter((node) => node.status === 'RESOLVED')
-      .filter((node) => recentNodeIds.has(node.id) || recentIds.size === 0)
+      .filter((node) => recentNodeIds.has(node.id) || recentNodeIds.size === 0)
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
       .slice(0, 8)
       .map((node) => ({ id: node.id, type: node.type, text: node.text, updatedAt: node.updated_at })),
@@ -357,6 +352,7 @@ function buildPackage(
     upcomingCommitments: (contextPack?.upcomingCommitments ?? [])
       .slice(0, 8)
       .map((node) => ({ id: node.id, text: node.text, status: node.status })),
+    supportingEvidence,
   };
 }
 
@@ -436,18 +432,20 @@ export async function generateProjectOverviewAssessment(
     'You are the Project Overview Assessment agent.',
     'Synthesize the canonical project state into a strategic briefing for a person returning to the project after some time away.',
     'Interpret the project; do not merely restate the goal, count nodes, or list graph records.',
-    'The summary must be one strong 3–5 sentence synthesis of where the project stands. Do not repeat the trajectory explanation inside it.',
+    'The summary must be approximately 80–140 words and one strong 3–5 sentence synthesis of where the project stands. Do not repeat the trajectory explanation inside it.',
     'Keep the Overview strategic. Do not use tactical Today-style wording such as current efforts focus on, next step, review the evidence, or what to do first.',
-    'Use only the supplied canonical nodes, relationships, history events, focus assessment, deadline, and commitments.',
+    'Use only the supplied canonical nodes, relationships, history events, focus assessment, deadline, commitments, and supporting source excerpts.',
     'Every meaningful change must reference at least one supplied sourceNodeId and one supplied historyEventId.',
     'Every goal factor, critical issue, and emerging insight must reference supplied sourceNodeIds.',
     'Do not invent facts, progress percentages, deadlines, categories, or unsupported team sentiment.',
+    'Mention a deadline only when the supplied project includes a real deadline. If none is supplied, do not imply one.',
     'Trajectory is qualitative. Choose the state that best describes the project now and explain it in one sentence.',
     'Meaningful changes must use whatChanged for the event and consequence for its project-level effect. Do not turn them into instructions.',
     'Still unsettled must contain at most three important OPEN DECISION, UNKNOWN, or ASSUMPTION nodes only.',
     'Critical issues should be current and strategic. Do not present resolved or deprecated items as current problems. Do not list unfinished NEXT_ACTIONs as issues unless the supplied project state shows that the action itself represents a risk.',
     'Emerging insights must synthesize at least two distinct supplied canonical nodes into an emerging pattern or direction. Do not restate one decision, congratulate the user, or provide generic advice. Omit weak insights.',
     'Do not expose technical relationship names in prose.',
+    'The supplied relationships identify material dependencies and influences. Use them to explain why an unresolved item matters, without naming the relationship type in the user-facing text.',
     'Keep the output concise and within the schema limits. Return JSON only.',
     `Reasoning package:\n${JSON.stringify(reasoningPackage)}`,
   ].join('\n\n');

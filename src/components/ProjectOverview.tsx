@@ -186,7 +186,7 @@ export function ProjectOverview({
         <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">Workspace assessment</p>
         <h2 className="mt-2 text-lg font-extrabold text-slate-100">Overview is being updated.</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">
-          The current overview is unavailable. Try again shortly.
+          The project overview is temporarily unavailable.
         </p>
         <div className="mt-4">
           <OverviewLinks onViewGaps={onViewGaps} onViewHistory={onViewHistory} onViewToday={onViewToday} />

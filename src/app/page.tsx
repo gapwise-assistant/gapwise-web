@@ -1573,11 +1573,7 @@ export default function Home() {
   }, [answerNode, answerTarget, canUseDontKnow, generalContext, profile, project, projects]);
 
   if (!auth.isReady) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-400">
-        Loading Gapwise...
-      </div>
-    );
+    return <WorkspaceLoadingState />;
   }
 
   if (!auth.userId) {

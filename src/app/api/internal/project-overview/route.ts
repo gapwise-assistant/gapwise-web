@@ -58,6 +58,8 @@ export async function POST(request: Request) {
       durableMemories,
       scope,
       includeBroadContext: true,
+      graphReasoning: true,
+      reasoningMode: 'reasoning',
     });
 
     let focusAssessment = null;
@@ -112,10 +114,12 @@ export async function POST(request: Request) {
     const status = error instanceof StorageError && error.code === 'PERMISSION_DENIED'
       ? 403
       : 503;
+    console.error('[Project overview assessment failed]', {
+      error,
+      projectId: parsed.data.projectId,
+    });
     return NextResponse.json({
-      error: error instanceof Error
-        ? error.message
-        : 'Project overview assessment failed.',
+      error: 'The project overview is temporarily unavailable.',
     }, { status });
   }
 }

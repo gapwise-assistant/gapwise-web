@@ -7,6 +7,7 @@ import {
 } from '@/lib/overview/projectOverviewAssessment';
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectHistoryEvent } from '@/types/clarity';
+import type { ContextPack } from '@/types/contextPack';
 
 const generateContent = vi.hoisted(() => vi.fn());
 
@@ -139,7 +140,86 @@ describe('Project Overview Assessment', () => {
       });
     }
     const bounded = buildProjectOverviewReasoningPackage(project, [historyEvent], focusFor('open-decision'));
-    expect(bounded.canonicalNodes.length).toBeLessThanOrEqual(40);
+    expect(bounded.canonicalNodes.length).toBeLessThanOrEqual(12);
+  });
+
+  it('gives Gemini a bounded goal-aware graph slice with outcomes and source evidence', () => {
+    const project = createProjectFromInput({
+      name: 'Pilot rollout',
+      goal: 'Launch a dependable pilot for the first customers.',
+    }, '2026-08-24T10:00:00.000Z');
+    const resolvedDecision = {
+      id: 'resolved-scope',
+      type: 'DECISION' as const,
+      text: 'Choose the first pilot scope.',
+      status: 'RESOLVED' as const,
+      decision_outcome: 'Launch the smaller scope first.',
+      confidence: 1,
+      impact: 0.9,
+      source_refs: ['brief'],
+      created_by: 'user' as const,
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    };
+    const openQuestion = {
+      id: 'open-reliability',
+      type: 'UNKNOWN' as const,
+      text: 'Will the pilot meet the reliability target?',
+      status: 'OPEN' as const,
+      confidence: 0.8,
+      impact: 0.95,
+      source_refs: ['brief'],
+      created_by: 'agent' as const,
+      created_at: project.created_at,
+      updated_at: project.updated_at,
+    };
+    project.nodes.push(resolvedDecision, openQuestion);
+    project.edges.push({
+      id: 'scope-informs-reliability',
+      source: 'resolved-scope',
+      target: 'open-reliability',
+      type: 'informs',
+    });
+
+    const contextPack = {
+      projectReasoningContext: {
+        mode: 'reasoning' as const,
+        seedNodes: [project.nodes[0], resolvedDecision],
+        expandedNodes: [openQuestion],
+        relationships: [project.edges[0]],
+        evidence: [{
+          source_id: 'brief',
+          filename: 'Pilot brief.pdf',
+          excerpt: 'The pilot aims to improve reliability for first customers.',
+          score: 0.9,
+          derived_node_ids: ['resolved-scope', 'open-reliability'],
+          supports: [resolvedDecision.text, openQuestion.text],
+        }],
+        paths: [{ nodeIds: ['resolved-scope', 'open-reliability'], edgeIds: ['scope-informs-reliability'] }],
+        diagnostics: { seedMethod: 'lexical' as const, truncated: false },
+      },
+    } as unknown as ContextPack;
+
+    const reasoningPackage = buildProjectOverviewReasoningPackage(
+      project,
+      [],
+      null,
+      contextPack,
+    );
+
+    expect(reasoningPackage.canonicalNodes.length).toBeLessThanOrEqual(12);
+    expect(reasoningPackage.canonicalNodes.find((node) => node.id === 'resolved-scope')?.decision_outcome)
+      .toBe('Launch the smaller scope first.');
+    expect(reasoningPackage.canonicalRelationships).toContainEqual({
+      source: 'resolved-scope',
+      target: 'open-reliability',
+      type: 'informs',
+    });
+    expect(reasoningPackage.supportingEvidence).toEqual([{
+      filename: 'Pilot brief.pdf',
+      excerpt: 'The pilot aims to improve reliability for first customers.',
+      supports: [resolvedDecision.text, openQuestion.text],
+    }]);
   });
 
   it('keeps only grounded assessment items and rejects unsupported references', async () => {
@@ -250,6 +330,7 @@ describe('Project Overview Assessment', () => {
     expect(prompt).toContain('Do not repeat the trajectory explanation');
     expect(prompt).toContain('Do not use tactical Today-style wording');
     expect(prompt).toContain('Do not invent facts, progress percentages, deadlines');
+    expect(prompt).toContain('approximately 80–140 words');
     expect(generateContent.mock.calls[0][0].config.maxOutputTokens).toBe(4096);
   });
 });

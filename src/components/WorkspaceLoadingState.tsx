@@ -3,8 +3,14 @@
 import React from 'react';
 import NextImage from 'next/image';
 
+interface WorkspaceLoadingStateProps {
+  message?: string;
+}
+
 /** Presentation for the existing initial workspace loading gate. */
-export const WorkspaceLoadingState: React.FC = () => (
+export const WorkspaceLoadingState: React.FC<WorkspaceLoadingStateProps> = ({
+  message = 'Loading your workspace…',
+}) => (
   <div className="flex min-h-[100dvh] items-center justify-center bg-slate-950 px-6 text-slate-100">
     <div
       className="flex flex-col items-center"
@@ -26,9 +32,7 @@ export const WorkspaceLoadingState: React.FC = () => (
           className="relative h-20 w-20 object-contain"
         />
       </div>
-      <p className="mt-6 text-center text-base font-medium text-slate-400 sm:text-lg">
-        Loading your workspace…
-      </p>
+      <p className="mt-6 text-center text-base font-medium text-slate-400 sm:text-lg">{message}</p>
     </div>
   </div>
 );
