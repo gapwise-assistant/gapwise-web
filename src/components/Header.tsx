@@ -25,6 +25,8 @@ interface HeaderProps {
   isLoadingHarborHistoryDemo?: boolean;
   onCreateRiversideHistoryDemo?: () => void;
   isLoadingRiversideHistoryDemo?: boolean;
+  onCreateSoftwareReleaseDemo?: () => void;
+  isLoadingSoftwareReleaseDemo?: boolean;
   onCleanupLocalData?: () => void;
   isCleaningUpLocalData?: boolean;
   onSelectProject: (projectId: string) => void;
@@ -50,6 +52,8 @@ export const Header: React.FC<HeaderProps> = ({
   isLoadingHarborHistoryDemo = false,
   onCreateRiversideHistoryDemo,
   isLoadingRiversideHistoryDemo = false,
+  onCreateSoftwareReleaseDemo,
+  isLoadingSoftwareReleaseDemo = false,
   onCleanupLocalData,
   isCleaningUpLocalData = false,
   onSelectProject,
@@ -64,8 +68,8 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingQuickDemo || isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isCleaningUpLocalData;
-  const hasDeveloperDemoActions = Boolean(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCleanupLocalData);
+  const isAnyDemoLoading = isLoadingQuickDemo || isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isLoadingSoftwareReleaseDemo || isCleaningUpLocalData;
+  const hasDeveloperDemoActions = Boolean(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCreateSoftwareReleaseDemo || onCleanupLocalData);
   const isPublicDemo = accessTier === 'public_demo';
   const selectedScopeValue = scope && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
@@ -217,6 +221,17 @@ export const Header: React.FC<HeaderProps> = ({
                         >
                           {isLoadingRiversideHistoryDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-emerald-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-emerald-300" />}
                           {isLoadingRiversideHistoryDemo ? 'Creating Riverside history…' : 'Create fresh Riverside history'}
+                        </button>
+                      )}
+                      {onCreateSoftwareReleaseDemo && (
+                        <button
+                          type="button"
+                          onClick={() => { setDemoMenuOpen(false); onCreateSoftwareReleaseDemo(); }}
+                          disabled={isAnyDemoLoading}
+                          className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isLoadingSoftwareReleaseDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-cyan-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />}
+                          {isLoadingSoftwareReleaseDemo ? 'Creating software release demo…' : 'Create software release demo'}
                         </button>
                       )}
                       {onCleanupLocalData && (

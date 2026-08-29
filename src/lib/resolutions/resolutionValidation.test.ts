@@ -90,6 +90,36 @@ describe('resolution validation', () => {
     expect(projectBefore.nodes.find((node) => node.id === 'unknown_target_user')?.status).toBe('OPEN');
   });
 
+  it('warns locally when an open question receives only an effectively identical restatement', async () => {
+    const generateContent = vi.fn();
+    vi.mocked(getVertexGenAIClient).mockReturnValue({ models: { generateContent } } as never);
+    const restatements = [
+      'who exactly is the primary target persona and 4-minute demo scenario for gapwise?',
+      '  "Who exactly is the primary target persona and 4-minute demo scenario for Gapwise?"  ',
+      'Who exactly is the primary target persona and 4-minute demo scenario for Gapwise.',
+    ];
+
+    for (const proposedResponse of restatements) {
+      const result = await validateProjectResolution({
+        userId: 'restatement-user',
+        projectId: 'hackathon_demo',
+        nodeId: 'unknown_target_user',
+        proposedResponse,
+      });
+
+      expect(result.validation).toEqual({
+        verdict: 'warning',
+        reason: 'This response repeats the unresolved item without adding a confirmed outcome.',
+        missingInformation: [
+          'Record what was confirmed, what changed, or what evidence resolves the item.',
+        ],
+        confidence: 1,
+      });
+    }
+
+    expect(generateContent).not.toHaveBeenCalled();
+  });
+
   it('returns unavailable on validator failure and reuses an identical cached check', async () => {
     const generateContent = vi.fn()
       .mockResolvedValueOnce({

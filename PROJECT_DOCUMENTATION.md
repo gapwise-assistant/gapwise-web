@@ -1670,7 +1670,7 @@ is currently installed in the repository.
 
 The primary application destinations are now:
 
-- `Today`: what deserves attention now.
+- `Today`: What gap deserves attention now.
 - `Ask`: conversation with Gapswise.
 - `Context`: sources and context capture supplied to Gapswise.
 - `Workspace`: the current reasoning/view boundary.

@@ -5,7 +5,7 @@ import { AuthProvider } from '@/components/AuthProvider';
 export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
   icons: {
-    icon: '/icons/gapwise-g.png',
+    icon: '/icons/g-logo.png',
   },
   title: 'Gapwise | Find the Question That Unlocks the Next Decision',
   description:

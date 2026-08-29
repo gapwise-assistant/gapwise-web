@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { Today } from '@/components/Today';
+import { EMPTY_COMING_UP_COPY, Today } from '@/components/Today';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 
 describe('Today', () => {
@@ -37,7 +37,14 @@ describe('Today', () => {
     );
 
     expect(html).toContain('Loading Today');
+    expect(html).toContain('What deserves attention now');
     expect(html).not.toContain('Open questions · 0');
     expect(html).not.toContain('Nothing needs your attention right now');
+    expect(html).not.toContain('grid-cols-3');
+  });
+
+  it('uses clear product language for an empty Coming Up section', () => {
+    expect(EMPTY_COMING_UP_COPY).toBe('Nothing scheduled soon.');
+    expect(EMPTY_COMING_UP_COPY).not.toContain('Context Pack');
   });
 });

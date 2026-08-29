@@ -65,10 +65,13 @@ describe('quick Gapwise demo', () => {
 
     const insurance = result.project.nodes.find((node) => node.text.startsWith('Does the library require'));
     const kitDecision = result.project.nodes.find((node) => node.text.startsWith('Determine how to provide'));
+    const venueConfirmation = result.project.nodes.find((node) => node.text.startsWith('The community room is expected'));
     const libraryAction = result.project.nodes.find((node) => node.text.startsWith('Ask the library coordinator'));
     expect(insurance).toMatchObject({ type: 'UNKNOWN', status: 'OPEN' });
     expect(kitDecision).toMatchObject({ type: 'DECISION', status: 'OPEN' });
+    expect(venueConfirmation).toMatchObject({ type: 'ASSUMPTION', status: 'OPEN' });
     expect(libraryAction).toMatchObject({ type: 'NEXT_ACTION', status: 'OPEN' });
+    expect(result.project.history).toEqual([]);
     expect(result.project.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ source: libraryAction?.id, target: insurance?.id, type: 'satisfies' }),
       expect.objectContaining({ source: insurance?.id, target: expect.any(String), type: 'informs' }),

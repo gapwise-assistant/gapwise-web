@@ -54,6 +54,7 @@ import { calculateGapPriority } from '@/lib/prioritization';
 import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 import type { QuickDemoResult } from '@/lib/demo/quickDemo';
+import type { SoftwareReleaseDemoResult } from '@/lib/demo/softwareReleaseDemo';
 import type { ResolutionValidationSubmission } from '@/types/resolutionValidation';
 
 type AppTab = AppDestination;
@@ -391,6 +392,25 @@ async function createQuickDemoViaAPI(userId: string): Promise<QuickDemoResult> {
   return (await res.json()) as QuickDemoResult;
 }
 
+async function createSoftwareReleaseDemoViaAPI(userId: string): Promise<SoftwareReleaseDemoResult> {
+  const res = await authFetch('/api/demos/software-release', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const error = new Error(body.error ?? 'The software release demo could not be created.') as Error & {
+      generationRunId?: string;
+      projectId?: string;
+    };
+    error.generationRunId = typeof body.generationRunId === 'string' ? body.generationRunId : undefined;
+    error.projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+    throw error;
+  }
+  return (await res.json()) as SoftwareReleaseDemoResult;
+}
+
 async function loadCleanupPreviewViaAPI(): Promise<LocalCleanupPreview> {
   const res = await authFetch('/api/dev/cleanup-local-user');
   if (!res.ok) {
@@ -541,6 +561,7 @@ export default function Home() {
   const [isLoadingHarborHistoryDemo, setIsLoadingHarborHistoryDemo] = useState(false);
   const [isLoadingRiversideHistoryDemo, setIsLoadingRiversideHistoryDemo] = useState(false);
   const [isLoadingQuickDemo, setIsLoadingQuickDemo] = useState(false);
+  const [isLoadingSoftwareReleaseDemo, setIsLoadingSoftwareReleaseDemo] = useState(false);
   const [isCleanupLocalDataOpen, setIsCleanupLocalDataOpen] = useState(false);
   const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
   const [isCleaningUpLocalData, setIsCleaningUpLocalData] = useState(false);
@@ -591,8 +612,10 @@ export default function Home() {
                     ? 'Harbor Hotels · Late'
               : isLoadingHarborHistoryDemo
                 ? 'Harbor history demo'
-                : isLoadingRiversideHistoryDemo
+              : isLoadingRiversideHistoryDemo
                   ? 'Riverside history demo'
+                  : isLoadingSoftwareReleaseDemo
+                    ? 'RelayDesk software release demo'
                   : isLoadingQuickDemo
                     ? 'quick Gapwise demo'
                   : isLoadingDemo
@@ -1078,6 +1101,27 @@ export default function Home() {
     }
   }, [reloadProjectListFromFirestore, scope?.projectId, userId]);
 
+  const handleCreateSoftwareReleaseDemo = useCallback(async () => {
+    const previousProjectId = scope?.projectId;
+    setIsLoadingSoftwareReleaseDemo(true);
+    try {
+      const result = await createSoftwareReleaseDemoViaAPI(userId);
+      await reloadProjectListFromFirestore(result.project.id);
+      setStorageMessage('');
+      setActiveTab('scope');
+    } catch (caught) {
+      try {
+        await reloadProjectListFromFirestore(previousProjectId);
+      } catch (reloadError) {
+        reportDemoFailure('RelayDesk demo reload after failure', reloadError);
+      }
+      reportDemoFailure('RelayDesk software release demo', caught);
+      setStorageMessage('The software release demo could not be created. Your current workspace was kept.');
+    } finally {
+      setIsLoadingSoftwareReleaseDemo(false);
+    }
+  }, [reloadProjectListFromFirestore, scope?.projectId, userId]);
+
   const handleOpenCleanupLocalData = useCallback(() => {
     setIsCleanupLocalDataOpen(true);
     setCleanupError('');
@@ -1214,7 +1258,6 @@ export default function Home() {
       } : undefined,
       explanation: owner ? buildQuestionWhyExplanation(owner, questionContext) : undefined,
       answerSuggestion,
-      ...(intent === 'confirm' ? { initialAnswer: node.text } : {}),
     });
   }, [generalContext, projects]);
 
@@ -1587,14 +1630,19 @@ export default function Home() {
   // Keep the localhost developer menu available after a cleanup leaves the
   // account empty. Non-local users retain the dedicated onboarding surface.
   if (!scope || !projects.some((item) => item.status !== 'archived')) {
+    if (isLoadingSoftwareReleaseDemo) {
+      return <DemoLoadingState label="RelayDesk software release demo" />;
+    }
+
     return (
       <>
         <NewUserOnboarding
-          isLoadingDemo={isLoadingQuickDemo}
+          isLoadingDemo={isLoadingQuickDemo || isLoadingSoftwareReleaseDemo}
           error={storageMessage}
           isPublicDemo={isPublicDemo}
           onCreateProject={() => setIsNewProjectOpen(true)}
           onLoadDemo={() => void handleCreateQuickDemo()}
+          onLoadSoftwareDemo={auth.accessTier === 'owner' || isLocalhostDeveloper ? () => void handleCreateSoftwareReleaseDemo() : undefined}
         />
         {isNewProjectOpen && !isPublicDemo && (
           <NewProjectModal
@@ -1622,6 +1670,8 @@ export default function Home() {
         isLoadingHarborHistoryDemo={isLoadingHarborHistoryDemo}
         onCreateRiversideHistoryDemo={isLocalhostDeveloper ? handleCreateRiversideHistoryDemo : undefined}
         isLoadingRiversideHistoryDemo={isLoadingRiversideHistoryDemo}
+        onCreateSoftwareReleaseDemo={auth.accessTier === 'owner' || isLocalhostDeveloper ? () => void handleCreateSoftwareReleaseDemo() : undefined}
+        isLoadingSoftwareReleaseDemo={isLoadingSoftwareReleaseDemo}
         onCleanupLocalData={isLocalhostDeveloper ? handleOpenCleanupLocalData : undefined}
         isCleaningUpLocalData={isCleaningUpLocalData}
         onSelectProject={handleSelectProject}

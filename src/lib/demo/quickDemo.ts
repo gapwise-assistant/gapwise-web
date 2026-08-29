@@ -42,7 +42,7 @@ export const QUICK_DEMO_BRIEF = `The neighborhood library has tentatively held i
 
 const INSURANCE_QUESTION = 'Does the library require a certificate of insurance for the repair workshop?';
 const KIT_DECISION = 'Determine how to provide the remaining eight repair kits for the workshop: borrow them or rent them.';
-const VENUE_CONFIRMATION = 'The library will confirm the community room as the repair workshop venue.';
+const VENUE_CONFIRMATION = 'The community room is expected to receive final venue approval once the library\'s insurance requirement is satisfied.';
 const LIBRARY_ACTION = 'Ask the library coordinator to confirm the workshop insurance requirements.';
 
 export interface QuickDemoResult {

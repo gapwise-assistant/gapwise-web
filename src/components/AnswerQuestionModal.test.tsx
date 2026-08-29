@@ -108,6 +108,28 @@ describe('AnswerQuestionModal', () => {
     expect(html).toContain('I don&#x27;t know yet');
   });
 
+  it('starts open assumption confirmation empty with assumption-specific copy', () => {
+    const html = renderToStaticMarkup(
+      <AnswerQuestionModal
+        target={{
+          nodeId: 'assumption-1',
+          question: 'The room will be approved.',
+          intent: 'confirm',
+        }}
+        onSubmit={vi.fn(async () => undefined)}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('Confirm assumption');
+    expect(html).toContain('The room will be approved.');
+    expect(html).toContain('What did you confirm?');
+    expect(html).toContain('Enter the confirmed outcome or explain what is different.');
+    expect(html).toContain('Save confirmation');
+    expect(html).toMatch(/<textarea[^>]*id="question-answer"[^>]*><\/textarea>/);
+    expect(html).not.toContain('value="The room will be approved."');
+  });
+
   it('renders the complete saved answer, including multiline and encoded text, on the first render', () => {
     const answer = 'First line\nSecond line with a non-breaking space\u00a0and <encoded> & text.';
     const html = renderToStaticMarkup(

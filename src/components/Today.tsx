@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
+import NextImage from 'next/image';
+import { ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react';
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
 import { AttentionCandidate, DailyBrief, RecommendationStatus } from '@/types/attention';
@@ -51,6 +52,8 @@ interface TodayProps {
 }
 
 type TodayLoadState = 'loading' | 'ready' | 'error';
+
+export const EMPTY_COMING_UP_COPY = 'Nothing scheduled soon.';
 
 function todayScopeKey(scope: AppScope): string {
   return scope.type === 'project' ? `project:${scope.projectId}` : 'everything';
@@ -111,18 +114,17 @@ function todayProjectStateKey(
 function TodaySkeleton() {
   return (
     <div className="space-y-5" aria-busy="true" aria-label="Loading Today">
-      <div className="grid grid-cols-3 gap-2">
-        {[0, 1, 2].map((item) => <div key={item} className="h-16 animate-pulse rounded-xl border border-slate-800 bg-slate-900" />)}
-      </div>
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+      <section className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5">
         <div className="h-2.5 w-28 animate-pulse rounded bg-slate-800" />
         <div className="mt-4 h-5 w-4/5 animate-pulse rounded bg-slate-800" />
-        <div className="mt-3 h-9 w-36 animate-pulse rounded bg-slate-800" />
+        <div className="mt-4 h-8 w-28 animate-pulse rounded bg-slate-800" />
       </section>
       {[0, 1].map((item) => (
-        <section key={item} className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <div className="h-2.5 w-24 animate-pulse rounded bg-slate-800" />
-          <div className="mt-4 space-y-3">
+        <section key={item} className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80">
+          <div className="border-b border-slate-800 px-4 py-3 sm:px-5">
+            <div className="h-2.5 w-24 animate-pulse rounded bg-slate-800" />
+          </div>
+          <div className="space-y-3 px-4 py-4 sm:px-5">
             <div className="h-4 w-5/6 animate-pulse rounded bg-slate-800" />
             <div className="h-3 w-2/3 animate-pulse rounded bg-slate-800" />
           </div>
@@ -583,7 +585,14 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="shrink-0 rounded-xl border border-cyan-800 bg-cyan-950 p-2.5 text-cyan-300">
-              <Sparkles className="w-6 h-6" />
+              <NextImage
+                src="/icons/g-logo.png"
+                alt=""
+                width={1299}
+                height={1211}
+                className="h-6 w-6 object-contain"
+                aria-hidden="true"
+              />
             </div>
             <div>
               <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
@@ -630,9 +639,9 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
               Decisions · {visibleDecisions.length}
             </h2>
           </div>
-          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-indigo-900/60 bg-slate-900">
+          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-900/80">
             {visibleDecisions.map((decision) => (
-              <article key={decision.id} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+              <article key={decision.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3.5">
                 <div className="min-w-0">
                   <p className="text-sm font-bold leading-snug text-slate-100">{decision.text}</p>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
@@ -700,7 +709,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
       <section className="space-y-2">
         <h2 className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Coming up</h2>
         {comingUp.length > 0 ? (
-          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-900/45">
+          <div className="overflow-hidden divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-900/65">
             {comingUp.map((commitment) => (
               <article
                 key={commitment.id}
@@ -721,7 +730,7 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
           </div>
         ) : (
           <p className="border-y border-slate-800 py-3 text-xs text-slate-500">
-            No near-term commitments in the current Context Pack.
+            {EMPTY_COMING_UP_COPY}
           </p>
         )}
       </section>

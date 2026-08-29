@@ -215,7 +215,7 @@ export function AnswerQuestionModal({
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="answer-question-title" className="max-h-[calc(100dvh-1rem)] w-full max-w-xl overflow-y-auto rounded-t-2xl border border-slate-800 bg-slate-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl sm:p-6 sm:pb-6">
         <header className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
-            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">Resolve</p>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-cyan-400">{target.intent === 'confirm' ? 'Confirm assumption' : 'Resolve'}</p>
             <h2 id="answer-question-title" className="mt-2 text-lg font-extrabold leading-relaxed text-slate-100">
               {target.presentationTitle ?? target.question}
             </h2>
@@ -343,7 +343,7 @@ export function AnswerQuestionModal({
             )}
 
             <section>
-              <label htmlFor="question-answer" className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Your answer</label>
+              <label htmlFor="question-answer" className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">{target.intent === 'confirm' ? 'What did you confirm?' : 'Your answer'}</label>
               <textarea
                 id="question-answer"
                 value={answer}
@@ -353,7 +353,7 @@ export function AnswerQuestionModal({
                 }}
                 rows={4}
                 autoFocus
-                placeholder={target.intent === 'correct' ? 'Explain what should replace this assumption.' : 'Type your answer...'}
+                placeholder={target.intent === 'confirm' ? 'Enter the confirmed outcome or explain what is different.' : target.intent === 'correct' ? 'Explain what should replace this assumption.' : 'Type your answer...'}
                 className="mt-2 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 text-sm text-slate-100 outline-none focus:border-cyan-600"
               />
             </section>
@@ -379,7 +379,7 @@ export function AnswerQuestionModal({
 
             <div className="flex justify-end border-t border-slate-800 pt-4">
               <Button type="submit" variant="primary" loading={isSaving || isValidating} disabled={!answer.trim() || Boolean(validationCheck)}>
-                Save answer
+                {target.intent === 'confirm' ? 'Save confirmation' : 'Save answer'}
               </Button>
             </div>
           </form>

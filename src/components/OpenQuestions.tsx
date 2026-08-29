@@ -69,8 +69,8 @@ function QuestionRow({ item, onAnswer, onView, onHide, readOnly }: Pick<OpenQues
   const displaySummary = item.question.presentationSummary || item.context;
 
   return (
-    <article className={`border-l-2 border-transparent px-3 py-2.5 sm:px-4 ${item.answered ? 'bg-slate-950/30' : ''}`}>
-      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <article className={`px-4 py-3 sm:px-5 ${item.answered ? 'bg-slate-950/30' : ''}`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
           <p className={`text-[15px] font-bold leading-snug ${item.answered ? 'text-slate-400' : 'text-slate-100'}`}>
             {item.answered && <Check className="mr-1 inline h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />}
@@ -141,7 +141,7 @@ export function OpenQuestions({ items, summary, onAnswer, onView, onHide, readOn
         {answeredCount > 0 && <span className="sr-only">{answeredCount} answered</span>}
       </div>
       <p className="text-sm text-slate-400">{summary}</p>
-      <div className="overflow-visible rounded-xl border border-slate-800 bg-slate-900 divide-y divide-slate-800">
+      <div className="overflow-visible divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-900/80">
         {items.length > 0 ? items.map((item) => (
           <QuestionRow
             // A recommendation can support more than one question, so its

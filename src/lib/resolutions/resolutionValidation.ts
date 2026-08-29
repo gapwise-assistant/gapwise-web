@@ -90,6 +90,41 @@ function deterministicValidation(): ResolutionValidation {
   };
 }
 
+const restatementWarning: ResolutionValidation = {
+  verdict: 'warning',
+  reason: 'This response repeats the unresolved item without adding a confirmed outcome.',
+  missingInformation: [
+    'Record what was confirmed, what changed, or what evidence resolves the item.',
+  ],
+  confidence: 1,
+};
+
+function stripMatchingSurroundingQuotes(value: string): string {
+  const quotePairs: Array<readonly [string, string]> = [
+    ['"', '"'],
+    ["'", "'"],
+    ['“', '”'],
+    ['‘', '’'],
+  ];
+  const pair = quotePairs.find(([opening, closing]) => value.startsWith(opening) && value.endsWith(closing) && value.length > opening.length + closing.length);
+  return pair ? value.slice(pair[0].length, -pair[1].length).trim() : value;
+}
+
+function normalizeRestatement(value: string): string {
+  let normalized = value.trim().replace(/\s+/g, ' ');
+  normalized = normalized.replace(/[.!?]+$/, '').trim();
+  normalized = stripMatchingSurroundingQuotes(normalized);
+  normalized = normalized.replace(/[.!?]+$/, '').trim();
+  return normalized.toLocaleLowerCase();
+}
+
+function isEffectivelyIdenticalRestatement(input: ResolutionValidationInput, node: ClarityNode): boolean {
+  if (node.status !== 'OPEN' || (node.type !== 'UNKNOWN' && node.type !== 'ASSUMPTION')) return false;
+  const prompt = normalizeRestatement(input.prompt);
+  const response = normalizeRestatement(input.proposedResponse);
+  return Boolean(prompt && response && prompt === response);
+}
+
 function fingerprint(input: ResolutionValidationInput): string {
   return createHash('sha256').update(JSON.stringify({
     userId: input.userId,
@@ -214,6 +249,10 @@ export async function validateProjectResolution(params: {
     semanticProjectVersion: project.semantic_version ?? semanticVersionForValidation(project),
   };
   const key = fingerprint(input);
+  if (isEffectivelyIdenticalRestatement(input, node)) {
+    cache.set(key, { value: restatementWarning, expiresAt: Date.now() + CACHE_TTL_MS });
+    return { validation: restatementWarning, fingerprint: key, project, node };
+  }
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) return { validation: cached.value, fingerprint: key, project, node };
   const pending = inFlight.get(key) ?? generateValidation(input);

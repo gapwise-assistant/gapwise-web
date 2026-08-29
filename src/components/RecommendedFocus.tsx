@@ -23,21 +23,21 @@ export function RecommendedFocus({
   onViewDecisionMap,
 }: RecommendedFocusProps) {
   return (
-    <section className="overflow-hidden rounded-xl border border-teal-900/70 bg-gradient-to-br from-teal-950/35 to-slate-900" aria-labelledby="recommended-focus-heading">
-      <div className="px-3 py-3 sm:px-4">
+    <section className="overflow-hidden rounded-xl border border-slate-800 border-l-teal-400/70 bg-slate-900/90 sm:border-l-2" aria-labelledby="recommended-focus-heading">
+      <div className="px-4 py-4 sm:px-5 sm:py-5">
         <div className="flex flex-wrap items-center gap-2">
           <Target className="h-3.5 w-3.5 text-teal-300" aria-hidden="true" />
           <p id="recommended-focus-heading" className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-teal-300">
             Recommended focus
           </p>
         </div>
-        <h2 className="mt-1.5 text-base font-extrabold leading-snug text-slate-100 sm:text-lg">{guidance.focus}</h2>
+        <h2 className="mt-2 text-lg font-extrabold leading-snug text-slate-50 sm:text-xl">{guidance.focus}</h2>
 
         {(onResolve || onDecide || onViewGap || onViewDecision || onViewDecisionMap) && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             {onResolve && (
               <Button variant="primary" onClick={onResolve} icon={<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />}>
-                Resolve question
+                Resolve
               </Button>
             )}
             {onDecide && (
