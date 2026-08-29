@@ -64,3 +64,26 @@ textarea {
 .constellation-node-pulse {
   animation: constellation-node-pulse 2.4s ease-in-out infinite;
 }
+
+@keyframes workspace-loading-glow {
+  0%,
+  100% {
+    opacity: 0.58;
+    transform: scale(0.94);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+}
+
+.workspace-loading-glow {
+  animation: workspace-loading-glow 2.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-loading-glow {
+    animation: none;
+  }
+}

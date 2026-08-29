@@ -18,6 +18,8 @@ interface HeaderProps {
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
   onResetDemo: () => void;
+  onCreateQuickDemo?: () => void;
+  isLoadingQuickDemo?: boolean;
   onCreateHarborHistoryDemo?: () => void;
   isLoadingHarborHistoryDemo?: boolean;
   onCreateRiversideHistoryDemo?: () => void;
@@ -40,6 +42,8 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   onResetDemo,
+  onCreateQuickDemo,
+  isLoadingQuickDemo = false,
   onCreateHarborHistoryDemo,
   isLoadingHarborHistoryDemo = false,
   onCreateRiversideHistoryDemo,
@@ -57,7 +61,8 @@ export const Header: React.FC<HeaderProps> = ({
   const demoMenuRef = useRef<HTMLDivElement>(null);
   useDismissibleMenu(demoMenuOpen, setDemoMenuOpen, demoMenuRef);
   const selectableProjects = projects.filter((item) => item.status !== 'archived');
-  const isAnyDemoLoading = isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isCleaningUpLocalData;
+  const isAnyDemoLoading = isLoadingQuickDemo || isLoadingHarborHistoryDemo || isLoadingRiversideHistoryDemo || isCleaningUpLocalData;
+  const hasDeveloperDemoActions = Boolean(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCleanupLocalData);
   const selectedScopeValue = scope && selectableProjects.some((item) => item.id === scope.projectId)
     ? scope.projectId
     : '';
@@ -152,7 +157,7 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center space-x-2 sm:space-x-3">
-          {(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCleanupLocalData) && (
+          {(onCreateQuickDemo || hasDeveloperDemoActions) && (
             <div ref={demoMenuRef} className="relative">
               <button
                 type="button"
@@ -169,7 +174,23 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               {demoMenuOpen && (
                 <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl shadow-slate-950/60">
-                  {(onCreateHarborHistoryDemo || onCreateRiversideHistoryDemo || onCleanupLocalData) && (
+                  {onCreateQuickDemo && (
+                    <div className="mt-1 pb-1">
+                      <p className="px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-slate-500">
+                        Gapwise demo
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setDemoMenuOpen(false); onCreateQuickDemo(); }}
+                        disabled={isAnyDemoLoading}
+                        className="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-cyan-200 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {isLoadingQuickDemo ? <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin text-cyan-300" /> : <span className="mr-2 h-1.5 w-1.5 rounded-full bg-cyan-300" />}
+                        {isLoadingQuickDemo ? 'Creating quick demo…' : 'Create quick Gapwise demo'}
+                      </button>
+                    </div>
+                  )}
+                  {hasDeveloperDemoActions && (
                     <div className="mt-1 border-t border-slate-800 pt-1">
                       <p className="px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-slate-500">
                         Developer demos

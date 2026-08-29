@@ -4,42 +4,49 @@ import { describe, expect, it, vi } from 'vitest';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
 
 describe('NewUserOnboarding', () => {
-  it('offers a clean workspace start and an explicit demo load', () => {
+  it('offers only workspace creation and the prepared demo', () => {
     const html = renderToStaticMarkup(
       <NewUserOnboarding
         isLoadingDemo={false}
-        onLoadCareerDemo={vi.fn()}
-        onLoadHackathonDemo={vi.fn()}
-        onLoadBakeryDemo={vi.fn()}
-        onLoadNorthstarPilotDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
-        onSignOut={vi.fn()}
       />
     );
 
-    expect(html).toContain('No workspaces yet');
-    expect(html).toContain('Create workspace');
-    expect(html).toContain('Load demo');
-    expect(html).toContain('Career demo');
-    expect(html).toContain('Voluntary demo');
-    expect(html).toContain('Bakery pop-up demo');
-    expect(html).toContain('Northstar pilot');
+    expect(html).toContain('Start your first workspace');
+    expect(html).toContain('Add your project and let Gapwise identify what needs attention, or explore a prepared example.');
+    expect(html).toContain('+ Create workspace');
+    expect(html).toContain('▶ Load demo');
+    expect((html.match(/<button/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('Career demo');
+    expect(html).not.toContain('Harbor');
   });
 
-  it('shows a loading state while demo data is being copied', () => {
+  it('keeps loading feedback inside the demo button', () => {
     const html = renderToStaticMarkup(
       <NewUserOnboarding
         isLoadingDemo
-        onLoadCareerDemo={vi.fn()}
-        onLoadHackathonDemo={vi.fn()}
-        onLoadBakeryDemo={vi.fn()}
         onCreateProject={vi.fn()}
         onLoadDemo={vi.fn()}
-        onSignOut={vi.fn()}
       />
     );
 
-    expect(html).toContain('Loading demo...');
+    expect(html).toContain('Loading demo…');
+    expect(html).not.toContain('▶ Load demo');
+    expect((html.match(/<button/g) ?? []).length).toBe(2);
+  });
+
+  it('shows a short inline load error', () => {
+    const html = renderToStaticMarkup(
+      <NewUserOnboarding
+        isLoadingDemo={false}
+        error="The prepared demo could not be loaded."
+        onCreateProject={vi.fn()}
+        onLoadDemo={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('The prepared demo could not be loaded.');
   });
 });

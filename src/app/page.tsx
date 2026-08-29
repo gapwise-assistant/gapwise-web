@@ -41,6 +41,7 @@ import { isLocalhostBrowser } from '@/lib/runtime/localhost';
 import { useAuth } from '@/components/AuthProvider';
 import { LoginScreen } from '@/components/LoginScreen';
 import { DemoLoadingState } from '@/components/DemoLoadingState';
+import { WorkspaceLoadingState } from '@/components/WorkspaceLoadingState';
 import { CleanupLocalUserDataModal } from '@/components/CleanupLocalUserDataModal';
 import type { LocalCleanupPreview } from '@/lib/demo/cleanupLocalUserData';
 import { NewUserOnboarding } from '@/components/NewUserOnboarding';
@@ -52,6 +53,7 @@ import type { ResolvedGapRecord } from '@/lib/questions/history';
 import { calculateGapPriority } from '@/lib/prioritization';
 import { appendGoalChangedHistory } from '@/lib/history/projectHistory';
 import { projectTitlePresentation } from '@/lib/projects/projectTitle';
+import type { QuickDemoResult } from '@/lib/demo/quickDemo';
 
 type AppTab = AppDestination;
 
@@ -375,6 +377,19 @@ async function createRiversideHistoryDemoViaAPI(userId: string): Promise<{
   };
 }
 
+async function createQuickDemoViaAPI(userId: string): Promise<QuickDemoResult> {
+  const res = await authFetch('/api/demos/quick', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'The quick Gapwise demo could not be created.');
+  }
+  return (await res.json()) as QuickDemoResult;
+}
+
 async function loadCleanupPreviewViaAPI(): Promise<LocalCleanupPreview> {
   const res = await authFetch('/api/dev/cleanup-local-user');
   if (!res.ok) {
@@ -524,6 +539,7 @@ export default function Home() {
   const [isLoadingHarborLate, setIsLoadingHarborLate] = useState(false);
   const [isLoadingHarborHistoryDemo, setIsLoadingHarborHistoryDemo] = useState(false);
   const [isLoadingRiversideHistoryDemo, setIsLoadingRiversideHistoryDemo] = useState(false);
+  const [isLoadingQuickDemo, setIsLoadingQuickDemo] = useState(false);
   const [isCleanupLocalDataOpen, setIsCleanupLocalDataOpen] = useState(false);
   const [isLoadingCleanupPreview, setIsLoadingCleanupPreview] = useState(false);
   const [isCleaningUpLocalData, setIsCleaningUpLocalData] = useState(false);
@@ -575,6 +591,8 @@ export default function Home() {
                 ? 'Harbor history demo'
                 : isLoadingRiversideHistoryDemo
                   ? 'Riverside history demo'
+                  : isLoadingQuickDemo
+                    ? 'quick Gapwise demo'
                   : isLoadingDemo
                         ? 'demo'
                         : null;
@@ -1033,6 +1051,27 @@ export default function Home() {
       setIsLoadingRiversideHistoryDemo(false);
     }
   }, [reloadProjectListFromFirestore, scope, userId]);
+
+  const handleCreateQuickDemo = useCallback(async () => {
+    const previousProjectId = scope?.projectId;
+    setIsLoadingQuickDemo(true);
+    try {
+      const result = await createQuickDemoViaAPI(userId);
+      await reloadProjectListFromFirestore(result.project.id);
+      setStorageMessage('');
+      setActiveTab('today');
+    } catch (caught) {
+      try {
+        await reloadProjectListFromFirestore(previousProjectId);
+      } catch (reloadError) {
+        console.error('[Quick Gapwise demo] project reload after failure failed', reloadError);
+      }
+      console.error('[Quick Gapwise demo] generation failed', caught);
+      setStorageMessage('The quick Gapwise demo could not be created. Your current workspace was kept.');
+    } finally {
+      setIsLoadingQuickDemo(false);
+    }
+  }, [reloadProjectListFromFirestore, scope?.projectId, userId]);
 
   const handleOpenCleanupLocalData = useCallback(() => {
     setIsCleanupLocalDataOpen(true);
@@ -1537,16 +1576,7 @@ export default function Home() {
   }
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="flex flex-col items-center space-y-4">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center animate-pulse">
-            <span className="text-white font-bold text-lg">G</span>
-          </div>
-          <p className="text-slate-400 text-sm">Loading persistent workspace state...</p>
-        </div>
-      </div>
-    );
+    return <WorkspaceLoadingState />;
   }
 
   // Keep the localhost developer menu available after a cleanup leaves the
@@ -1555,31 +1585,10 @@ export default function Home() {
     return (
       <>
         <NewUserOnboarding
-          accountLabel={auth.user?.displayName}
-          isLoadingDemo={isLoadingDemo}
-          isLoadingCareerDemo={isLoadingCareerDemo}
-          isLoadingHackathonDemo={isLoadingHackathonDemo}
-          isLoadingKintaGenDemo={isLoadingKintaGenDemo}
-          isLoadingBakeryDemo={isLoadingBakeryDemo}
-          isLoadingBakeryJourneyDemo={isLoadingBakeryJourneyDemo}
-          isLoadingNorthstarPilotDemo={isLoadingNorthstarPilotDemo}
-          isLoadingHarborEarly={isLoadingHarborEarly}
-          isLoadingHarborMiddle={isLoadingHarborMiddle}
-          isLoadingHarborLate={isLoadingHarborLate}
-          onCreateProject={() => {
-            setIsNewProjectOpen(true);
-          }}
-          onLoadDemo={() => void handleLoadDemo()}
-          onLoadCareerDemo={() => void handleLoadCareerConflictDemo()}
-          onLoadHackathonDemo={() => void handleLoadHackathonDemo()}
-          onLoadKintaGenDemo={() => void handleLoadKintaGenDemo()}
-          onLoadBakeryDemo={() => void handleLoadBakeryDemo()}
-          onLoadBakeryJourneyDemo={() => void handleLoadBakeryJourneyDemo()}
-          onLoadNorthstarPilotDemo={() => void handleLoadNorthstarPilotDemo()}
-          onLoadHarborEarly={handleLoadHarborEarly}
-          onLoadHarborMiddle={handleLoadHarborMiddle}
-          onLoadHarborLate={handleLoadHarborLate}
-          onSignOut={() => { void auth.signOut(); }}
+          isLoadingDemo={isLoadingQuickDemo}
+          error={storageMessage}
+          onCreateProject={() => setIsNewProjectOpen(true)}
+          onLoadDemo={() => void handleCreateQuickDemo()}
         />
         {isNewProjectOpen && (
           <NewProjectModal
@@ -1601,6 +1610,8 @@ export default function Home() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onResetDemo={handleResetDemo}
+        onCreateQuickDemo={handleCreateQuickDemo}
+        isLoadingQuickDemo={isLoadingQuickDemo}
         onCreateHarborHistoryDemo={isLocalhostDeveloper ? handleCreateHarborHistoryDemo : undefined}
         isLoadingHarborHistoryDemo={isLoadingHarborHistoryDemo}
         onCreateRiversideHistoryDemo={isLocalhostDeveloper ? handleCreateRiversideHistoryDemo : undefined}
