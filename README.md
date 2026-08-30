@@ -126,6 +126,39 @@ The public demo uses a restricted Partner profile. It has a fixed output limit, 
 | Google Search | Supplies current external evidence to the Web Research Agent. |
 | Google Calendar | Optionally supplies read-only events that are relevant to a project goal. |
 
+GitHub is the source repository for the deployment pipeline. GitHub Actions
+runs the checks in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) for
+pull requests and pushes to `develop` and `main`; those checks do not deploy.
+
+The enabled Google Cloud Build trigger is named `deploy`. It watches the
+`gapwise-assistant/gapwise-web` GitHub repository for pushes matching `^main$`
+and uses [`cloudbuild.yaml`](./cloudbuild.yaml). A merge to `main` therefore
+starts this Google Cloud pipeline:
+
+```text
+GitHub push to main
+  -> Cloud Build validates production substitutions
+  -> Docker builds web and ADK containers
+  -> Artifact Registry stores both images
+  -> gapswise-agent deploys as private Cloud Run
+  -> gapswise-web deploys as public Cloud Run
+  -> Firebase Hosting continues to serve gapwise.web.app
+```
+
+The trigger supplies the public Firebase substitutions and Google OAuth client
+ID required by `cloudbuild.yaml`. Internal API and OAuth client secrets remain
+in Secret Manager and are attached only at Cloud Run runtime. The App Check
+site key is optional in the current release, with
+`FIREBASE_APPCHECK_ENABLED=false` as the deployment default.
+
+Inspect the configured trigger without starting a build:
+
+```bash
+gcloud builds triggers list \
+  --project=gapwise-505217 \
+  --format='table(id,name,disabled,github.name,github.owner,github.push.branch,filename)'
+```
+
 ## Run locally
 
 The web service runs with Node.js and the ADK service runs with `uv`.
