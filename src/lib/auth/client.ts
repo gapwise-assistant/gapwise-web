@@ -7,6 +7,7 @@ import {
   User,
   getAuth,
   onAuthStateChanged,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signInAnonymously,
   signOut as firebaseSignOut,
@@ -66,6 +67,10 @@ export async function signInWithGoogle(): Promise<void> {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
   await signInWithPopup(getFirebaseAuth(), provider);
+}
+
+export async function signInWithCredentials(email: string, password: string): Promise<void> {
+  await signInWithEmailAndPassword(getFirebaseAuth(), email.trim(), password);
 }
 
 export async function signInAsGuest(): Promise<void> {

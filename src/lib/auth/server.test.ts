@@ -10,6 +10,7 @@ vi.mock('@/lib/firebase-admin', () => ({
 const originalDemoMode = process.env.GAPSWISE_DEMO_MODE;
 const originalInternalSecret = process.env.GAPSWISE_INTERNAL_API_SECRET;
 const originalOwnerEmails = process.env.GAPSWISE_FULL_ACCESS_EMAILS;
+const originalJudgeEmail = process.env.GAPSWISE_JUDGE_EMAIL;
 
 function restore(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
@@ -20,6 +21,7 @@ afterEach(() => {
   restore('GAPSWISE_DEMO_MODE', originalDemoMode);
   restore('GAPSWISE_INTERNAL_API_SECRET', originalInternalSecret);
   restore('GAPSWISE_FULL_ACCESS_EMAILS', originalOwnerEmails);
+  restore('GAPSWISE_JUDGE_EMAIL', originalJudgeEmail);
   vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
@@ -105,6 +107,26 @@ describe('server authentication boundary', () => {
         headers: { authorization: 'Bearer firebase-id-token' },
       }),
     )).resolves.toMatchObject({ uid: 'owner-user', accessTier: 'owner', provider: 'google' });
+  });
+
+  it('grants full access to the configured verified Firebase password account', async () => {
+    process.env.GAPSWISE_DEMO_MODE = 'false';
+    process.env.GAPSWISE_JUDGE_EMAIL = 'judges@example.com';
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.mocked(getFirebaseAdminAuth).mockReturnValue({
+      verifyIdToken: vi.fn().mockResolvedValue({
+        uid: 'judge-user',
+        email: 'judges@example.com',
+        email_verified: true,
+        firebase: { sign_in_provider: 'password' },
+      }),
+    } as never);
+
+    await expect(requireAuthenticatedPrincipal(
+      new Request('https://gapwise.web.app/api/auth/access', {
+        headers: { authorization: 'Bearer firebase-id-token' },
+      }),
+    )).resolves.toMatchObject({ uid: 'judge-user', accessTier: 'owner', provider: 'password' });
   });
 
   it('falls back to public demo access for unverified or unconfigured external users', async () => {

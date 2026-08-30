@@ -238,6 +238,8 @@ GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_GENAI_USE_VERTEXAI=true
 GEMINI_MODEL=gemini-3.5-flash-lite
+AGENT_GAP_MODEL=gemini-3.7-flash
+GAP_AGENT_MODE=live
 FIRESTORE_DATABASE_ID=(default)
 CLOUD_STORAGE_BUCKET=your-project-id-gapwise-context
 GAPSWISE_AGENT_URL=http://127.0.0.1:8080
@@ -253,6 +255,7 @@ GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=global
 GEMINI_MODEL=gemini-3.5-flash-lite
 GEMINI_EVAL_MODEL=gemini-3.5-flash-lite
+AGENT_GAP_MODEL=gemini-3.7-flash
 GAPSWISE_APP_URL=http://localhost:3000
 ```
 
@@ -352,3 +355,14 @@ firebase.json           Firebase Hosting rewrite
 - Internal Context Pack calls require a server-only shared secret.
 - Calendar access is read-only.
 - Ask suggestions do not become project facts until the user accepts them.
+
+### Judge login
+
+Gapwise supports a pre-created Firebase email/password account for judges. There is no public sign-up flow, and the password is never stored in this repository or in Cloud Build.
+
+1. Enable **Email/Password** in Firebase Authentication.
+2. Create the judge account in Firebase Authentication and mark its email as verified.
+3. Deploy with `_GAPSWISE_JUDGE_EMAIL` set to that exact email address.
+4. Give the judges the email and password through the hackathon's private credential field.
+
+The server verifies the Firebase ID token on every request. Only the configured, verified judge email receives the existing `owner` access tier, which has no public-demo usage limits. Any other account continues to use the restricted public-demo tier.

@@ -18,7 +18,7 @@ export interface AuthenticatedPrincipal {
   email?: string;
   emailVerified: boolean;
   name?: string;
-  provider: 'google' | 'anonymous' | 'local' | 'internal';
+  provider: 'google' | 'password' | 'anonymous' | 'local' | 'internal';
   accessTier: AccessTier;
 }
 
@@ -39,7 +39,12 @@ function requestedUserMatches(uid: string, requestedUserId?: string): void {
 
 function configuredOwnerEmails(): Set<string> {
   return new Set(
-    (process.env.GAPSWISE_FULL_ACCESS_EMAILS ?? '')
+    [
+      process.env.GAPSWISE_FULL_ACCESS_EMAILS,
+      process.env.GAPSWISE_JUDGE_EMAIL,
+    ]
+      .filter(Boolean)
+      .join(',')
       .split(',')
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
@@ -91,9 +96,12 @@ export async function requireAuthenticatedPrincipal(
   try {
     const decoded = await getFirebaseAdminAuth().verifyIdToken(token);
     requestedUserMatches(decoded.uid, requestedUserId?.trim());
-    const provider = decoded.firebase?.sign_in_provider === 'anonymous'
+    const signInProvider = decoded.firebase?.sign_in_provider;
+    const provider = signInProvider === 'anonymous'
       ? 'anonymous'
-      : 'google';
+      : signInProvider === 'password'
+        ? 'password'
+        : 'google';
     return {
       uid: decoded.uid,
       email: decoded.email,
