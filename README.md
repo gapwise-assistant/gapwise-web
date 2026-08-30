@@ -341,14 +341,5 @@ cloudbuild.yaml         Remote build and Cloud Run deployment
 firebase.json           Firebase Hosting rewrite
 ```
 
-## Security boundaries
-
-- Production routes verify Firebase ID tokens on the server.
-- Full access is limited to verified emails listed in `GAPSWISE_FULL_ACCESS_EMAILS`.
-- Guest and other external accounts can only load their registered public demo and use the bounded Ask allowance.
-- The public demo cannot mutate project state or use web research.
-- The ADK Cloud Run service is private and only the web runtime can invoke it.
-- Uploaded files use a private Cloud Storage bucket.
-- Internal Context Pack calls require a server-only shared secret.
 - Calendar access is read-only.
 - Ask suggestions do not become project facts until the user accepts them.
