@@ -6,8 +6,21 @@ import { isDemoMode } from '@/lib/runtime/demoMode';
 
 export const runtime = 'nodejs';
 
+function getPublicAppUrl(): URL {
+  const configuredUrl = process.env.GAPSWISE_PUBLIC_WEB_URL?.trim();
+  if (configuredUrl) {
+    return new URL(configuredUrl);
+  }
+
+  return new URL(
+    process.env.NODE_ENV === 'production'
+      ? 'https://gapwise.web.app'
+      : 'http://localhost:3000',
+  );
+}
+
 export async function GET(request: NextRequest) {
-  const appUrl = new URL('/', request.url);
+  const appUrl = getPublicAppUrl();
   if (isDemoMode()) {
     appUrl.searchParams.set('googleCalendar', 'demo_mode');
     return NextResponse.redirect(appUrl);
