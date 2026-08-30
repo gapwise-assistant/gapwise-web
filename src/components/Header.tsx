@@ -112,27 +112,36 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </div>
           </div>
-          <select
-            value={selectedScopeValue}
-            onChange={(event) => handleProjectSelect(event.target.value)}
-            className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
-            aria-label="Workspace selector"
-            title={selectedProject ? `Created ${formatDateTime(projectTitlePresentation(selectedProject.title).legacyCreatedAt ?? selectedProject.created_at)}` : selectedProjectTitle}
-          >
-            <option value="" disabled className="bg-slate-900">Select workspace</option>
-            <optgroup label="Workspaces">
-              {selectableProjects.map((item) => (
-                <option
-                  key={item.id}
-                  value={item.id}
-                  title={`Created ${formatDateTime(projectTitlePresentation(item.title).legacyCreatedAt ?? item.created_at)}`}
-                  className="bg-slate-900"
-                >
-                  {projectTitlePresentation(item.title).title} · {formatCompactDateTime(projectTitlePresentation(item.title).legacyCreatedAt ?? item.created_at)}
-                </option>
-              ))}
-            </optgroup>
-            {!isPublicDemo && (
+          {isPublicDemo ? (
+            <div
+              role="status"
+              aria-label="Current workspace"
+              title={selectedProject ? `Created ${formatDateTime(projectTitlePresentation(selectedProject.title).legacyCreatedAt ?? selectedProject.created_at)}` : selectedProjectTitle}
+              className="min-w-0 max-w-[170px] flex-1 truncate rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
+            >
+              {selectedProjectTitle}
+            </div>
+          ) : (
+            <select
+              value={selectedScopeValue}
+              onChange={(event) => handleProjectSelect(event.target.value)}
+              className="min-w-0 max-w-[170px] flex-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-semibold text-slate-200 outline-none hover:border-cyan-800 sm:max-w-[240px] sm:flex-none sm:px-3 sm:text-xs"
+              aria-label="Workspace selector"
+              title={selectedProject ? `Created ${formatDateTime(projectTitlePresentation(selectedProject.title).legacyCreatedAt ?? selectedProject.created_at)}` : selectedProjectTitle}
+            >
+              <option value="" disabled className="bg-slate-900">Select workspace</option>
+              <optgroup label="Workspaces">
+                {selectableProjects.map((item) => (
+                  <option
+                    key={item.id}
+                    value={item.id}
+                    title={`Created ${formatDateTime(projectTitlePresentation(item.title).legacyCreatedAt ?? item.created_at)}`}
+                    className="bg-slate-900"
+                  >
+                    {projectTitlePresentation(item.title).title} · {formatCompactDateTime(projectTitlePresentation(item.title).legacyCreatedAt ?? item.created_at)}
+                  </option>
+                ))}
+              </optgroup>
               <>
                 <option disabled className="bg-slate-900">
                   ─────────────
@@ -141,8 +150,8 @@ export const Header: React.FC<HeaderProps> = ({
                   + New workspace
                 </option>
               </>
-            )}
-          </select>
+            </select>
+          )}
         </div>
 
         <nav className="hidden md:flex items-center gap-1">

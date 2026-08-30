@@ -1,243 +1,253 @@
 # Gapwise
 
-**Find the missing information that unlocks the next decision.**
+Gapwise keeps a project's facts, decisions, risks, and open questions connected. It then shows which missing answer or unresolved decision is most useful to address next.
 
-Projects rarely fail because information does not exist. They fail because facts, decisions, risks, and unanswered questions are scattered across messages, documents, and conversations. The next important gap is easy to miss.
+**Live app:** [gapwise.web.app](https://gapwise.web.app)
 
-Gapwise turns that fragmented context into persistent project understanding. It connects what is known, what is unresolved, and what depends on what—then recommends the highest-value issue to address next.
+## The problem
 
-## Value proposition
+Project context is usually split across notes, documents, meetings, and chat. A deadline may be in one file, a blocker in another, and the decision that connects them may never be written down. A normal task list does not explain what is missing or what that missing information affects.
 
-Gapwise helps a user:
+Gapwise builds a persistent project graph from that context. It uses the graph to:
 
-- Build a living project graph from messages, PDFs, answers, and decisions.
-- Find gaps that block important decisions instead of generating a generic task list.
-- Retrieve relevant facts, relationships, and sources with GraphRAG before Gemini reasons.
-- Ask project-aware questions and research current information when external evidence is needed.
-- Keep AI suggestions separate from project truth until the user confirms them.
-- Revisit historical project states and create an independent project from an earlier moment.
+- Track goals, facts, evidence, constraints, risks, decisions, questions, and actions.
+- Show the unresolved gap with the highest current value.
+- Explain why a gap matters and what it blocks.
+- Answer project questions with the relevant graph paths and source material.
+- Keep suggested updates pending until the user accepts them.
+- Preserve project history and open earlier project states.
 
-## Demo
+## Try the guest demo
 
-The clearest walkthrough is the **Harbor Pilot History Demo**, a late-stage customer-support pilot with uploaded requirements, Ask conversations, accepted and dismissed suggestions, decisions, unresolved risks, and historical snapshots.
+The public demo does not require a Google account.
 
-1. Start Gapwise locally with live AI using the instructions below.
-2. Open the developer demo menu and select **Create fresh Harbor history demo**.
-3. Open **Today** to see the current recommended focus and the evidence behind it.
-4. Open **Decision Map** to inspect decisions, gaps, dependencies, and supporting evidence.
-5. Open **Ask** to see project-aware conversations and user-confirmed project updates.
-6. Open **History**, select **View this moment**, and inspect what the project knew then.
-7. Select **Create project from this moment** to branch an earlier state without changing the original project.
+1. Open [gapwise.web.app](https://gapwise.web.app).
+2. Select **Try demo as guest**.
+3. Select **Load demo**.
+4. Open **Today** to see the current recommended gap and open decision.
+5. Open **Workspace** and **Decision Map** to inspect the project state and its relationships.
+6. Open **History** to see how the project changed.
+7. Open **Ask** and ask up to three questions about the prepared project.
 
-The demo uses live Gemini calls and uploads generated demonstration PDFs to Cloud Storage. Creation can take several minutes.
+The guest workspace is a deterministic neighborhood repair workshop project. Creating it does not call Gemini. Guest access is read-only, except for three bounded Ask messages. Guest Ask uses the saved demo context and cannot search the web or change project state.
 
-## Architecture
+Verified owner accounts receive the full workspace. Other Google accounts receive the same restricted public demo access as a guest.
 
-Gapwise turns unstructured project context into structured, persistent project understanding. Gemini interprets new information, structured project updates modify the project graph, GraphRAG retrieves the relevant reasoning context, and Gemini uses that context to identify gaps, recommend focus, and answer project questions.
+## How it works
 
 ```mermaid
 flowchart LR
+    INPUT["Messages, answers,<br/>PDFs, Calendar events"]
+    WEB["Gapwise web app"]
+    FILES[("Cloud Storage<br/>uploaded files")]
+    CONTEXT["Gemini reads<br/>new context"]
+    UPDATE["Validated project updates"]
+    GRAPH["Project Graph<br/>facts, gaps, decisions,<br/>risks, actions, relationships"]
+    DB[("Firestore<br/>project state, chats,<br/>focus, overview, history")]
+    RAG["GraphRAG<br/>relevant nodes, paths,<br/>and source excerpts"]
+    AGENTS["Google ADK agents<br/>Gap, Router, Partner,<br/>Web Research"]
+    RESULT["Today, Gaps, Ask,<br/>Overview, Decision Map"]
 
-    USER["User<br/>messages · PDFs · answers"]
-
-    FILES[("Cloud Storage<br/>uploaded PDFs and documents")]
-
-    GEMINI_CONTEXT["Gemini<br/>reads new information"]
-
-    UPDATES["Structured project updates<br/>facts · decisions · gaps<br/>risks · relationships"]
-
-    GRAPH["Project Graph<br/>connected project knowledge"]
-
-    FIRESTORE[("Firestore<br/>graph · chats · answers<br/>focus · history")]
-
-    RAG["GraphRAG<br/>finds relevant facts,<br/>connections and sources"]
-
-    GEMINI_REASONING["Gemini<br/>reasons using retrieved context"]
-
-    RESULT["Most important gap<br/>Recommended focus<br/>Helpful answer<br/>Project overview"]
-
-    USER --> FILES
-    USER --> GEMINI_CONTEXT
-    FILES --> GEMINI_CONTEXT
-
-    GEMINI_CONTEXT --> UPDATES
-    UPDATES --> GRAPH
-    GRAPH <--> FIRESTORE
-
-    FIRESTORE --> RAG
-    RAG --> GEMINI_REASONING
-    GEMINI_REASONING --> RESULT
-    RESULT --> USER
-
-    RESULT -->|User confirms new information| UPDATES
-
-    classDef userNode fill:#F8FAFC,stroke:#475569,stroke-width:2px,color:#0F172A
-    classDef cloudNode fill:#E8F0FE,stroke:#4285F4,stroke-width:2px,color:#174EA6
-    classDef geminiNode fill:#E6F4EA,stroke:#34A853,stroke-width:2px,color:#137333
-    classDef gapwiseNode fill:#F3E8FF,stroke:#8B5CF6,stroke-width:2px,color:#5B21B6
-    classDef graphNode fill:#FFF4D6,stroke:#F9AB00,stroke-width:3px,color:#6B4500
-    classDef resultNode fill:#FCE8E6,stroke:#EA4335,stroke-width:2px,color:#A50E0E
-
-    class USER userNode
-    class FILES,FIRESTORE cloudNode
-    class GEMINI_CONTEXT,GEMINI_REASONING geminiNode
-    class UPDATES,RAG gapwiseNode
-    class GRAPH graphNode
-    class RESULT resultNode
+    INPUT --> WEB
+    WEB --> FILES
+    WEB --> CONTEXT
+    FILES --> CONTEXT
+    CONTEXT --> UPDATE
+    UPDATE --> GRAPH
+    GRAPH <--> DB
+    GRAPH --> RAG
+    RAG --> AGENTS
+    AGENTS --> RESULT
+    RESULT --> WEB
+    WEB -->|"accepted update"| UPDATE
 ```
 
-The two core flows are:
+There are two main flows:
 
 ```text
-Build understanding
-User context → Gemini → structured project updates → Project Graph → Firestore
+Build project state
+New context -> Gemini -> validated updates -> Project Graph -> Firestore
 
-Reason over the project
-Project Graph → GraphRAG → Gemini → gap, focus, answer, or overview
+Use project state
+Question or project change -> GraphRAG -> ADK agent -> answer or recommended gap
 ```
 
-Infrastructure responsibilities:
+Gemini does not write arbitrary objects to Firestore. Context processing returns typed updates. Gapwise validates node types, statuses, references, and relationship types before applying them. Ask suggestions stay separate from project state until the user accepts them.
 
-- **Cloud Storage:** uploaded PDFs and documents.
-- **Firestore:** project graphs, Ask conversations, answers, assessments, and historical snapshots.
-- **Gemini on Vertex AI:** structured context interpretation, gap analysis, focus assessment, project summaries, answers, and web-research synthesis.
-- **GraphRAG:** retrieves relevant nodes, relationship paths, and supporting sources before reasoning.
-- **Structured project updates:** validated changes applied to persistent project understanding.
+## Project Graph and GraphRAG
 
-## GraphRAG
+### Building the graph
 
-GraphRAG combines text retrieval with the Project Graph. Text retrieval finds information that resembles the user's question; graph traversal adds information that matters because it is connected through a decision, dependency, blocker, or consequence.
+Each useful piece of context becomes a typed node, such as a fact, decision, risk, constraint, unknown, or action. Relationships record how the nodes connect. Examples include `informs`, `depends_on`, `blocks`, `affects`, `supports`, `resolves`, and `satisfies`.
 
-### How the graph is built
+Every node keeps references to the source that produced it. Reconciliation checks new updates against the existing graph so that a paraphrased question does not automatically become a second open gap.
 
-When the user adds a message, answer, or document:
+### Retrieving context
 
-1. Gemini reads the new context and returns structured project updates.
-2. Gapwise validates those updates against its project schema.
-3. New information is reconciled with existing project knowledge to avoid duplicate questions and decisions.
-4. Gapwise stores typed nodes such as goals, facts, evidence, decisions, risks, unknowns, constraints, and next actions.
-5. It stores supported relationships such as `informs`, `depends_on`, `blocks`, `affects`, `resolves`, and `supports`.
-6. Every node retains references to the source material from which it was derived.
-7. The resulting graph is persisted in Firestore; uploaded files remain in Cloud Storage.
+GraphRAG starts with the nodes most relevant to a request, follows useful graph relationships, and retrieves the supporting source excerpts. The resulting Context Pack is small enough to reason over without sending the complete project history on every request.
 
-Gemini proposes structured changes, but it does not freely rewrite the database. Gapwise validates references, statuses, and relationship types before applying an update. Suggestions produced in Ask remain pending until the user explicitly adds them.
-
-### How retrieval works
-
-For a question such as:
-
-> Could the unresolved deletion requirement delay the launch?
-
-Gapwise retrieves reasoning context in four stages:
-
-```text
-1. Find relevant graph nodes
-   deletion requirement · security approval · launch goal
-
-2. Follow meaningful relationships
-   deletion requirement → security approval → procurement → launch
-
-3. Retrieve supporting source excerpts
-   security requirements · engineering review · pilot brief
-
-4. Give the bounded context to Gemini
-   relevant nodes + relationship paths + source evidence
+```mermaid
+flowchart LR
+    QUERY["User question"] --> SEEDS["Find relevant<br/>project nodes"]
+    SEEDS --> PATHS["Follow blockers,<br/>dependencies, evidence,<br/>and consequences"]
+    PATHS --> SOURCES["Retrieve supporting<br/>source excerpts"]
+    SOURCES --> PACK["Bounded Context Pack"]
+    PACK --> GEMINI["Gemini agent"]
+    GEMINI --> ANSWER["Supported answer<br/>or next focus"]
 ```
 
-The default retrieval stays small: a few strong starting nodes, nearby relationships, and the source excerpts needed to support them. It does not send the complete project to Gemini for every request.
+This matters when the closest text is not the most useful information. For example, a pricing decision may be important, but an unresolved cost question may block it. Graph traversal lets Gapwise recommend the cost question first and retain the path back to the pricing decision.
 
-The same retrieval layer supports different tasks:
+## Google ADK agents
 
-- **Ask:** answers questions using project-specific evidence and relationships.
-- **Gap analysis:** finds unresolved information that blocks an important decision.
-- **Focus:** identifies the actionable issue with the greatest downstream value.
-- **Impact analysis:** follows relationships to explain what a change could affect.
-- **Decision support:** retrieves the evidence, constraints, and open prerequisites surrounding a decision.
+Gapwise uses four ADK roles. They share structured project context but have separate responsibilities.
 
-### Why use GraphRAG
+| Agent | Responsibility |
+| --- | --- |
+| Gap Agent | Evaluates unresolved gaps and selects the one with the strongest decision value. |
+| Ask Router | Chooses saved project context, graph reasoning, or external web research for an Ask request. |
+| Partner Agent | Explains project state, compares options, and returns project-aware answers or pending suggestions. |
+| Web Research Agent | Uses Google Search when current external evidence is required and returns cited results. |
 
-Plain text retrieval is useful for direct facts, but it can miss information whose importance comes from a relationship rather than similar wording. GraphRAG gives Gapwise several advantages:
+The public demo uses a restricted Partner profile. It has a fixed output limit, no tools, no routing, no web research, and no project mutations.
 
-- **Dependency awareness:** it can distinguish an important decision from the prerequisite that must be addressed first.
-- **Consequence tracing:** it can follow how a risk or uncertainty affects downstream decisions and goals.
-- **Evidence-backed answers:** graph nodes lead back to the documents and messages that support them.
-- **Smaller prompts:** Gemini receives focused reasoning context instead of the entire project history.
-- **Persistent understanding:** decisions and resolved questions remain part of the project state across conversations.
-- **Shared reasoning:** Ask, Today, Focus, and gap analysis can work from the same project structure.
-- **Inspectability:** users can see the underlying decisions, gaps, evidence, and relationships in Decision Map.
+## What runs on Google Cloud
 
-Graph relationships are treated as structured project context, not unquestionable truth. Gapwise distinguishes recorded facts from model inference, preserves provenance, and requires user confirmation before an Ask suggestion becomes project knowledge.
+| Service | Use in Gapwise |
+| --- | --- |
+| Vertex AI | Runs Gemini for context interpretation and agent reasoning. |
+| Cloud Run | Hosts the Next.js web service and the private Python ADK service. |
+| Firestore | Stores projects, graph nodes and edges, chats, answers, assessments, public-demo usage, and history snapshots. |
+| Cloud Storage | Stores uploaded PDFs and documents. |
+| Cloud Build | Builds both containers and deploys them to Cloud Run. |
+| Artifact Registry | Stores the web and agent container images. |
+| Firebase Authentication | Provides Google and anonymous guest sign-in. |
+| Firebase Hosting | Serves `gapwise.web.app` and forwards app requests to the web Cloud Run service. |
+| Google Search | Supplies current external evidence to the Web Research Agent. |
+| Google Calendar | Optionally supplies read-only events that are relevant to a project goal. |
 
 ## Run locally
+
+The standard local setup does not require Docker. The web service runs with Node.js and the ADK service runs with `uv`.
 
 ### Prerequisites
 
 - Node.js 24 and npm
-- Python 3.11–3.13
+- Python 3.11 to 3.13
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
-- A Google Cloud project with billing, Vertex AI, Firestore, and Cloud Storage enabled
+- Bash with `curl` and `setsid` available (for `npm run dev:ai`)
+- A Google Cloud project with billing enabled
 
-Local live development uses Firestore as the durable database. Browser storage and the JSON mock provider are not authoritative project storage.
-
-### 1. Install dependencies
+### 1. Clone and install
 
 ```bash
-git clone <repository-url>
-cd gapwise
-
-npm install
+git clone https://github.com/gapwise-assistant/gapwise-web.git
+cd gapwise-web
+npm ci
 uv sync --directory agent-service
 ```
 
-### 2. Authenticate with Google Cloud
+### 2. Prepare Google Cloud
+
+Set a project and bucket name for this shell:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GAPWISE_UPLOAD_BUCKET="your-project-id-gapwise-context"
+gcloud config set project "$GOOGLE_CLOUD_PROJECT"
+```
+
+Enable the required APIs:
+
+```bash
+gcloud services enable \
+  aiplatform.googleapis.com \
+  firestore.googleapis.com \
+  storage.googleapis.com
+```
+
+Create the default Firestore database once, if the project does not already have one:
+
+```bash
+gcloud firestore databases create \
+  --database='(default)' \
+  --location=us-central1 \
+  --type=firestore-native
+```
+
+Create a private upload bucket once:
+
+```bash
+gcloud storage buckets create "gs://$GAPWISE_UPLOAD_BUCKET" \
+  --location=us-central1 \
+  --uniform-bucket-level-access
+```
+
+### 3. Authenticate local services
 
 ```bash
 gcloud auth login
 gcloud auth application-default login
-gcloud config set project YOUR_GOOGLE_CLOUD_PROJECT
+gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"
 ```
 
-The application uses Application Default Credentials for Vertex AI, Firestore, and Cloud Storage.
+The Next.js server and the Python service use Application Default Credentials for Vertex AI, Firestore, and Cloud Storage. Do not download a service-account key for local development.
 
-### 3. Configure the application
+### 4. Configure the environment
 
 ```bash
 cp .env.example .env.local
 cp agent-service/.env.example agent-service/.env
 ```
 
-At minimum, configure these values in `.env.local`:
+Set these values in `.env.local`:
 
 ```dotenv
 GAPSWISE_DEMO_MODE=false
 USE_FIRESTORE=true
-GOOGLE_CLOUD_PROJECT=your-google-cloud-project
+GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_GENAI_USE_VERTEXAI=true
+GEMINI_MODEL=gemini-3.5-flash-lite
 FIRESTORE_DATABASE_ID=(default)
-CLOUD_STORAGE_BUCKET=your-private-upload-bucket
+CLOUD_STORAGE_BUCKET=your-project-id-gapwise-context
 GAPSWISE_AGENT_URL=http://127.0.0.1:8080
+GAPSWISE_PUBLIC_WEB_URL=http://localhost:3000
+GAPSWISE_AGENT_AUTH=false
 ```
 
-Set the same Google Cloud project and supported Gemini model in `agent-service/.env`. Keep secrets out of source control.
+Set the same project, location, and model in `agent-service/.env`:
 
-Firebase browser configuration is required for deployed authentication. Localhost development uses the development-only `demo-user` identity.
+```dotenv
+GOOGLE_GENAI_USE_VERTEXAI=true
+GOOGLE_CLOUD_PROJECT=your-project-id
+GOOGLE_CLOUD_LOCATION=global
+GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_EVAL_MODEL=gemini-3.5-flash-lite
+GAPSWISE_APP_URL=http://localhost:3000
+```
 
-### 4. Start the web and agent services
+Firebase browser credentials are not required on localhost. Development requests use the local `demo-user` identity. Google Calendar is optional; its OAuth values can remain unset unless the integration is being tested.
+
+### 5. Start both services
+
+Pass the project and bucket to the startup script so both processes use the same configuration:
 
 ```bash
+GOOGLE_CLOUD_PROJECT="$GOOGLE_CLOUD_PROJECT" \
+CLOUD_STORAGE_BUCKET="$GAPWISE_UPLOAD_BUCKET" \
 npm run dev:ai
 ```
 
-This command starts:
+The command starts:
 
-- Gapwise at `http://localhost:3000`
-- The Google ADK agent service at `http://127.0.0.1:8080`
+- Web app: `http://localhost:3000`
+- ADK service: `http://127.0.0.1:8080`
 
-It validates Application Default Credentials and the configured Gemini model before starting. Press `Ctrl+C` to stop both services.
+It checks ADC and the configured Gemini model before starting. It also creates a temporary internal secret shared by the two local processes. Press `Ctrl+C` to stop both services.
 
-### 5. Verify the project
+### 6. Verify the build
 
 ```bash
 npm run typecheck
@@ -245,57 +255,109 @@ npm test
 npm run build
 ```
 
-Google Cloud connectivity can be checked independently:
+Optional live storage checks:
 
 ```bash
 npm run test:google:firestore
 npm run test:google:storage
 ```
 
-Live Gemini calls and Cloud Storage operations may incur Google Cloud charges.
+These two npm scripts intentionally target the official `gapwise-505217`
+project, `(default)` Firestore database, and `gapwise-505217-context` bucket;
+their package-script environment assignments override shell values. Run them
+only after confirming that those are the intended development resources. For
+a fork, do not assume that exporting different values changes these scripts.
+
+The application uses live Google Cloud services in this mode, so Gemini and storage operations can incur charges.
 
 ## Deploy to Google Cloud
 
-`cloudbuild.yaml` builds and deploys two Cloud Run services:
+The checked-in deployment builds two containers remotely and deploys them as:
 
-- `gapswise-web`: the web application and project APIs
-- `gapswise-agent`: the private Google ADK agent service
+- `gapswise-web`, a public Cloud Run service for the product and APIs
+- `gapswise-agent`, a private Cloud Run service for Google ADK
 
-Before deploying:
+Local Docker is not required. Cloud Build reads [`Dockerfile`](./Dockerfile) and [`agent-service/Dockerfile`](./agent-service/Dockerfile), then stores the resulting images in Artifact Registry.
 
-1. Create the Cloud Run runtime service accounts referenced in `cloudbuild.yaml`.
-2. Grant the web service access to Firestore, Cloud Storage, Vertex AI, and permission to invoke the private agent service.
-3. Grant the agent service access to Vertex AI and permission to call the web service's internal Context Pack endpoint.
-4. Create Secret Manager values for `gapswise-internal-api-secret` and `gapswise-google-oauth-client-secret`.
-5. Configure Firebase Authentication and create a Firebase Web App.
-6. Enable the APIs used by Cloud Build, Cloud Run, Artifact Registry, Vertex AI, Firestore, Cloud Storage, and Secret Manager.
+### Deployment layout
 
-The checked-in pipeline currently targets the `gapwise-505217` deployment. Deploy it from the repository root with:
+```mermaid
+flowchart LR
+    BROWSER["Browser"] --> AUTH["Firebase Authentication"]
+    BROWSER --> HOSTING["Firebase Hosting"]
+    HOSTING --> WEB["Cloud Run<br/>gapswise-web"]
+    WEB --> FIRESTORE[("Firestore")]
+    WEB --> STORAGE[("Cloud Storage")]
+    WEB -->|"authenticated call"| AGENT["Cloud Run<br/>gapswise-agent"]
+    WEB --> VERTEX["Vertex AI<br/>Gemini"]
+    AGENT --> VERTEX
+    AGENT --> SEARCH["Google Search"]
+    BUILD["Cloud Build"] --> REGISTRY[("Artifact Registry")]
+    REGISTRY --> WEB
+    REGISTRY --> AGENT
+```
+
+### Existing Gapwise project
+
+The official project already has its APIs, Firestore database, bucket, service accounts, Firebase app, and secrets. From the repository root, submit the build with the public Firebase values and Google OAuth client ID:
 
 ```bash
 gcloud builds submit . \
   --project=gapwise-505217 \
   --config=cloudbuild.yaml \
-  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY='...',_GOOGLE_OAUTH_CLIENT_ID='...'
+  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_GOOGLE_OAUTH_CLIENT_ID='...'
 ```
 
-Public Firebase configuration is supplied through build substitutions. Internal API and OAuth secrets are attached to Cloud Run from Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files. To deploy into another project, first update the project-specific bucket, service accounts, URLs, and Firebase configuration in `cloudbuild.yaml`.
+The App Check site key is optional in the current deployment. Server enforcement is disabled in `cloudbuild.yaml`. If App Check is enabled later, pass `_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY` and set `FIREBASE_APPCHECK_ENABLED=true` together.
 
-## Repository structure
+Deploy Firebase Hosting only on the first deployment or when [`firebase.json`](./firebase.json) changes:
+
+```bash
+npx firebase-tools deploy --only hosting --project=gapwise-505217
+```
+
+### Deploying a fork
+
+The checked-in `cloudbuild.yaml`, `.firebaserc`, and `firebase.json` contain values for the official deployment. A fork needs its own resources before the build is submitted.
+
+1. Enable Cloud Build, Cloud Run, Artifact Registry, Vertex AI, Firestore, Cloud Storage, Secret Manager, and Firebase services.
+2. Create a Native-mode `(default)` Firestore database and a private upload bucket.
+3. Create the `cloud-run-source-deploy` Docker repository in `us-central1`.
+4. Create `gapswise-web-runtime` and `gapswise-agent-runtime` service accounts.
+5. Grant the web runtime Firestore User, Vertex AI User, and bucket-level Storage Object Admin access.
+6. Grant the agent runtime Vertex AI User access.
+7. Grant the Cloud Build service account Cloud Run Admin and Artifact Registry Writer. Grant it Service Account User on both runtime service accounts.
+8. Create `gapswise-internal-api-secret` and `gapswise-google-oauth-client-secret` in Secret Manager. Grant the required runtime accounts Secret Accessor on those secrets.
+9. Create a Firebase Web App. Enable Google and Anonymous providers in Firebase Authentication. Add the deployed domains to Authorized domains.
+10. Replace the project-specific Cloud Run URLs, bucket, owner email, and public URL in `cloudbuild.yaml`. Replace the project and Hosting site in `.firebaserc` and `firebase.json`.
+11. Supply the fork's Firebase web configuration and OAuth client ID through the build substitutions shown above.
+12. Submit the build, then grant `roles/run.invoker` on `gapswise-agent` to the web runtime service account.
+13. Query the two Cloud Run service URLs, update `_WEB_URL` and `_AGENT_URL`, and submit once more so both services have their final internal URLs.
+14. Deploy Firebase Hosting.
+
+Production values come from Cloud Build substitutions, Cloud Run environment variables, workload identity, and Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files.
+
+## Repository layout
 
 ```text
 src/                    Next.js product, APIs, graph, retrieval, and persistence
 agent-service/          Python Google ADK agents and runtime
-scripts/                Local startup, scenarios, smoke tests, and evaluations
-docs/                   Evaluation and walkthrough documentation
-cloudbuild.yaml         Google Cloud build and deployment pipeline
+scripts/                Local startup, smoke tests, and evaluations
+docs/                   Evaluation notes and walkthroughs
+Dockerfile              Web Cloud Run image
+agent-service/Dockerfile
+cloudbuild.yaml         Remote build and Cloud Run deployment
+firebase.json           Firebase Hosting rewrite
 ```
 
 ## Security boundaries
 
-- Project data is scoped to the authenticated Firebase user.
-- Uploaded documents are stored in a private Cloud Storage bucket.
-- The ADK service is private in production and invoked by the web service.
-- Internal web-to-agent calls use service identity; agent-to-web Context Pack calls also require a shared secret.
-- AI-proposed project updates remain pending until the user explicitly adds them.
-- Calendar access is read-only. Gmail, Drive, and email write actions are not performed silently.
+- Production routes verify Firebase ID tokens on the server.
+- Full access is limited to verified emails listed in `GAPSWISE_FULL_ACCESS_EMAILS`.
+- Guest and other external accounts can only load their registered public demo and use the bounded Ask allowance.
+- The public demo cannot mutate project state or use web research.
+- The ADK Cloud Run service is private and only the web runtime can invoke it.
+- Uploaded files use a private Cloud Storage bucket.
+- Internal Context Pack calls require a server-only shared secret.
+- Calendar access is read-only.
+- Ask suggestions do not become project facts until the user accepts them.

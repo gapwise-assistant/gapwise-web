@@ -107,6 +107,35 @@ export interface TracePipelineStep {
   contextCount?: number;
 }
 
+export type CalendarSyncStepStatus = 'started' | 'completed' | 'failed';
+
+export interface CalendarSyncTraceStep {
+  name: string;
+  status: CalendarSyncStepStatus;
+  startedAt: string;
+  durationMs: number;
+  details?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface CalendarSyncTrace {
+  runId: string;
+  projectId: string | null;
+  status: 'running' | 'completed' | 'failed';
+  steps: CalendarSyncTraceStep[];
+}
+
+export interface CalendarContextPackTrace {
+  projectId: string;
+  projectSemanticVersion: string;
+  assessmentId: string | null;
+  cacheStatus: 'hit' | 'miss';
+  stale: boolean;
+  relevantEventIds: string[];
+  commitmentIds: string[];
+  refreshScheduled: boolean;
+}
+
 export interface TraceDecisionAnchoring {
   decisionId: string | null;
   decisionTitle: string;
@@ -146,6 +175,10 @@ export interface TraceEvent {
   askGraphReasoningContext?: import('@/types/ask').AskGraphReasoningTrace;
   /** True when the event describes a deterministic demo simulation, not an AI call. */
   simulation?: boolean;
+  /** Correlated explicit Calendar sync diagnostics, available in Developer Trace only. */
+  calendarSync?: CalendarSyncTrace;
+  /** Cache-only Calendar Context Pack diagnostics. */
+  calendarContextPack?: CalendarContextPackTrace;
   error?: string;
 }
 import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';

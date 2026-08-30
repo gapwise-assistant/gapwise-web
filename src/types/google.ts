@@ -94,4 +94,6 @@ export interface GoogleWorkspaceSignals {
   gmailMessages: GmailMessageSignal[];
   driveFiles: DriveFileSignal[];
   derivedSources: ContextSource[];
+  /** Correlates an explicit sync with its localhost Developer Trace parent. */
+  calendarSyncRunId?: string;
 }

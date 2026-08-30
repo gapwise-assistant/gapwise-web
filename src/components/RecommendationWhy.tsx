@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { AttentionCandidate } from '@/types/attention';
 import { formatCalendarCommitmentText } from '@/lib/google/calendarFormatting';
 import { useDismissibleModal } from '@/lib/ui/useDismissibleModal';
+import { isNormalizedCalendarCommitment } from '@/lib/today/calendarCommitments';
 
 interface RecommendationWhyProps {
   recommendation: AttentionCandidate | null;
@@ -16,10 +17,7 @@ export const RecommendationWhy: React.FC<RecommendationWhyProps> = ({ recommenda
   useDismissibleModal(onClose, panelRef, Boolean(recommendation));
 
   if (!recommendation) return null;
-  const calendarCommitments = recommendation.context_pack.upcomingCommitments.filter((commitment) =>
-    commitment.source_refs.some((ref) => ref.startsWith('gcal_')) ||
-    commitment.why_it_matters?.includes('Source: Google Calendar') === true
-  );
+  const calendarCommitments = recommendation.context_pack.upcomingCommitments.filter(isNormalizedCalendarCommitment);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/70 backdrop-blur-sm sm:items-stretch">

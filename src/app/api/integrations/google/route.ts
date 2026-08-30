@@ -13,6 +13,8 @@ import { isDemoMode } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { getStorageProvider } from '@/lib/storage';
 import { StorageError } from '@/lib/storage/types';
+import { appendCalendarSyncStep, finishCalendarSyncTrace, startCalendarSyncTrace } from '@/lib/observability/trace';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export const runtime = 'nodejs';
 
@@ -51,6 +53,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   let requestedAction: string | undefined;
+  let calendarSyncRunId: string | undefined;
   try {
     const body = (await request.json()) as {
       userId?: string;
@@ -64,6 +67,9 @@ export async function POST(request: Request) {
     };
     requestedAction = body.action;
     const userId = await requireAuthenticatedUserId(request, body.userId?.trim());
+    if (body.action === 'sync') {
+      calendarSyncRunId = startCalendarSyncTrace(userId, body.projectId?.trim() || null);
+    }
 
     if (isDemoMode() && body.action === 'connect') {
       if (!body.name) throw new Error('Missing integration name.');
@@ -87,6 +93,24 @@ export async function POST(request: Request) {
         throw new StorageError('Select an active workspace before syncing connected sources.', 'VALIDATION_ERROR');
       }
       const integrations = await getIntegrationStates(userId);
+      const connectedCalendar = integrations.find((integration) => integration.name === 'calendar');
+      if (calendarSyncRunId) {
+        appendCalendarSyncStep(calendarSyncRunId, {
+          name: 'Sync request and scope',
+          status: 'completed',
+          startedAt: new Date().toISOString(),
+          durationMs: 0,
+          details: {
+            requestedProjectId: projectId,
+            loadedProjectId: project.id,
+            projectSemanticVersion: semanticProjectVersion(project),
+            projectStatus: project.status,
+            calendarConnected: connectedCalendar?.status === 'connected',
+            calendarStatus: connectedCalendar?.status ?? 'disconnected',
+            lastSyncAtBeforeSync: connectedCalendar?.lastSyncAt ?? null,
+          },
+        });
+      }
       const signals = await collectWorkspaceSignalsForUser({
         userId,
         integrations,
@@ -95,12 +119,35 @@ export async function POST(request: Request) {
         storage,
         now: new Date(),
         forceCalendarRefresh: true,
+        calendarSyncRunId,
       });
       const calendar = integrations.find((integration) => integration.name === 'calendar');
       const refreshedIntegrations = calendar?.status === 'connected'
         ? await updateIntegrationState(userId, { ...calendar, lastSyncAt: new Date().toISOString() })
         : integrations;
-      return NextResponse.json({ signals, integrations: refreshedIntegrations });
+      if (calendarSyncRunId) {
+        appendCalendarSyncStep(calendarSyncRunId, {
+          name: 'Sync response construction',
+          status: 'completed',
+          startedAt: new Date().toISOString(),
+          durationMs: 0,
+          details: {
+            projectId: project.id,
+            calendarEventIds: signals.calendarEvents.map((event) => event.id),
+            calendarSourceIds: signals.derivedSources
+              .filter((source) => source.mime_type === 'application/vnd.google.calendar.event')
+              .map((source) => source.id),
+            calendarEventCount: signals.calendarEvents.length,
+            calendarSourceCount: signals.derivedSources.filter((source) => source.mime_type === 'application/vnd.google.calendar.event').length,
+            gmailCount: signals.gmailMessages.length,
+            driveCount: signals.driveFiles.length,
+            lastSyncAtUpdated: refreshedIntegrations.some((integration) => integration.name === 'calendar' && integration.lastSyncAt !== undefined),
+            httpStatus: 200,
+          },
+        });
+        finishCalendarSyncTrace(calendarSyncRunId, 'completed');
+      }
+      return NextResponse.json({ signals, integrations: refreshedIntegrations, calendarSyncRunId });
     }
 
     if (body.action === 'update' && body.integration) {
@@ -122,6 +169,13 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ integrations });
   } catch (error) {
+    if (calendarSyncRunId) {
+      finishCalendarSyncTrace(
+        calendarSyncRunId,
+        'failed',
+        error instanceof Error ? error.message : 'Google integration request failed.',
+      );
+    }
     const status = error instanceof StorageError
       ? error.code === 'NOT_FOUND' ? 404 : error.code === 'PERMISSION_DENIED' ? 403 : 400
       : requestedAction === 'sync' ? 503 : 400;
@@ -130,6 +184,6 @@ export async function POST(request: Request) {
     const message = requestedAction === 'sync' && !expectedClientError
       ? 'Connected context could not be refreshed. Try again.'
       : error instanceof Error ? error.message : 'Google integration request failed.';
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({ error: message, ...(calendarSyncRunId ? { calendarSyncRunId } : {}) }, { status });
   }
 }

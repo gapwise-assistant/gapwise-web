@@ -12,6 +12,7 @@ import {
 } from '@/lib/demo/careerConflict';
 import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
 import { isNextActionSatisfied } from '@/lib/actions/completion';
+import { isNormalizedCalendarCommitment } from '@/lib/today/calendarCommitments';
 
 function includesAny(text: string, terms: string[]): boolean {
   const lower = text.toLowerCase();
@@ -42,10 +43,6 @@ function nodeTimestamp(nodeText: string, label: 'Starts' | 'Ends'): number {
 function calendarEventTitle(text: string): string {
   const match = text.match(/^Google Calendar event: ([^.]+)\./);
   return match?.[1] ?? 'Calendar commitment';
-}
-
-function isCalendarCommitment(node: ContextPack['upcomingCommitments'][number]): boolean {
-  return node.source_refs.some((ref) => ref.startsWith('gcal_')) || node.why_it_matters?.includes('Source: Google Calendar') === true;
 }
 
 function calendarUrgency(startTime: number, endTime: number, nowTime: number): number {
@@ -93,7 +90,7 @@ export function generateAttentionCandidates(params: {
   ) && !careerRoleAccepted;
 
   params.contextPack?.upcomingCommitments
-    .filter(isCalendarCommitment)
+    .filter(isNormalizedCalendarCommitment)
     .filter((commitment) => !isNextActionSatisfied(reasoningProject, commitment))
     .forEach((commitment) => {
       const startTime = nodeTimestamp(commitment.text, 'Starts');

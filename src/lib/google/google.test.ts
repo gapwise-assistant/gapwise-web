@@ -114,6 +114,13 @@ describe('Google Workspace awareness', () => {
       mime_type: 'application/vnd.google.calendar.event',
       storage_url: 'https://calendar.google.com/event?eid=real_event_1',
     });
+    expect(result.diagnostics).toMatchObject({
+      calendarId: 'primary',
+      rawResultCount: 1,
+      eventIds: ['real_event_1'],
+      eventTypeCounts: { default: 1 },
+      statusCounts: { default: 1 },
+    });
   });
 
   it('filters Context Pack Calendar events locally after reading the 30-day window', async () => {

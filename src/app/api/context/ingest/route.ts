@@ -14,6 +14,7 @@ import { Project } from '@/types/clarity';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
+import { appendCalendarSyncStep } from '@/lib/observability/trace';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { loadUserMemoryProfile } from '@/lib/memory/serverStore';
@@ -45,6 +46,7 @@ const jsonSourceSchema = z.object({
   storageUrl: z.string().trim().optional(),
   hash: z.string().trim().optional(),
   origin: z.enum(['user', 'connector']).optional(),
+  calendarSyncRunId: z.string().trim().min(1).max(120).optional(),
   profile: profileSchema.optional(),
   forceReprocess: z.boolean().optional(),
 });
@@ -109,6 +111,7 @@ async function parseRequest(request: Request): Promise<{
     mimeType: String(form.get('mimeType') ?? file?.type ?? 'application/pdf').trim(),
     sizeBytes: file?.size,
     origin: 'user',
+    calendarSyncRunId: String(form.get('calendarSyncRunId') ?? '').trim() || undefined,
     profile: (() => {
       try { return JSON.parse(String(form.get('profile') ?? '{}')) as unknown; } catch { return undefined; }
     })() as SourceRequest['profile'],
@@ -157,12 +160,31 @@ export async function POST(request: Request) {
     (source.origin !== 'connector' || item.id === source.sourceId)
   );
   if (duplicate && !forceReprocess) {
+    if (source.calendarSyncRunId) {
+      appendCalendarSyncStep(source.calendarSyncRunId, {
+        name: 'Client import / Context ingestion',
+        status: 'completed',
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        details: {
+          sourceId: source.sourceId,
+          projectId: source.projectId,
+          resultProjectId: target.project.id,
+          outcome: 'skipped_duplicate',
+          duplicateSourceId: duplicate.id,
+          saveCompleted: false,
+          reloadCompleted: false,
+          derivedNodeIds: duplicate.derived_node_ids,
+        },
+      });
+    }
     return NextResponse.json({
       project: target.project,
       sourceId: duplicate.id,
       storageUrl: duplicate.storage_url,
       skipped: true,
       modelUsed: duplicate.model_used,
+      ...(source.calendarSyncRunId ? { calendarSyncRunId: source.calendarSyncRunId } : {}),
     });
   }
 
@@ -243,12 +265,43 @@ export async function POST(request: Request) {
     )?.id
     : undefined;
 
+  let reloadedProjectId: string | undefined;
+  if (source.calendarSyncRunId) {
+    if (!result.error && !result.skipped && !target.isGeneral) {
+      const reloaded = await loadTarget(source.userId, source.projectId);
+      result.project = reloaded.project;
+      reloadedProjectId = reloaded.project.id;
+    }
+    const persistedSource = result.project.sources.find((item) => item.id === source.sourceId);
+    appendCalendarSyncStep(source.calendarSyncRunId, {
+      name: 'Client import / Context ingestion',
+      status: result.error ? 'failed' : 'completed',
+      startedAt: new Date(started).toISOString(),
+      durationMs: Date.now() - started,
+      details: {
+        sourceId: source.sourceId,
+        projectId: source.projectId,
+        resultProjectId: result.project.id,
+        outcome: result.error ? 'failed' : result.skipped ? 'skipped_unchanged' : 'imported',
+        importedSourceId: persistedSource?.id ?? null,
+        processingStatus: persistedSource?.processing_status ?? null,
+        derivedNodeIds: persistedSource?.derived_node_ids ?? [],
+        historyEventId: sourceHistoryEventId ?? null,
+        saveCompleted: !result.skipped,
+        reloadCompleted: Boolean(reloadedProjectId),
+        reloadedProjectId: reloadedProjectId ?? null,
+      },
+      ...(result.error ? { error: result.error } : {}),
+    });
+  }
+
   if (result.error) {
     return NextResponse.json({
       error: result.error,
       project: result.project,
       sourceId: source.sourceId,
       storageUrl,
+      ...(source.calendarSyncRunId ? { calendarSyncRunId: source.calendarSyncRunId } : {}),
     }, { status: 503 });
   }
 
@@ -358,5 +411,6 @@ export async function POST(request: Request) {
     skipped: result.skipped,
     modelUsed: result.modelUsed,
     analysis: result.analysis,
+    ...(source.calendarSyncRunId ? { calendarSyncRunId: source.calendarSyncRunId } : {}),
   });
 }

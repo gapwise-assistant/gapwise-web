@@ -11,6 +11,16 @@ import {
   formatCalendarSchedule,
   formatCalendarTimeUntil,
 } from '@/lib/google/calendarFormatting';
+import {
+  calendarEventIdFromNode,
+  isNormalizedCalendarCommitment,
+} from '@/lib/today/calendarCommitments';
+
+export {
+  calendarEventIdFromNode,
+  isCalendarBackedNode,
+  isNormalizedCalendarCommitment,
+} from '@/lib/today/calendarCommitments';
 
 export interface TodayQuestion {
   id: string;
@@ -64,8 +74,8 @@ export interface TodayCommitment {
   provenance: string;
 }
 
-function parseCalendarTitle(text: string): string {
-  return text.match(/^Google Calendar event: ([^.]+)\./)?.[1] ?? 'Calendar event';
+function parseCalendarTitle(text: string): string | undefined {
+  return text.match(/^Google Calendar event: ([^.]+)\./)?.[1]?.trim() || undefined;
 }
 
 function parseTime(text: string, label: 'Starts' | 'Ends'): string | undefined {
@@ -76,10 +86,6 @@ function timestamp(value: string | undefined): number {
   if (!value) return 0;
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : 0;
-}
-
-function isCalendarNode(node: ClarityNode): boolean {
-  return node.source_refs.some((ref) => ref.startsWith('gcal_')) || node.why_it_matters?.includes('Source: Google Calendar') === true;
 }
 
 function contextPacksFromBrief(brief: DailyBrief): ContextPack[] {
@@ -95,7 +101,7 @@ function contextPacksFromBrief(brief: DailyBrief): ContextPack[] {
 
 function bestContextPack(brief: DailyBrief): ContextPack | null {
   const packs = contextPacksFromBrief(brief);
-  return packs.find((pack) => pack.upcomingCommitments.some(isCalendarNode)) ?? packs[0] ?? null;
+  return packs.find((pack) => pack.upcomingCommitments.some(isNormalizedCalendarCommitment)) ?? packs[0] ?? null;
 }
 
 export function todayQuestionFromNode(project: Project, node: ClarityNode): TodayQuestion {
@@ -142,6 +148,7 @@ function calendarQuestion(node: ClarityNode, now: Date): TodayQuestion | null {
   const hoursUntilStart = (startTime - now.getTime()) / (60 * 60 * 1000);
   if (hoursUntilStart < -1 || hoursUntilStart > 48) return null;
   const title = parseCalendarTitle(node.text);
+  if (!title) return null;
   const readableStart = formatCalendarDateTime(start);
   return {
     id: `question_prepare_${node.id}`,
@@ -179,7 +186,7 @@ export function buildTodayQuestions(params: {
   contextPack?.contradictions
     .filter((node) => ['UNKNOWN', 'ASSUMPTION'].includes(node.type))
     .forEach((node) => addQuestion(todayQuestionFromNode(reasoningProject, node)));
-  contextPack?.upcomingCommitments.filter(isCalendarNode).forEach((node) => {
+  contextPack?.upcomingCommitments.filter(isNormalizedCalendarCommitment).forEach((node) => {
     const question = calendarQuestion(node, now);
     if (question) addQuestion(question);
   });
@@ -208,7 +215,7 @@ export function buildComingUp(
   const excluded = new Set(excludedCommitmentIds);
   const commitments = contextPacksFromBrief(brief)
     .flatMap((pack) => pack.upcomingCommitments)
-    .filter(isCalendarNode)
+    .filter(isNormalizedCalendarCommitment)
     .filter((node) => !excluded.has(node.id))
     .filter((node) => {
       const end = timestamp(parseTime(node.text, 'Ends')) || timestamp(parseTime(node.text, 'Starts'));
@@ -216,11 +223,13 @@ export function buildComingUp(
     })
     .sort((a, b) => timestamp(parseTime(a.text, 'Starts')) - timestamp(parseTime(b.text, 'Starts')));
 
-  const seen = new Set<string>();
+  const seenEventIds = new Set<string>();
   return commitments
     .filter((node) => {
-      if (seen.has(node.id)) return false;
-      seen.add(node.id);
+      const eventId = calendarEventIdFromNode(node);
+      if (!eventId || !parseCalendarTitle(node.text) || !parseTime(node.text, 'Starts')) return false;
+      if (seenEventIds.has(eventId)) return false;
+      seenEventIds.add(eventId);
       return true;
     })
     .slice(0, limit)
@@ -230,7 +239,7 @@ export function buildComingUp(
       const timing = formatCalendarTimeUntil(start, end, now);
       return {
         id: node.id,
-        title: parseCalendarTitle(node.text),
+        title: parseCalendarTitle(node.text)!,
         time: formatCalendarSchedule(start, end, now) ?? timing ?? 'Upcoming',
         provenance: 'Google Calendar',
       };

@@ -16,6 +16,8 @@ import { isDemoMode } from '@/lib/runtime/demoMode';
 import { getStorageProvider } from '@/lib/storage';
 import { AskChatMessage, AskResearchEvidence } from '@/types/ask';
 import { scheduleCalendarRelevanceRefresh } from '@/lib/ask/suggestionsScheduler';
+import { recordTrace } from '@/lib/observability/trace';
+import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export async function buildContextPackForUser(
   input: ContextPackInput,
@@ -104,7 +106,9 @@ export async function buildContextPackForUser(
             project: input.project,
             now,
           });
+      let refreshScheduled = false;
       if ('stale' in cachedRelevance && cachedRelevance.stale) {
+        refreshScheduled = true;
         void scheduleCalendarRefresh({
           userId: input.userId,
           project: input.project,
@@ -126,6 +130,37 @@ export async function buildContextPackForUser(
               ],
             }
           : commitment;
+      });
+      recordTrace({
+        userId: input.userId,
+        route: '/internal/context-pack',
+        label: 'Calendar Context Pack cache read',
+        started_at: new Date().toISOString(),
+        duration_ms: 0,
+        agentNames: [],
+        contextIds: cachedRelevance.events.map((event) => event.id),
+        scores: [],
+        toolCalls: ['loadCachedCalendarRelevanceForProject'],
+        calendarContextPack: {
+          projectId: input.project.id,
+          projectSemanticVersion: semanticProjectVersion(input.project),
+          assessmentId: cachedRelevance.assessment?.id ?? null,
+          cacheStatus: cachedRelevance.assessment ? 'hit' : 'miss',
+          stale: 'stale' in cachedRelevance && typeof cachedRelevance.stale === 'boolean'
+            ? cachedRelevance.stale
+            : false,
+          relevantEventIds: cachedRelevance.events.map((event) => event.id),
+          commitmentIds: calendarCommitments.map((commitment) => commitment.id),
+          refreshScheduled,
+        },
+        pipelineSteps: [{
+          name: 'Calendar Context Pack cache read',
+          summary: cachedRelevance.assessment
+            ? `Rebuilt ${calendarCommitments.length} Calendar commitment${calendarCommitments.length === 1 ? '' : 's'} from the saved assessment.`
+            : 'No current project-scoped Calendar assessment was available.',
+          execution: 'deterministic',
+          contextCount: cachedRelevance.events.length,
+        }],
       });
     }
   } catch {

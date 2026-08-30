@@ -9,6 +9,16 @@ const CONTEXT_PACK_CALENDAR_HORIZON_DAYS = 30;
 const CONTEXT_PACK_ALLOWED_EVENT_TYPES = new Set(['default', 'fromGmail', 'focusTime', 'outOfOffice']);
 const CONTEXT_PACK_EXCLUDED_EVENT_TYPES = new Set(['birthday', 'workingLocation']);
 
+export interface CalendarRetrievalDiagnostics {
+  calendarId: string;
+  timeMin: string;
+  timeMax: string;
+  rawResultCount: number;
+  eventIds: string[];
+  eventTypeCounts: Record<string, number>;
+  statusCounts: Record<string, number>;
+}
+
 export function getDemoCalendarEvents(now = new Date('2026-08-10T10:00:00Z')): CalendarEventSignal[] {
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   return [
@@ -41,15 +51,23 @@ export async function retrieveRealCalendarSignals(
   assertExternalServicesAllowed('Google Calendar API');
   assertCanRead(state);
   const calendar = calendarClient ?? (await getAuthorizedCalendarClient(userId));
+  const timeMin = now.toISOString();
+  const timeMax = addDays(now, CONTEXT_PACK_CALENDAR_HORIZON_DAYS).toISOString();
   const response = await calendar.events.list({
     calendarId: 'primary',
-    timeMin: now.toISOString(),
-    timeMax: addDays(now, CONTEXT_PACK_CALENDAR_HORIZON_DAYS).toISOString(),
+    timeMin,
+    timeMax,
     maxResults: 50,
     singleEvents: true,
     orderBy: 'startTime',
   });
-  const events: CalendarEventSignal[] = (response.data.items ?? [])
+  const rawItems = response.data.items ?? [];
+  const countBy = (values: Array<string | null | undefined>): Record<string, number> => values.reduce<Record<string, number>>((counts, value) => {
+    const key = value?.trim() || 'default';
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+  const events: CalendarEventSignal[] = rawItems
     .filter((event) => Boolean(event.id))
     .map((event) => ({
     id: event.id!,
@@ -67,6 +85,15 @@ export async function retrieveRealCalendarSignals(
   return {
     events,
     sources: events.map(calendarEventToSource),
+    diagnostics: {
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      rawResultCount: rawItems.length,
+      eventIds: events.map((event) => event.id),
+      eventTypeCounts: countBy(rawItems.map((event) => event.eventType)),
+      statusCounts: countBy(rawItems.map((event) => event.status)),
+    } satisfies CalendarRetrievalDiagnostics,
   };
 }
 

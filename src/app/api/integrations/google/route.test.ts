@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET, POST } from './route';
 import { createDemoConnectedState } from '@/lib/google/auth';
 import { createProjectFromInput } from '@/lib/projects/createProject';
+import { clearTracesForTests, listTraces } from '@/lib/observability/trace';
 
 const mocks = vi.hoisted(() => ({
   requireAuthenticatedUserId: vi.fn(),
@@ -46,6 +47,7 @@ describe('POST /api/integrations/google sync scope', () => {
   beforeEach(() => {
     vi.stubEnv('GAPSWISE_DEMO_MODE', 'false');
     vi.clearAllMocks();
+    clearTracesForTests();
     mocks.requireAuthenticatedUserId.mockResolvedValue('calendar-user');
     mocks.getIntegrationStates.mockResolvedValue([createDemoConnectedState('calendar')]);
     mocks.updateIntegrationState.mockImplementation(async (_userId: string, state: unknown) => [state]);
@@ -81,6 +83,29 @@ describe('POST /api/integrations/google sync scope', () => {
       'calendar-user',
       expect.objectContaining({ name: 'calendar', lastSyncAt: expect.any(String) }),
     );
+  });
+
+  it('creates one correlated sync trace and carries its ID into the sync request', async () => {
+    const project = createProjectFromInput({ name: 'Mobile beta', goal: 'Ship the mobile beta.' });
+    mocks.getStorageProvider.mockReturnValue({ getProject: vi.fn().mockResolvedValue(project) });
+
+    const response = await POST(request({ action: 'sync', userId: 'calendar-user', projectId: project.id }));
+    const body = await response.json() as { calendarSyncRunId: string };
+
+    expect(response.status).toBe(200);
+    expect(body.calendarSyncRunId).toMatch(/^calendar_sync_/);
+    expect(mocks.collectWorkspaceSignalsForUser).toHaveBeenCalledWith(expect.objectContaining({
+      calendarSyncRunId: body.calendarSyncRunId,
+    }));
+    const trace = listTraces('calendar-user').find((item) => item.calendarSync?.runId === body.calendarSyncRunId);
+    expect(trace?.calendarSync).toMatchObject({
+      projectId: project.id,
+      status: 'completed',
+    });
+    expect(trace?.calendarSync?.steps.map((step) => step.name)).toEqual([
+      'Sync request and scope',
+      'Sync response construction',
+    ]);
   });
 
   it('returns not found when the requested project does not belong to the user', async () => {

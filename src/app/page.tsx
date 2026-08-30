@@ -455,7 +455,12 @@ async function persistScopeToAPI(userId: string, scope: WorkspaceScope): Promise
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, scope }),
     });
-    if (!res.ok) throw new Error('Scope write failed');
+    if (!res.ok) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[Gapwise workspace selection persistence failed]', { status: res.status });
+      }
+      throw new Error('Scope write failed');
+    }
     return await res.json() as ScopePersistenceResult;
   } catch {
     return null;
@@ -741,6 +746,32 @@ export default function Home() {
       return { success: false };
     }
     const nextScope: AppScope = { type: 'project', projectId: selected.id };
+
+    // Public-demo projects are server-assigned and read-only. The projects
+    // list has already been filtered by the authenticated server response;
+    // require that single returned project before changing local navigation.
+    if (isPublicDemo) {
+      if (projects.length !== 1 || projects[0]?.id !== selected.id) {
+        setStorageMessage('The requested workspace could not be found.');
+        return { success: false };
+      }
+      setProject(selected);
+      setScope(nextScope);
+      setProjectFocusKey((current) => current + 1);
+      setStorageMessage('');
+      return { success: true };
+    }
+
+    // Selecting the already active, known project is a local no-op. This is
+    // intentionally after the project-list lookup so it cannot authorize an
+    // arbitrary project ID.
+    if (scope?.type === 'project' && scope.projectId === selected.id && project.id === selected.id) {
+      setProject(selected);
+      setScope(nextScope);
+      setStorageMessage('');
+      return { success: true };
+    }
+
     const persisted = await persistScopeToAPI(userId, nextScope);
     if (!persisted?.scope || persisted.scope.type !== 'project') {
       setStorageMessage('Workspace selection could not be saved to persistent storage.');
@@ -751,7 +782,7 @@ export default function Home() {
     setScope(persisted.scope);
     setStorageMessage('');
     return { success: true };
-  }, [projects, userId]);
+  }, [isPublicDemo, project, projects, scope, userId]);
 
   const handleNoActiveWorkspace = useCallback(() => {
     setScope(null);

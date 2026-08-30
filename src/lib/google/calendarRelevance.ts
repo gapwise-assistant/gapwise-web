@@ -13,7 +13,7 @@ import { getStorageProvider } from '@/lib/storage';
 import { getVertexGenAIClient } from '@/lib/google/genai';
 import { getAgentModelConfig } from '@/lib/agents/modelPolicy';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
-import { estimateTokenCount, recordTrace } from '@/lib/observability/trace';
+import { appendCalendarSyncStep, estimateTokenCount, recordTrace } from '@/lib/observability/trace';
 
 export const CALENDAR_RELEVANCE_CLASSIFIER_VERSION = 'calendar-relevance-v1';
 export const CALENDAR_RELEVANCE_CONFIDENCE_THRESHOLD = 0.75;
@@ -22,7 +22,24 @@ const MAX_EVENTS = 50;
 const MAX_EVENT_DESCRIPTION = 1200;
 const MAX_PROJECT_NODES = 24;
 const ALLOWED_EVENT_TYPES = new Set(['default', 'fromGmail', 'focusTime', 'outOfOffice']);
-const EXCLUDED_EVENT_TYPES = new Set(['birthday', 'workingLocation']);
+
+export type CalendarPrefilterOutcome =
+  | 'eligible'
+  | 'ended'
+  | 'outside_30_day_horizon'
+  | 'cancelled_or_deleted'
+  | 'birthday'
+  | 'working_location'
+  | 'unsupported_event_type'
+  | 'duplicate_event_id'
+  | 'missing_usable_content'
+  | 'missing_event_id'
+  | 'candidate_limit';
+
+export interface CalendarPrefilterDiagnostic {
+  eventId: string | null;
+  outcome: CalendarPrefilterOutcome;
+}
 
 const relevanceKindSchema = z.enum([
   'deadline',
@@ -102,44 +119,81 @@ export function calendarRelevanceAssessmentCurrentCacheId(
   return `calendar_relevance_current_v1_${stableHash(`${projectId}\u0000${projectSemanticVersion}`).slice(0, 40)}`;
 }
 
-function isUsableEvent(event: SafeCalendarEvent, now: Date, horizonDays: number): boolean {
+function prefilterOutcome(
+  event: SafeCalendarEvent,
+  now: Date,
+  horizonDays: number,
+): CalendarPrefilterOutcome {
   const status = event.status?.toLowerCase();
-  if (status === 'cancelled' || status === 'canceled' || status === 'deleted') return false;
-  if (EXCLUDED_EVENT_TYPES.has(event.eventType ?? '')) return false;
-  if (event.eventType && !ALLOWED_EVENT_TYPES.has(event.eventType)) return false;
-  if (![event.summary, event.description, event.start, event.end, event.location].some((value) => Boolean(value?.trim()))) return false;
+  if (status === 'cancelled' || status === 'canceled' || status === 'deleted') return 'cancelled_or_deleted';
+  if (event.eventType === 'birthday' || event.eventType === 'workingLocation') {
+    return event.eventType === 'birthday' ? 'birthday' : 'working_location';
+  }
+  if (event.eventType && !ALLOWED_EVENT_TYPES.has(event.eventType)) return 'unsupported_event_type';
+  if (![event.summary, event.description, event.start, event.end, event.location].some((value) => Boolean(value?.trim()))) {
+    return 'missing_usable_content';
+  }
   const end = event.end ?? event.start;
   if (end) {
     const endTime = Date.parse(end);
-    if (Number.isFinite(endTime) && endTime <= now.getTime()) return false;
+    if (Number.isFinite(endTime) && endTime <= now.getTime()) return 'ended';
   }
   if (event.start) {
     const startTime = Date.parse(event.start);
     const max = now.getTime() + horizonDays * 24 * 60 * 60 * 1000;
-    if (Number.isFinite(startTime) && startTime > max) return false;
+    if (Number.isFinite(startTime) && startTime > max) return 'outside_30_day_horizon';
   }
-  return true;
+  return 'eligible';
 }
 
 /** Applies only bounded, non-semantic Calendar hygiene before classification. */
-export function prefilterCalendarEvents(
+export function prefilterCalendarEventsWithDiagnostics(
   events: SafeCalendarEvent[],
   now = new Date(),
   horizonDays = 30,
-): SafeCalendarEvent[] {
+): { events: SafeCalendarEvent[]; diagnostics: CalendarPrefilterDiagnostic[] } {
   const byId = new Map<string, SafeCalendarEvent>();
+  const diagnostics: CalendarPrefilterDiagnostic[] = [];
   for (const event of events) {
-    if (!event.id.trim() || byId.has(event.id) || !isUsableEvent(event, now, horizonDays)) continue;
+    if (!event.id.trim()) {
+      diagnostics.push({ eventId: null, outcome: 'missing_event_id' });
+      continue;
+    }
+    if (byId.has(event.id)) {
+      diagnostics.push({ eventId: event.id, outcome: 'duplicate_event_id' });
+      continue;
+    }
+    const outcome = prefilterOutcome(event, now, horizonDays);
+    if (outcome !== 'eligible') {
+      diagnostics.push({ eventId: event.id, outcome });
+      continue;
+    }
     byId.set(event.id, {
       ...event,
       summary: bounded(event.summary, 320),
       description: bounded(event.description, MAX_EVENT_DESCRIPTION) || undefined,
       location: bounded(event.location, 320) || undefined,
     });
+    diagnostics.push({ eventId: event.id, outcome: 'eligible' });
   }
-  return [...byId.values()]
+  const sorted = [...byId.values()]
     .sort((left, right) => (Date.parse(left.start ?? '') || Number.MAX_SAFE_INTEGER) - (Date.parse(right.start ?? '') || Number.MAX_SAFE_INTEGER))
-    .slice(0, MAX_EVENTS);
+  const selected = sorted.slice(0, MAX_EVENTS);
+  const candidateLimitIds = new Set(sorted.slice(MAX_EVENTS).map((event) => event.id));
+  return {
+    events: selected,
+    diagnostics: diagnostics.map((item) => item.outcome === 'eligible' && item.eventId && candidateLimitIds.has(item.eventId)
+      ? { ...item, outcome: 'candidate_limit' }
+      : item),
+  };
+}
+
+export function prefilterCalendarEvents(
+  events: SafeCalendarEvent[],
+  now = new Date(),
+  horizonDays = 30,
+): SafeCalendarEvent[] {
+  return prefilterCalendarEventsWithDiagnostics(events, now, horizonDays).events;
 }
 
 function relevantProjectNodes(project: Project): Array<Pick<ClarityNode, 'id' | 'type' | 'status' | 'text'>> {
@@ -156,6 +210,10 @@ function relevantProjectNodes(project: Project): Array<Pick<ClarityNode, 'id' | 
     .sort((left, right) => right.impact * right.confidence - left.impact * left.confidence)
     .slice(0, MAX_PROJECT_NODES)
     .map((node) => ({ id: node.id, type: node.type, status: node.status, text: bounded(node.text, 600) }));
+}
+
+export function calendarRelevanceProjectNodeIds(project: Project): string[] {
+  return relevantProjectNodes(project).map((node) => node.id);
 }
 
 export function buildCalendarRelevancePrompt(
@@ -395,6 +453,7 @@ export async function refreshCalendarRelevance(params: {
   classify?: typeof classifyCalendarEventRelevance;
   now?: Date;
   force?: boolean;
+  calendarSyncRunId?: string;
 }): Promise<{
   assessment: CalendarRelevanceAssessmentCacheRecord;
   events: SafeCalendarEvent[];
@@ -409,7 +468,22 @@ export async function refreshCalendarRelevance(params: {
     ? { assessment: null, events: [] }
     : await loadCachedCalendarRelevance(params);
   if (cached.assessment) {
-    recordTrace({
+    if (params.calendarSyncRunId) {
+      appendCalendarSyncStep(params.calendarSyncRunId, {
+        name: 'Assessment lookup',
+        status: 'completed',
+        startedAt: new Date(started).toISOString(),
+        durationMs: Date.now() - started,
+        details: {
+          cacheStatus: 'hit',
+          assessmentId: cached.assessment.id,
+          projectId: params.project.id,
+          projectSemanticVersion: cached.assessment.projectSemanticVersion,
+          relevantEventIds: cached.events.map((event) => event.id),
+        },
+      });
+    }
+    if (!params.calendarSyncRunId) recordTrace({
       userId: params.userId,
       route: '/api/integrations/google',
       label: 'Calendar relevance assessment cache hit',
@@ -428,13 +502,49 @@ export async function refreshCalendarRelevance(params: {
     });
     return { assessment: cached.assessment, events: cached.events, cacheHit: true };
   }
+  if (params.calendarSyncRunId) {
+    appendCalendarSyncStep(params.calendarSyncRunId, {
+      name: 'Assessment lookup',
+      status: 'completed',
+      startedAt: new Date(started).toISOString(),
+      durationMs: Date.now() - started,
+      details: {
+        cacheStatus: 'miss',
+        assessmentId: null,
+        projectId: params.project.id,
+        projectSemanticVersion: semanticProjectVersion(params.project),
+        relevantEventIds: [],
+      },
+    });
+  }
 
   const classify = params.classify ?? classifyCalendarEventRelevance;
+  const classificationStarted = Date.now();
+  const classificationCandidates = prefilterCalendarEventsWithDiagnostics(params.events, params.now).events;
   let result: CalendarRelevanceAssessment;
   try {
     result = await classify({ project: params.project, events: params.events, now: params.now });
   } catch (error) {
-    recordTrace({
+    if (params.calendarSyncRunId) {
+      appendCalendarSyncStep(params.calendarSyncRunId, {
+        name: 'Gemini relevance classification',
+        status: 'failed',
+        startedAt: new Date(classificationStarted).toISOString(),
+        durationMs: Date.now() - classificationStarted,
+        details: {
+          projectId: params.project.id,
+          projectSemanticVersion: semanticProjectVersion(params.project),
+          candidateEventIds: classificationCandidates.map((event) => event.id),
+          projectNodeIds: calendarRelevanceProjectNodeIds(params.project),
+          model: getAgentModelConfig('context').model,
+          thinkingLevel: getAgentModelConfig('context').thinkingLevel,
+          maxOutputTokens: 1024,
+          validationStatus: 'failed',
+        },
+        error: error instanceof Error ? error.message : 'Calendar relevance classification failed.',
+      });
+    }
+    if (!params.calendarSyncRunId) recordTrace({
       userId: params.userId,
       route: '/api/integrations/google',
       label: 'Calendar relevance assessment failed',
@@ -455,6 +565,37 @@ export async function refreshCalendarRelevance(params: {
     });
     throw error;
   }
+  const classificationDurationMs = Date.now() - classificationStarted;
+  if (params.calendarSyncRunId) {
+    appendCalendarSyncStep(params.calendarSyncRunId, {
+      name: 'Gemini relevance classification',
+      status: 'completed',
+      startedAt: new Date(classificationStarted).toISOString(),
+      durationMs: classificationDurationMs,
+      details: {
+        projectId: params.project.id,
+        projectSemanticVersion: result.projectSemanticVersion,
+        candidateEventIds: classificationCandidates.map((event) => event.id),
+        projectNodeIds: calendarRelevanceProjectNodeIds(params.project),
+        model: getAgentModelConfig('context').model,
+        thinkingLevel: getAgentModelConfig('context').thinkingLevel,
+        maxOutputTokens: 1024,
+        inputTokens: estimateTokenCount(buildCalendarRelevancePrompt(params.project, classificationCandidates)),
+        outputTokens: estimateTokenCount(JSON.stringify(result.results)),
+        validationStatus: 'passed',
+        results: result.results.map((item) => ({
+          eventId: item.eventId,
+          relevant: item.relevant,
+          confidence: item.confidence,
+          relevanceKind: item.relevanceKind,
+          matchedNodeIds: item.matchedNodeIds,
+          thresholdOutcome: !item.relevant
+            ? 'irrelevant'
+            : item.confidence >= CALENDAR_RELEVANCE_CONFIDENCE_THRESHOLD ? 'selected' : 'below_threshold',
+        })),
+      },
+    });
+  }
   const now = params.now?.toISOString() ?? new Date().toISOString();
   const normalizedEvents = prefilterCalendarEvents(params.events, params.now);
   const byResultEventId = new Map(result.results.map((item) => [item.eventId, item]));
@@ -467,11 +608,69 @@ export async function refreshCalendarRelevance(params: {
     createdAt: now,
     updatedAt: now,
   };
-  await storage.saveCalendarRelevanceAssessment(params.userId, record);
+  const persistenceStarted = Date.now();
+  try {
+    await storage.saveCalendarRelevanceAssessment(params.userId, record);
+  } catch (error) {
+    if (params.calendarSyncRunId) {
+      appendCalendarSyncStep(params.calendarSyncRunId, {
+        name: 'Assessment persistence',
+        status: 'failed',
+        startedAt: new Date(persistenceStarted).toISOString(),
+        durationMs: Date.now() - persistenceStarted,
+        details: {
+          assessmentId: record.id,
+          projectId: record.projectId,
+          projectSemanticVersion: record.projectSemanticVersion,
+          classifierVersion: record.classifierVersion,
+          eventFingerprint: record.eventFingerprint,
+          saveSucceeded: false,
+          readAfterWrite: false,
+        },
+        error: error instanceof Error ? error.message : 'Calendar assessment save failed.',
+      });
+    }
+    throw error;
+  }
+  let readAfterWrite = false;
+  let readAfterWriteError: string | undefined;
+  try {
+    const persisted = await storage.getCalendarRelevanceAssessment(params.userId, record.id);
+    readAfterWrite = Boolean(
+      persisted
+      && persisted.id === record.id
+      && persisted.projectId === record.projectId
+      && persisted.projectSemanticVersion === record.projectSemanticVersion,
+    );
+  } catch (error) {
+    readAfterWriteError = error instanceof Error ? error.message : 'Calendar assessment read-after-write failed.';
+  }
+  if (params.calendarSyncRunId) {
+    appendCalendarSyncStep(params.calendarSyncRunId, {
+      name: 'Assessment persistence',
+      status: readAfterWriteError ? 'failed' : 'completed',
+      startedAt: new Date(persistenceStarted).toISOString(),
+      durationMs: Date.now() - persistenceStarted,
+      details: {
+        assessmentId: record.id,
+        projectId: record.projectId,
+        projectSemanticVersion: record.projectSemanticVersion,
+        classifierVersion: record.classifierVersion,
+        eventFingerprint: record.eventFingerprint,
+        relevantEventIds: record.relevantEvents?.map((event) => event.id) ?? [],
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        expiresAt: record.expiresAt,
+        saveSucceeded: true,
+        readAfterWrite,
+      },
+      ...(readAfterWriteError ? { error: readAfterWriteError } : {}),
+    });
+  }
   const byEventId = new Map(record.results.map((item) => [item.eventId, item]));
   const events = normalizedEvents
     .filter((event) => isEligible(byEventId.get(event.id)));
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !params.calendarSyncRunId) {
     console.info('[Gapwise Calendar relevance]', {
       projectId: params.project.id,
       candidateCount: prefilterCalendarEvents(params.events, params.now).length,
@@ -482,7 +681,7 @@ export async function refreshCalendarRelevance(params: {
       classifierVersion: record.classifierVersion,
     });
   }
-  recordTrace({
+  if (!params.calendarSyncRunId) recordTrace({
     userId: params.userId,
     route: '/api/integrations/google',
     label: 'Calendar relevance assessment',

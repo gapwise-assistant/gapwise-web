@@ -15,6 +15,221 @@ interface TracePanelProps {
   userId: string;
 }
 
+type DetailRecord = Record<string, unknown>;
+
+function detailString(details: DetailRecord | undefined, key: string): string | null {
+  const value = details?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function detailNumber(details: DetailRecord | undefined, key: string): number | null {
+  const value = details?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function detailBoolean(details: DetailRecord | undefined, key: string): boolean | null {
+  const value = details?.[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function detailStrings(details: DetailRecord | undefined, key: string): string[] {
+  const value = details?.[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function detailRecords(details: DetailRecord | undefined, key: string): DetailRecord[] {
+  const value = details?.[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is DetailRecord => Boolean(item) && typeof item === 'object')
+    : [];
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value === null) return 'none';
+  return JSON.stringify(value) ?? 'none';
+}
+
+function DetailLine({ label, value }: { label: string; value: unknown }) {
+  return (
+    <p>
+      <span className="text-slate-400">{label}:</span> {formatValue(value)}
+    </p>
+  );
+}
+
+function CalendarStageDetails({ details }: { details?: DetailRecord }) {
+  if (!details) return null;
+  const eventIds = detailStrings(details, 'eventIds');
+  const candidateEventIds = detailStrings(details, 'candidateEventIds');
+  const relevantEventIds = detailStrings(details, 'relevantEventIds');
+  const calendarEventIds = detailStrings(details, 'calendarEventIds');
+  const calendarSourceIds = detailStrings(details, 'calendarSourceIds');
+  const projectNodeIds = detailStrings(details, 'projectNodeIds');
+  const derivedNodeIds = detailStrings(details, 'derivedNodeIds');
+  const candidates = detailRecords(details, 'candidates');
+  const results = detailRecords(details, 'results');
+  const renderedKeys = new Set<string>();
+  const lines: Array<{ key: string; label: string; value: unknown }> = [];
+  const add = (key: string, label: string, value: unknown) => {
+    if (value === null || value === undefined || renderedKeys.has(key)) return;
+    renderedKeys.add(key);
+    lines.push({ key, label, value });
+  };
+
+  add('calendarId', 'Calendar', detailString(details, 'calendarId'));
+  add('rawResultCount', 'Google events retrieved', detailNumber(details, 'rawResultCount'));
+  add('inputCount', 'Prefilter input', detailNumber(details, 'inputCount'));
+  add('outputCount', 'Prefilter output', detailNumber(details, 'outputCount'));
+  add('assessmentId', 'Assessment ID', detailString(details, 'assessmentId'));
+  add('cacheStatus', 'Cache', detailString(details, 'cacheStatus'));
+  add('projectId', 'Project', detailString(details, 'projectId'));
+  add('projectSemanticVersion', 'Project semantic version', detailString(details, 'projectSemanticVersion'));
+  add('model', 'Classifier model', detailString(details, 'model'));
+  add('thinkingLevel', 'Thinking', detailString(details, 'thinkingLevel'));
+  add('maxOutputTokens', 'Output limit', detailNumber(details, 'maxOutputTokens'));
+  add('validationStatus', 'Validation', detailString(details, 'validationStatus'));
+  add('eventFingerprint', 'Event fingerprint', detailString(details, 'eventFingerprint'));
+  add('outcome', 'Import result', detailString(details, 'outcome'));
+  add('sourceId', 'Source ID', detailString(details, 'sourceId'));
+  add('importedSourceId', 'Imported source ID', detailString(details, 'importedSourceId'));
+  add('processingStatus', 'Processing status', detailString(details, 'processingStatus'));
+  add('historyEventId', 'History event ID', detailString(details, 'historyEventId'));
+  add('saveCompleted', 'Save completed', detailBoolean(details, 'saveCompleted'));
+  add('reloadCompleted', 'Reload completed', detailBoolean(details, 'reloadCompleted'));
+  add('reloadedProjectId', 'Reloaded project ID', detailString(details, 'reloadedProjectId'));
+  add('saveSucceeded', 'Assessment save', detailBoolean(details, 'saveSucceeded'));
+  add('readAfterWrite', 'Read after write', detailBoolean(details, 'readAfterWrite'));
+
+  return (
+    <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+      {lines.map((line) => <DetailLine key={line.key} label={line.label} value={line.value} />)}
+      {eventIds.length > 0 && <DetailLine label="Google event IDs" value={eventIds.join(', ')} />}
+      {candidateEventIds.length > 0 && <DetailLine label="Classifier candidates" value={candidateEventIds.join(', ')} />}
+      {relevantEventIds.length > 0 && <DetailLine label="Relevant event IDs" value={relevantEventIds.join(', ')} />}
+      {calendarEventIds.length > 0 && <DetailLine label="Returned event IDs" value={calendarEventIds.join(', ')} />}
+      {calendarSourceIds.length > 0 && <DetailLine label="Returned source IDs" value={calendarSourceIds.join(', ')} />}
+      {projectNodeIds.length > 0 && <DetailLine label="Project node IDs" value={projectNodeIds.join(', ')} />}
+      {derivedNodeIds.length > 0 && <DetailLine label="Derived node IDs" value={derivedNodeIds.join(', ')} />}
+      {candidates.length > 0 && (
+        <div>
+          <p className="text-slate-400">Prefilter outcomes:</p>
+          <ul className="ml-3 list-disc">
+            {candidates.map((candidate, index) => (
+              <li key={`${formatValue(candidate.eventId)}-${index}`}>
+                {formatValue(candidate.eventId)} · {formatValue(candidate.outcome)}
+                {candidate.reason ? ` · ${formatValue(candidate.reason)}` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {results.length > 0 && (
+        <div>
+          <p className="text-slate-400">Classifier results:</p>
+          <ul className="ml-3 list-disc">
+            {results.map((result, index) => (
+              <li key={`${formatValue(result.eventId)}-${index}`}>
+                {formatValue(result.eventId)} · {result.relevant ? 'relevant' : 'irrelevant'} · confidence {formatValue(result.confidence)} · {formatValue(result.thresholdOutcome)}
+                {Array.isArray(result.matchedNodeIds) && result.matchedNodeIds.length > 0
+                  ? ` · nodes ${result.matchedNodeIds.map(formatValue).join(', ')}`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {lines.length === 0 && eventIds.length === 0 && candidateEventIds.length === 0 && relevantEventIds.length === 0 && calendarEventIds.length === 0 && calendarSourceIds.length === 0 && candidates.length === 0 && results.length === 0 && (
+        <p>No structured stage details recorded.</p>
+      )}
+    </div>
+  );
+}
+
+export function CalendarSyncTraceView({ trace }: { trace: TraceEvent }) {
+  const calendar = trace.calendarSync;
+  if (!calendar) return null;
+  return (
+    <details className="mt-2 rounded-lg border border-cyan-900/70 bg-cyan-950/20 p-2" open>
+      <summary className="cursor-pointer text-xs font-bold text-cyan-100">Calendar sync pipeline</summary>
+      <div className="mt-2 space-y-2 text-[11px] text-slate-300">
+        <div className="border-b border-cyan-900/50 pb-2">
+          <DetailLine label="Run ID" value={calendar.runId} />
+          <DetailLine label="Status" value={calendar.status} />
+          <DetailLine label="Project ID" value={calendar.projectId ?? 'none'} />
+        </div>
+        {calendar.steps.length > 0 ? (
+          <ol className="space-y-2">
+            {calendar.steps.map((step, index) => (
+              <li key={`${step.name}-${step.startedAt}-${index}`} className="rounded-md border border-slate-800 bg-slate-950/50 p-2">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-semibold text-slate-200">{index + 1}. {step.name}</span>
+                  <span className={step.status === 'failed' ? 'text-rose-300' : 'text-cyan-300'}>{step.status}</span>
+                </div>
+                <p className="mt-1 text-slate-500">{step.durationMs}ms · {step.startedAt}</p>
+                <CalendarStageDetails details={step.details} />
+                {step.error && <p className="mt-1 text-rose-300">Error: {step.error}</p>}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-slate-500">No pipeline stages recorded yet.</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function CalendarContextPackTraceView({ trace }: { trace: TraceEvent }) {
+  const contextPack = trace.calendarContextPack;
+  if (!contextPack) return null;
+  return (
+    <details className="mt-2 rounded-lg border border-violet-900/70 bg-violet-950/20 p-2" open>
+      <summary className="cursor-pointer text-xs font-bold text-violet-100">Calendar Context Pack</summary>
+      <div className="mt-2 space-y-1 text-[11px] text-slate-400">
+        <DetailLine label="Project ID" value={contextPack.projectId} />
+        <DetailLine label="Cache" value={`${contextPack.cacheStatus}${contextPack.stale ? ' · stale' : ''}`} />
+        <DetailLine label="Assessment ID" value={contextPack.assessmentId ?? 'none'} />
+        <DetailLine label="Relevant event IDs" value={contextPack.relevantEventIds.join(', ') || 'none'} />
+        <DetailLine label="Commitment IDs" value={contextPack.commitmentIds.join(', ') || 'none'} />
+        <DetailLine label="Refresh scheduled" value={contextPack.refreshScheduled ? 'yes' : 'no'} />
+      </div>
+    </details>
+  );
+}
+
+function CalendarDiagnostics({ trace }: { trace: TraceEvent }) {
+  return (
+    <>
+      <CalendarSyncTraceView trace={trace} />
+      <CalendarContextPackTraceView trace={trace} />
+    </>
+  );
+}
+
+export function selectCalendarTraceViews(traces: TraceEvent[]): {
+  latestCalendarSyncTrace?: TraceEvent;
+  latestCalendarContextPackTrace?: TraceEvent;
+  recentTraces: TraceEvent[];
+} {
+  const latestCalendarSyncTrace = traces.find((trace) => trace.calendarSync);
+  const latestCalendarContextPackTrace = traces.find((trace) => trace.calendarContextPack);
+  const dedicatedCalendarTraceIds = new Set(
+    [latestCalendarSyncTrace?.id, latestCalendarContextPackTrace?.id].filter(
+      (id): id is string => Boolean(id),
+    ),
+  );
+  return {
+    latestCalendarSyncTrace,
+    latestCalendarContextPackTrace,
+    recentTraces: traces
+      .filter((trace) => !dedicatedCalendarTraceIds.has(trace.id))
+      .slice(0, 8),
+  };
+}
+
 export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
   const [traces, setTraces] = useState<TraceEvent[]>([]);
   const [generationTimelines, setGenerationTimelines] = useState<GenerationTimeline[]>([]);
@@ -30,6 +245,12 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
   useEffect(() => {
     load();
   }, [userId]);
+
+  const {
+    latestCalendarSyncTrace,
+    latestCalendarContextPackTrace,
+    recentTraces,
+  } = selectCalendarTraceViews(traces);
 
   return (
     <section className="fixed bottom-3 right-3 z-40">
@@ -75,10 +296,23 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
                 </div>
               </details>
             )}
+            {(latestCalendarSyncTrace || latestCalendarContextPackTrace) && (
+              <details className="rounded-xl border border-cyan-800/80 bg-slate-900 p-3" open>
+                <summary className="cursor-pointer text-xs font-bold text-cyan-100">
+                  Latest Calendar diagnostics
+                </summary>
+                <div className="mt-2">
+                  {latestCalendarSyncTrace && <CalendarDiagnostics trace={latestCalendarSyncTrace} />}
+                  {latestCalendarContextPackTrace && latestCalendarContextPackTrace.id !== latestCalendarSyncTrace?.id && (
+                    <CalendarDiagnostics trace={latestCalendarContextPackTrace} />
+                  )}
+                </div>
+              </details>
+            )}
             {traces.length === 0 ? (
               <p className="text-xs text-slate-500">No traces recorded yet.</p>
             ) : (
-              traces.slice(0, 8).map((trace) => (
+              recentTraces.map((trace) => (
                 <div key={trace.id} className="rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs">
                   <div className="flex justify-between gap-3">
                     <span className="font-semibold text-slate-200">{trace.label}</span>
@@ -125,12 +359,17 @@ export const TracePanel: React.FC<TracePanelProps> = ({ userId }) => {
                       Context: {trace.contextSummary.includedContextCount} selected IDs · {trace.contextSummary.goalCount} goals · {trace.contextSummary.unresolvedGapCount} open gaps · {trace.contextSummary.evidenceCount} evidence · {trace.contextSummary.preferenceCount} preferences · {trace.contextSummary.decisionCount} decisions · {trace.contextSummary.commitmentCount} commitments
                     </p>
                   )}
-                  <p className="mt-2 text-slate-400">
-                    Agents: {trace.agentNames.join(', ') || 'none'}
-                  </p>
-                  <p className="text-slate-500">
-                    Context IDs ({trace.contextIds.length}): {trace.contextIds.slice(0, 8).join(', ') || 'none'}{trace.contextIds.length > 8 ? '…' : ''}
-                  </p>
+                  {!trace.calendarSync && !trace.calendarContextPack && (
+                    <>
+                      <p className="mt-2 text-slate-400">
+                        Agents: {trace.agentNames.join(', ') || 'none'}
+                      </p>
+                      <p className="text-slate-500">
+                        Context IDs ({trace.contextIds.length}): {trace.contextIds.slice(0, 8).join(', ') || 'none'}{trace.contextIds.length > 8 ? '…' : ''}
+                      </p>
+                    </>
+                  )}
+                  <CalendarDiagnostics trace={trace} />
                   {trace.decisionMapDebug && (
                     <details className="mt-2 border-t border-slate-800 pt-2">
                       <summary className="cursor-pointer text-xs font-bold text-slate-300">Decision Map diagnostics</summary>

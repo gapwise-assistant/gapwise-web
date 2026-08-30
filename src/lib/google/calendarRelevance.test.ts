@@ -11,11 +11,13 @@ import {
   classifyCalendarEventRelevance,
   loadCachedCalendarRelevance,
   loadCachedCalendarRelevanceForProject,
+  prefilterCalendarEventsWithDiagnostics,
   prefilterCalendarEvents,
   refreshCalendarRelevance,
   validateCalendarRelevanceResults,
 } from '@/lib/google/calendarRelevance';
 import type { CalendarEventRelevance, SafeCalendarEvent } from '@/types/google';
+import { clearTracesForTests, finishCalendarSyncTrace, listTraces, startCalendarSyncTrace } from '@/lib/observability/trace';
 
 const mocks = vi.hoisted(() => ({
   generateContent: vi.fn(),
@@ -71,6 +73,7 @@ const tempDirectories: string[] = [];
 
 afterEach(async () => {
   mocks.generateContent.mockReset();
+  clearTracesForTests();
   await Promise.all(tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -149,16 +152,36 @@ describe('project-scoped Calendar relevance', () => {
   });
 
   it('prefilters cancelled, ended, excluded, duplicate, and distant events deterministically', () => {
-    const selected = prefilterCalendarEvents([
+    const input = [
       event('keep', 'Keep this event'),
       event('keep', 'Duplicate event'),
       { ...event('cancelled', 'Cancelled'), status: 'cancelled' },
       { ...event('birthday', 'Birthday'), eventType: 'birthday' },
       { ...event('ended', 'Ended'), start: '2026-08-28T10:00:00.000Z', end: '2026-08-28T11:00:00.000Z' },
       { ...event('distant', 'Distant'), start: '2026-09-20T10:00:00.000Z', end: '2026-09-20T11:00:00.000Z' },
-    ], now);
+    ];
+    const selected = prefilterCalendarEvents(input, now);
+    const diagnostic = prefilterCalendarEventsWithDiagnostics(input, now);
 
     expect(selected.map((item) => item.id)).toEqual(['keep', 'distant']);
+    expect(diagnostic.diagnostics).toEqual([
+      { eventId: 'keep', outcome: 'eligible' },
+      { eventId: 'keep', outcome: 'duplicate_event_id' },
+      { eventId: 'cancelled', outcome: 'cancelled_or_deleted' },
+      { eventId: 'birthday', outcome: 'birthday' },
+      { eventId: 'ended', outcome: 'ended' },
+      { eventId: 'distant', outcome: 'eligible' },
+    ]);
+  });
+
+  it('reports the candidate limit without changing the bounded selection', () => {
+    const input = Array.from({ length: 51 }, (_, index) => event(`event-${index}`, `Event ${index}`));
+    const result = prefilterCalendarEventsWithDiagnostics(input, now);
+
+    expect(result.events).toHaveLength(50);
+    expect(result.diagnostics.filter((item) => item.outcome === 'candidate_limit')).toEqual([
+      { eventId: 'event-50', outcome: 'candidate_limit' },
+    ]);
   });
 
   it('persists a project/event assessment and reuses it until meaningful state changes', async () => {
@@ -195,6 +218,40 @@ describe('project-scoped Calendar relevance', () => {
       userId: 'calendar-user', project: changedProject, events: [{ ...firstEvent, summary: 'Updated launch review' }], storage, classify, now,
     });
     expect(classify).toHaveBeenCalledTimes(3);
+  });
+
+  it('records a correlated, sanitized completion trace for an explicit sync', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'gapwise-calendar-trace-'));
+    tempDirectories.push(directory);
+    const storage = new MockStorageProvider(path.join(directory, 'db.json'));
+    const project = testProject();
+    const calendarEvent = event('trace-event', 'Private event title');
+    const runId = startCalendarSyncTrace('calendar-user', project.id);
+
+    await refreshCalendarRelevance({
+      userId: 'calendar-user',
+      project,
+      events: [calendarEvent],
+      storage,
+      classify: async (params) => assessmentFor(params.project, params.events),
+      now,
+      calendarSyncRunId: runId,
+    });
+    finishCalendarSyncTrace(runId, 'completed');
+
+    const trace = listTraces('calendar-user').find((item) => item.calendarSync?.runId === runId);
+    expect(trace?.calendarSync?.steps.map((step) => step.name)).toEqual([
+      'Assessment lookup',
+      'Gemini relevance classification',
+      'Assessment persistence',
+    ]);
+    expect(trace?.calendarSync?.steps[1]?.details).toMatchObject({
+      candidateEventIds: ['trace-event'],
+      validationStatus: 'passed',
+      results: [expect.objectContaining({ eventId: 'trace-event', thresholdOutcome: 'selected' })],
+    });
+    expect(JSON.stringify(trace)).not.toContain('Private event title');
+    expect(JSON.stringify(trace)).not.toContain(calendarEvent.description);
   });
 
   it('returns no events without a valid assessment and keeps project scopes separate', async () => {

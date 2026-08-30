@@ -33,6 +33,7 @@ export async function importWorkspaceSignalsIntoProject(
       body: JSON.stringify({
         userId: params.userId,
         projectId: current.id,
+        ...(params.signals.calendarSyncRunId ? { calendarSyncRunId: params.signals.calendarSyncRunId } : {}),
         sourceId: source.id,
         filename: source.filename,
         content: source.content,
@@ -51,6 +52,15 @@ export async function importWorkspaceSignalsIntoProject(
     current = body.project;
     if (body.skipped) skipped += 1;
     else imported += 1;
+  }
+
+  if (params.signals.calendarSyncRunId && process.env.NODE_ENV !== 'production') {
+    console.info('[Gapwise Calendar sync import]', {
+      calendarSyncRunId: params.signals.calendarSyncRunId,
+      projectId: current.id,
+      imported,
+      skipped,
+    });
   }
 
   return { project: current, imported, skipped };

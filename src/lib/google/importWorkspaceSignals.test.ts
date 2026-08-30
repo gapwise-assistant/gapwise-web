@@ -32,6 +32,7 @@ describe('connected workspace import', () => {
       signals: {
         calendarEvents: [], gmailMessages: [], driveFiles: [],
         derivedSources: [source('existing'), source('new-calendar-event')],
+        calendarSyncRunId: 'calendar_sync_test',
       },
     }, { request: request as typeof fetch });
 
@@ -41,6 +42,7 @@ describe('connected workspace import', () => {
       projectId: project.id,
       sourceId: 'new-calendar-event',
       origin: 'connector',
+      calendarSyncRunId: 'calendar_sync_test',
     });
   });
 

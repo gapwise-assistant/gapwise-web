@@ -5,6 +5,7 @@ import { calendarTimestampFromText } from '@/lib/google/calendarFormatting';
 import { canonicalQuestionGroups } from '@/lib/questions/canonical';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { isNextActionSatisfied } from '@/lib/actions/completion';
+import { isNormalizedCalendarCommitment } from '@/lib/today/calendarCommitments';
 
 export type TodayItemType = 'QUESTION' | 'ACTION' | 'DECISION' | 'REMINDER';
 
@@ -92,8 +93,9 @@ function displayDescription(recommendation: AttentionCandidate, itemType: TodayI
 
 function calendarCommitmentFor(recommendation: AttentionCandidate): ClarityNode | undefined {
   const commitments = recommendation.context_pack.upcomingCommitments;
-  return commitments.find((commitment) => recommendation.source_node_ids.includes(commitment.id))
-    ?? commitments.find((commitment) => commitment.source_refs.some((ref) => ref.startsWith('gcal_')));
+  return commitments
+    .filter(isNormalizedCalendarCommitment)
+    .find((commitment) => recommendation.source_node_ids.includes(commitment.id));
 }
 
 function matchingQuestion(recommendation: AttentionCandidate, questions: TodayQuestion[], project: Project): TodayQuestion | undefined {

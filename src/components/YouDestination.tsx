@@ -212,14 +212,15 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
 
   const renderProjectCard = (summary: ProjectCardSummary) => {
     const isArchived = summary.status === 'archived';
+    const isSelectable = !readOnly && !isArchived;
 
     return (
     <article
       key={summary.id}
-      role={isArchived ? undefined : 'button'}
-      tabIndex={isArchived ? undefined : 0}
-      onClick={isArchived ? undefined : () => openProject(summary.id)}
-      onKeyDown={isArchived ? undefined : (event) => {
+      role={isSelectable ? 'button' : undefined}
+      tabIndex={isSelectable ? 0 : undefined}
+      onClick={isSelectable ? () => openProject(summary.id) : undefined}
+      onKeyDown={!isSelectable ? undefined : (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           openProject(summary.id);
@@ -228,8 +229,8 @@ export const ScopeDestination: React.FC<ScopeDestinationProps> = ({
       className={`relative rounded-xl border p-4 text-left transition ${
         scope.type === 'project' && summary.id === project.id
           ? 'border-cyan-500 bg-cyan-950/30'
-          : isArchived
-            ? 'border-slate-800/80 bg-slate-950/70'
+            : isArchived || readOnly
+              ? 'border-slate-800/80 bg-slate-950/70'
             : 'cursor-pointer border-slate-800 bg-slate-900 hover:border-cyan-800 hover:bg-slate-900/90'
       }`}
     >

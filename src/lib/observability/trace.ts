@@ -1,4 +1,4 @@
-import { TraceEvent } from '@/types/observability';
+import { TraceEvent, CalendarSyncTraceStep } from '@/types/observability';
 import type { DecisionMapDebugTrace } from '@/lib/graph/decisionMapDebug';
 
 const traces: TraceEvent[] = [];
@@ -56,4 +56,51 @@ export function clearTracesForUser(userId: string): void {
 
 export function clearTracesForTests(): void {
   traces.splice(0);
+}
+
+/** Starts one in-memory parent trace for an explicit Calendar sync. */
+export function startCalendarSyncTrace(userId: string, projectId: string | null): string {
+  const runId = `calendar_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  recordTrace({
+    userId,
+    route: '/api/integrations/google',
+    label: 'Calendar sync',
+    started_at: new Date().toISOString(),
+    duration_ms: 0,
+    agentNames: [],
+    contextIds: [],
+    scores: [],
+    toolCalls: [],
+    calendarSync: {
+      runId,
+      projectId,
+      status: 'running',
+      steps: [],
+    },
+  });
+  return runId;
+}
+
+function calendarSyncTrace(runId: string): TraceEvent | undefined {
+  return traces.find((trace) => trace.calendarSync?.runId === runId);
+}
+
+/** Appends a stage to the existing sync trace without creating duplicate activity records. */
+export function appendCalendarSyncStep(runId: string, step: CalendarSyncTraceStep): void {
+  const trace = calendarSyncTrace(runId);
+  if (!trace?.calendarSync) return;
+  trace.calendarSync.steps.push(step);
+}
+
+/** Marks the parent Calendar sync trace complete or failed. */
+export function finishCalendarSyncTrace(
+  runId: string,
+  status: 'completed' | 'failed',
+  error?: string,
+): void {
+  const trace = calendarSyncTrace(runId);
+  if (!trace?.calendarSync) return;
+  trace.calendarSync.status = status;
+  trace.duration_ms = Math.max(0, Date.now() - Date.parse(trace.started_at));
+  if (error) trace.error = error;
 }

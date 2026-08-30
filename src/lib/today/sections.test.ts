@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { createProjectFromInput } from '@/lib/projects/createProject';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
-import { buildComingUp, buildTodayQuestions, countTodayOpenQuestions, openTodayDecisions } from '@/lib/today/sections';
+import {
+  buildComingUp,
+  buildTodayQuestions,
+  countTodayOpenQuestions,
+  isCalendarBackedNode,
+  isNormalizedCalendarCommitment,
+  openTodayDecisions,
+} from '@/lib/today/sections';
 import { AttentionCandidate, DailyBrief } from '@/types/attention';
 import { ContextPack } from '@/types/contextPack';
+import { ClarityNode } from '@/types/clarity';
 import { formatCalendarSchedule } from '@/lib/google/calendarFormatting';
 
 function briefWithContextPack(contextPack: ContextPack): DailyBrief {
@@ -36,6 +44,39 @@ function briefWithContextPack(contextPack: ContextPack): DailyBrief {
     period: '2026-08-11',
     generated_at: '2026-08-11T20:00:00Z',
     recommendations: [recommendation],
+  };
+}
+
+function calendarCommitment(eventId: string, summary = 'Shared project review', start = '2026-08-12T10:00:00Z'): ClarityNode {
+  return calendarEventsToCommitmentNodes([{
+    id: eventId,
+    summary,
+    start,
+    end: '2026-08-12T10:30:00Z',
+  }], new Date('2026-08-11T20:00:00Z'))[0];
+}
+
+function projectCalendarAction(commitment: ClarityNode): ClarityNode {
+  return {
+    ...commitment,
+    id: 'project_action_for_calendar_event',
+    type: 'NEXT_ACTION',
+    text: commitment.text,
+  };
+}
+
+function packWithUpcoming(project: ReturnType<typeof createGoldenDemoProject>, id: string, upcomingCommitments: ClarityNode[]): ContextPack {
+  return {
+    ...buildContextPack({
+      userId: 'demo-user',
+      query: 'What is coming up?',
+      project,
+      profile: DEFAULT_USER_PROFILE,
+    }),
+    id,
+    unresolvedGaps: [],
+    contradictions: [],
+    upcomingCommitments,
   };
 }
 
@@ -309,5 +350,90 @@ describe('Today sections', () => {
       }),
     ]);
     expect(buildComingUp(briefWithContextPack(contextPack), now, 4, ['gcal_commitment_cal_soon'])).toEqual([]);
+  });
+
+  it('keeps persistent Calendar-backed actions out of scheduled Today surfaces', () => {
+    const project = createGoldenDemoProject();
+    const normalized = calendarCommitment('event_123', 'Timeout-retry verification');
+    const persistentAction = projectCalendarAction(normalized);
+    const contextPack = packWithUpcoming(project, 'pack_calendar_roles', [persistentAction, normalized]);
+    const brief = briefWithContextPack(contextPack);
+
+    expect(isCalendarBackedNode(persistentAction)).toBe(true);
+    expect(isNormalizedCalendarCommitment(persistentAction)).toBe(false);
+    expect(isNormalizedCalendarCommitment(normalized)).toBe(true);
+    expect(buildComingUp(brief, new Date('2026-08-11T20:00:00Z'))).toEqual([
+      expect.objectContaining({
+        id: 'gcal_commitment_event_123',
+        title: 'Timeout-retry verification',
+      }),
+    ]);
+
+    const questions = buildTodayQuestions({
+      project,
+      brief,
+      now: new Date('2026-08-11T20:00:00Z'),
+    });
+    expect(questions).toEqual([
+      expect.objectContaining({
+        id: 'question_prepare_gcal_commitment_event_123',
+        sourceNodeIds: ['gcal_commitment_event_123'],
+      }),
+    ]);
+  });
+
+  it('deduplicates repeated normalized commitments by Google event ID, not title', () => {
+    const project = createGoldenDemoProject();
+    const event123 = calendarCommitment('event_123', 'Same title');
+    const event456 = calendarCommitment('event_456', 'Same title', '2026-08-12T11:00:00Z');
+    const firstPack = packWithUpcoming(project, 'pack_calendar_one', [event123]);
+    const secondPack = packWithUpcoming(project, 'pack_calendar_two', [
+      { ...event123 },
+      event456,
+    ]);
+    const baseBrief = briefWithContextPack(firstPack);
+    const brief: DailyBrief = {
+      ...baseBrief,
+      recommendations: [
+        { ...baseBrief.recommendations[0], id: 'recommendation_one', context_pack: firstPack },
+        { ...baseBrief.recommendations[0], id: 'recommendation_two', context_pack: secondPack },
+      ],
+    };
+
+    expect(buildComingUp(brief, new Date('2026-08-11T20:00:00Z'))).toEqual([
+      expect.objectContaining({ id: 'gcal_commitment_event_123', title: 'Same title' }),
+      expect.objectContaining({ id: 'gcal_commitment_event_456', title: 'Same title' }),
+    ]);
+  });
+
+  it('omits malformed Calendar representations instead of rendering a generic event card', () => {
+    const project = createGoldenDemoProject();
+    const valid = calendarCommitment('event_valid', 'Valid meeting');
+    const malformedWithoutProvenance = {
+      ...valid,
+      id: 'gcal_commitment_missing_source',
+      source_refs: [],
+    };
+    const malformedWithoutSchedule = {
+      ...valid,
+      id: 'gcal_commitment_missing_schedule',
+      text: 'Google Calendar event: Missing schedule.',
+    };
+    const contextPack = packWithUpcoming(project, 'pack_calendar_malformed', [
+      malformedWithoutProvenance,
+      malformedWithoutSchedule,
+      valid,
+    ]);
+
+    expect(isNormalizedCalendarCommitment(malformedWithoutProvenance)).toBe(false);
+    expect(buildComingUp(briefWithContextPack(contextPack), new Date('2026-08-11T20:00:00Z'))).toEqual([
+      expect.objectContaining({ title: 'Valid meeting' }),
+    ]);
+    expect(buildComingUp(briefWithContextPack({
+      ...contextPack,
+      upcomingCommitments: [malformedWithoutProvenance, malformedWithoutSchedule],
+    }), new Date('2026-08-11T20:00:00Z'))).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: 'Calendar event' }),
+    ]));
   });
 });
