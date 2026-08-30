@@ -328,18 +328,4 @@ npx firebase-tools deploy --only hosting --project="$GOOGLE_CLOUD_PROJECT"
 
 Production values come from Cloud Build substitutions, Cloud Run environment variables, workload identity, and Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files.
 
-## Repository layout
 
-```text
-src/                    Next.js product, APIs, graph, retrieval, and persistence
-agent-service/          Python Google ADK agents and runtime
-scripts/                Local startup, smoke tests, and evaluations
-docs/                   Evaluation notes and walkthroughs
-Dockerfile              Web Cloud Run image
-agent-service/Dockerfile
-cloudbuild.yaml         Remote build and Cloud Run deployment
-firebase.json           Firebase Hosting rewrite
-```
-
-- Calendar access is read-only.
-- Ask suggestions do not become project facts until the user accepts them.
