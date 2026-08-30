@@ -119,45 +119,14 @@ The public demo uses a restricted Partner profile. It has a fixed output limit, 
 | Cloud Run | Hosts the Next.js web service and the private Python ADK service. |
 | Firestore | Stores projects, graph nodes and edges, chats, answers, assessments, public-demo usage, and history snapshots. |
 | Cloud Storage | Stores uploaded PDFs and documents. |
-| Cloud Build | Builds both containers and deploys them to Cloud Run. |
+| Cloud Build | The `deploy` trigger watches `main`, builds both containers from `cloudbuild.yaml`, stores them in Artifact Registry, and deploys both Cloud Run services. |
 | Artifact Registry | Stores the web and agent container images. |
 | Firebase Authentication | Provides Google and anonymous guest sign-in. |
 | Firebase Hosting | Serves `gapwise.web.app` and forwards app requests to the web Cloud Run service. |
 | Google Search | Supplies current external evidence to the Web Research Agent. |
 | Google Calendar | Optionally supplies read-only events that are relevant to a project goal. |
 
-GitHub is the source repository for the deployment pipeline. GitHub Actions
-runs the checks in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) for
-pull requests and pushes to `develop` and `main`; those checks do not deploy.
-
-The enabled Google Cloud Build trigger is named `deploy`. It watches the
-`gapwise-assistant/gapwise-web` GitHub repository for pushes matching `^main$`
-and uses [`cloudbuild.yaml`](./cloudbuild.yaml). A merge to `main` therefore
-starts this Google Cloud pipeline:
-
-```text
-GitHub push to main
-  -> Cloud Build validates production substitutions
-  -> Docker builds web and ADK containers
-  -> Artifact Registry stores both images
-  -> gapswise-agent deploys as private Cloud Run
-  -> gapswise-web deploys as public Cloud Run
-  -> Firebase Hosting continues to serve gapwise.web.app
-```
-
-The trigger supplies the public Firebase substitutions and Google OAuth client
-ID required by `cloudbuild.yaml`. Internal API and OAuth client secrets remain
-in Secret Manager and are attached only at Cloud Run runtime. The App Check
-site key is optional in the current release, with
-`FIREBASE_APPCHECK_ENABLED=false` as the deployment default.
-
-Inspect the configured trigger without starting a build:
-
-```bash
-gcloud builds triggers list \
-  --project=gapwise-505217 \
-  --format='table(id,name,disabled,github.name,github.owner,github.push.branch,filename)'
-```
+GitHub Actions runs the checks in [`.github/workflows/ci.yml`](./.github/workflows/ci.yml). Production deployment is handled separately by the Google Cloud Build trigger shown in the table.
 
 ## Run locally
 
@@ -295,78 +264,41 @@ npm run test:google:firestore
 npm run test:google:storage
 ```
 
-These two npm scripts intentionally target the official `gapwise-505217`
-project, `(default)` Firestore database, and `gapwise-505217-context` bucket;
-their package-script environment assignments override shell values. Run them
-only after confirming that those are the intended development resources. For
-a fork, do not assume that exporting different values changes these scripts.
+Review the resource values configured in `package.json` before running these checks. They connect to live storage and may write test data.
 
 The application uses live Google Cloud services in this mode, so Gemini and storage operations can incur charges.
 
 ## Deploy to Google Cloud
 
-The checked-in deployment builds two containers remotely and deploys them as:
+The deployment creates two Cloud Run services:
 
-- `gapswise-web`, a public Cloud Run service for the product and APIs
-- `gapswise-agent`, a private Cloud Run service for Google ADK
+- a public web service for the product and APIs
+- a private agent service for Google ADK
 
-Cloud Build reads [`Dockerfile`](./Dockerfile) and [`agent-service/Dockerfile`](./agent-service/Dockerfile), then stores the resulting images in Artifact Registry.
+Before deploying, replace the project-specific values in `cloudbuild.yaml`, `.firebaserc`, and `firebase.json`. Configure the required Firebase web values as Cloud Build substitutions and store server credentials in Secret Manager.
 
-### Deployment layout
-
-```mermaid
-flowchart LR
-    BROWSER["Browser"] --> AUTH["Firebase Authentication"]
-    BROWSER --> HOSTING["Firebase Hosting"]
-    HOSTING --> WEB["Cloud Run<br/>gapswise-web"]
-    WEB --> FIRESTORE[("Firestore")]
-    WEB --> STORAGE[("Cloud Storage")]
-    WEB -->|"authenticated call"| AGENT["Cloud Run<br/>gapswise-agent"]
-    WEB --> VERTEX["Vertex AI<br/>Gemini"]
-    AGENT --> VERTEX
-    AGENT --> SEARCH["Google Search"]
-    BUILD["Cloud Build"] --> REGISTRY[("Artifact Registry")]
-    REGISTRY --> WEB
-    REGISTRY --> AGENT
-```
-
-### Existing Gapwise project
-
-The official project already has its APIs, Firestore database, bucket, service accounts, Firebase app, and secrets. From the repository root, submit the build with the public Firebase values and Google OAuth client ID:
+If the `deploy` Cloud Build trigger is configured, push or merge to `main`:
 
 ```bash
+git push origin main
+```
+
+To deploy manually, submit `cloudbuild.yaml` with values from your Firebase Web App:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+
 gcloud builds submit . \
-  --project=gapwise-505217 \
+  --project="$GOOGLE_CLOUD_PROJECT" \
   --config=cloudbuild.yaml \
-  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='...',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='gapwise-505217.firebaseapp.com',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='gapwise-505217',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='gapwise-505217.firebasestorage.app',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='...',_NEXT_PUBLIC_FIREBASE_APP_ID='...',_GOOGLE_OAUTH_CLIENT_ID='...'
+  --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='your-api-key',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='your-auth-domain',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='your-project-id',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='your-storage-bucket',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='your-sender-id',_NEXT_PUBLIC_FIREBASE_APP_ID='your-app-id',_GOOGLE_OAUTH_CLIENT_ID='your-oauth-client-id'
 ```
 
-The App Check site key is optional in the current deployment. Server enforcement is disabled in `cloudbuild.yaml`. If App Check is enabled later, pass `_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY` and set `FIREBASE_APPCHECK_ENABLED=true` together.
-
-Deploy Firebase Hosting only on the first deployment or when [`firebase.json`](./firebase.json) changes:
+Firebase Hosting normally remains unchanged because it forwards requests to the web service. Deploy it only for initial setup or after changing [`firebase.json`](./firebase.json):
 
 ```bash
-npx firebase-tools deploy --only hosting --project=gapwise-505217
+npx firebase-tools deploy --only hosting --project="$GOOGLE_CLOUD_PROJECT"
 ```
-
-### Deploying a fork
-
-The checked-in `cloudbuild.yaml`, `.firebaserc`, and `firebase.json` contain values for the official deployment. A fork needs its own resources before the build is submitted.
-
-1. Enable Cloud Build, Cloud Run, Artifact Registry, Vertex AI, Firestore, Cloud Storage, Secret Manager, and Firebase services.
-2. Create a Native-mode `(default)` Firestore database and a private upload bucket.
-3. Create the `cloud-run-source-deploy` Docker repository in `us-central1`.
-4. Create `gapswise-web-runtime` and `gapswise-agent-runtime` service accounts.
-5. Grant the web runtime Firestore User, Vertex AI User, and bucket-level Storage Object Admin access.
-6. Grant the agent runtime Vertex AI User access.
-7. Grant the Cloud Build service account Cloud Run Admin and Artifact Registry Writer. Grant it Service Account User on both runtime service accounts.
-8. Create `gapswise-internal-api-secret` and `gapswise-google-oauth-client-secret` in Secret Manager. Grant the required runtime accounts Secret Accessor on those secrets.
-9. Create a Firebase Web App. Enable Google and Anonymous providers in Firebase Authentication. Add the deployed domains to Authorized domains.
-10. Replace the project-specific Cloud Run URLs, bucket, owner email, and public URL in `cloudbuild.yaml`. Replace the project and Hosting site in `.firebaserc` and `firebase.json`.
-11. Supply the fork's Firebase web configuration and OAuth client ID through the build substitutions shown above.
-12. Submit the build, then grant `roles/run.invoker` on `gapswise-agent` to the web runtime service account.
-13. Query the two Cloud Run service URLs, update `_WEB_URL` and `_AGENT_URL`, and submit once more so both services have their final internal URLs.
-14. Deploy Firebase Hosting.
 
 Production values come from Cloud Build substitutions, Cloud Run environment variables, workload identity, and Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files.
 
