@@ -331,30 +331,6 @@ npx firebase-tools deploy --only hosting --project="$GOOGLE_CLOUD_PROJECT"
 
 Production values come from Cloud Build substitutions, Cloud Run environment variables, workload identity, and Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files.
 
-## Repository layout
-
-```text
-src/                    Next.js product, APIs, graph, retrieval, and persistence
-agent-service/          Python Google ADK agents and runtime
-scripts/                Local startup, smoke tests, and evaluations
-docs/                   Evaluation notes and walkthroughs
-Dockerfile              Web Cloud Run image
-agent-service/Dockerfile
-cloudbuild.yaml         Remote build and Cloud Run deployment
-firebase.json           Firebase Hosting rewrite
-```
-
-## Security boundaries
-
-- Production routes verify Firebase ID tokens on the server.
-- Full access is limited to verified emails listed in `GAPSWISE_FULL_ACCESS_EMAILS`.
-- Guest and other external accounts can only load their registered public demo and use the bounded Ask allowance.
-- The public demo cannot mutate project state or use web research.
-- The ADK Cloud Run service is private and only the web runtime can invoke it.
-- Uploaded files use a private Cloud Storage bucket.
-- Internal Context Pack calls require a server-only shared secret.
-- Calendar access is read-only.
-- Ask suggestions do not become project facts until the user accepts them.
 
 ### Judge login
 
