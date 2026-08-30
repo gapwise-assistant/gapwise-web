@@ -209,11 +209,8 @@ describe('Google Workspace awareness', () => {
       expect.objectContaining({
         rawEventCount: 7,
         filteredEventCount: 3,
-        events: expect.arrayContaining([
-          { title: 'gapwise calendar test', type: 'default' },
-          { title: 'Happy birthday!', type: 'birthday' },
-          { title: 'Working from home', type: 'workingLocation' },
-        ]),
+        eventIds: expect.arrayContaining(['gapwise_calendar_test', 'birthday_1', 'working_location_1']),
+        eventTypes: expect.arrayContaining(['default', 'birthday', 'workingLocation']),
       })
     );
     expect(JSON.stringify(info.mock.calls)).not.toMatch(/access_token|refresh_token/i);

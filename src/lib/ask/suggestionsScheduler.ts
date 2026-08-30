@@ -3,12 +3,17 @@ import { refreshAskSuggestionsForProject } from '@/lib/ask/suggestionsRefresh';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 import { getStorageProvider } from '@/lib/storage';
 import { activeMemories } from '@/lib/memory/store';
+import { getIntegrationStates } from '@/lib/google/state';
+import { calendarSignalToSafeEvent, retrieveRealCalendarSignals } from '@/lib/google/calendar';
+import { refreshCalendarRelevance } from '@/lib/google/calendarRelevance';
+import { isDemoMode } from '@/lib/runtime/demoMode';
 import type { Project, UserMemoryProfile } from '@/types/clarity';
 import type { DurableMemory } from '@/types/contextPack';
 
 type AfterResponse = (work: () => Promise<void>) => void;
 
 const scheduled = new Set<string>();
+const scheduledCalendar = new Set<string>();
 
 function personalizationKey(
   profile: UserMemoryProfile | undefined,
@@ -78,6 +83,14 @@ export async function scheduleAskSuggestionsRefresh(params: {
           projectId: params.project.id,
           message: error instanceof Error ? error.message : 'unknown-error',
         });
+      }
+      try {
+        await refreshCalendarRelevanceAfterMutation(params);
+      } catch (error) {
+        console.error('[Gapwise Calendar relevance scheduled refresh]', {
+          projectId: params.project.id,
+          message: error instanceof Error ? error.message : 'unknown-error',
+        });
       } finally {
         scheduled.delete(key);
       }
@@ -92,6 +105,70 @@ export async function scheduleAskSuggestionsRefresh(params: {
   }
 }
 
+async function refreshCalendarRelevanceAfterMutation(params: {
+  userId: string;
+  project: Project;
+  storage?: ReturnType<typeof getStorageProvider>;
+}): Promise<void> {
+  if (isDemoMode()) return;
+
+  // A supplied storage adapter is authoritative for the mutation. Small
+  // adapters used by tests may not implement integrations; in that case do
+  // not reach into the process-wide provider.
+  const integrations = params.storage?.getGoogleIntegrations
+    ? await params.storage.getGoogleIntegrations(params.userId)
+    : params.storage
+      ? []
+      : await getIntegrationStates(params.userId);
+  const calendar = integrations.find((integration) => integration.name === 'calendar');
+  if (calendar?.status !== 'connected') return;
+
+  const signals = await retrieveRealCalendarSignals(params.userId, calendar);
+  await refreshCalendarRelevance({
+    userId: params.userId,
+    project: params.project,
+    events: signals.events.map(calendarSignalToSafeEvent),
+    storage: params.storage,
+  });
+}
+
+/** Schedules one non-blocking refresh when a cached assessment has expired. */
+export async function scheduleCalendarRelevanceRefresh(params: {
+  userId: string;
+  project: Project;
+  storage?: ReturnType<typeof getStorageProvider>;
+  scheduleAfterResponse?: AfterResponse;
+}): Promise<void> {
+  if (isDemoMode()) return;
+  const key = `${params.userId}:${params.project.id}:${semanticProjectVersion(params.project)}`;
+  if (scheduledCalendar.has(key)) return;
+  scheduledCalendar.add(key);
+
+  const run = async () => {
+    try {
+      await refreshCalendarRelevanceAfterMutation(params);
+    } catch (error) {
+      console.error('[Gapwise Calendar relevance scheduled refresh]', {
+        projectId: params.project.id,
+        message: error instanceof Error ? error.message : 'unknown-error',
+      });
+    } finally {
+      scheduledCalendar.delete(key);
+    }
+  };
+
+  try {
+    (params.scheduleAfterResponse ?? after)(run);
+  } catch (error) {
+    scheduledCalendar.delete(key);
+    console.error('[Gapwise Calendar relevance scheduling]', {
+      projectId: params.project.id,
+      message: error instanceof Error ? error.message : 'unknown-error',
+    });
+  }
+}
+
 export function clearAskSuggestionsScheduledForTests(): void {
   scheduled.clear();
+  scheduledCalendar.clear();
 }

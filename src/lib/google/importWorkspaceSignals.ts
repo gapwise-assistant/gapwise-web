@@ -19,7 +19,11 @@ export async function importWorkspaceSignalsIntoProject(
   let skipped = 0;
 
   for (const source of params.signals.derivedSources) {
-    if (current.sources.some((candidate) => candidate.id === source.id)) {
+    const existing = current.sources.find((candidate) => candidate.id === source.id);
+    const unchanged = existing && existing.hash && source.hash
+      ? existing.hash === source.hash
+      : existing?.content === source.content;
+    if (unchanged) {
       skipped += 1;
       continue;
     }

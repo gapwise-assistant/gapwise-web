@@ -56,6 +56,7 @@ export const SettingsContent: React.FC<SettingsContentProps> = ({
         <ConnectedContext
           userId={userId}
           project={connectionProject}
+          projectId={scope.type === 'project' ? connectionProject.id : undefined}
           onImportSources={importWorkspaceSignals}
           variant="drawer"
         />

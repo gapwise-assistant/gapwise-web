@@ -153,7 +153,8 @@ export async function POST(request: Request) {
     item.type === source.type &&
     item.hash === computedHash &&
     item.extraction_hash === computedHash &&
-    item.processing_status === 'completed'
+    item.processing_status === 'completed' &&
+    (source.origin !== 'connector' || item.id === source.sourceId)
   );
   if (duplicate && !forceReprocess) {
     return NextResponse.json({

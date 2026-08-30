@@ -44,18 +44,24 @@ export async function retrieveRealCalendarSignals(
   const response = await calendar.events.list({
     calendarId: 'primary',
     timeMin: now.toISOString(),
-    maxResults: 10,
+    timeMax: addDays(now, CONTEXT_PACK_CALENDAR_HORIZON_DAYS).toISOString(),
+    maxResults: 50,
     singleEvents: true,
     orderBy: 'startTime',
   });
-  const events: CalendarEventSignal[] = (response.data.items ?? []).map((event) => ({
-    id: event.id ?? `calendar_${event.htmlLink ?? event.summary ?? Math.random()}`,
+  const events: CalendarEventSignal[] = (response.data.items ?? [])
+    .filter((event) => Boolean(event.id))
+    .map((event) => ({
+    id: event.id!,
     title: event.summary ?? 'Untitled calendar event',
     start: event.start?.dateTime ?? event.start?.date ?? now.toISOString(),
     end: event.end?.dateTime ?? event.end?.date ?? event.start?.dateTime ?? event.start?.date ?? now.toISOString(),
     description: event.description ?? undefined,
     location: event.location ?? undefined,
     sourceUrl: event.htmlLink ?? undefined,
+    updated: event.updated ?? undefined,
+    eventType: event.eventType ?? undefined,
+    status: event.status ?? undefined,
   }));
 
   return {
@@ -76,6 +82,23 @@ export function toSafeCalendarEvent(event: calendar_v3.Schema$Event): SafeCalend
     start: eventTime(event.start),
     end: eventTime(event.end),
     location: event.location ?? undefined,
+    updated: event.updated ?? undefined,
+    eventType: event.eventType ?? undefined,
+    status: event.status ?? undefined,
+  };
+}
+
+export function calendarSignalToSafeEvent(event: CalendarEventSignal): SafeCalendarEvent {
+  return {
+    id: event.id,
+    summary: event.title,
+    description: event.description,
+    start: event.start,
+    end: event.end,
+    location: event.location,
+    updated: event.updated,
+    eventType: event.eventType,
+    status: event.status,
   };
 }
 
@@ -89,7 +112,8 @@ export async function listUpcomingCalendarEvents(
   const response = await calendar.events.list({
     calendarId: 'primary',
     timeMin: now.toISOString(),
-    maxResults: 10,
+    timeMax: addDays(now, CONTEXT_PACK_CALENDAR_HORIZON_DAYS).toISOString(),
+    maxResults: 50,
     singleEvents: true,
     orderBy: 'startTime',
   });
@@ -132,10 +156,8 @@ function logContextPackCalendarFiltering(
   console.info('[Gapwise Calendar Context Pack]', {
     rawEventCount: rawEvents.length,
     filteredEventCount: filteredEvents.length,
-    events: rawEvents.map((event) => ({
-      title: event.summary ?? '',
-      type: event.eventType ?? 'default',
-    })),
+    eventIds: rawEvents.map((event) => event.id).filter(Boolean),
+    eventTypes: [...new Set(rawEvents.map((event) => event.eventType ?? 'default'))],
   });
 }
 
@@ -160,7 +182,7 @@ export async function listContextPackCalendarEvents(
   const filteredEvents = rawEvents
     .filter((event) => isWithinContextPackHorizon(event, now, timeMax))
     .filter(isContextPackCalendarEvent)
-    .slice(0, 10);
+    .slice(0, 50);
 
   logContextPackCalendarFiltering(rawEvents, filteredEvents);
   return filteredEvents.map(toSafeCalendarEvent);

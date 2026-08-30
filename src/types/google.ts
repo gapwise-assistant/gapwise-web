@@ -22,6 +22,9 @@ export interface CalendarEventSignal {
   description?: string;
   location?: string;
   sourceUrl?: string;
+  updated?: string;
+  eventType?: string;
+  status?: string;
 }
 
 export interface SafeCalendarEvent {
@@ -31,6 +34,39 @@ export interface SafeCalendarEvent {
   start?: string;
   end?: string;
   location?: string;
+  updated?: string;
+  eventType?: string;
+  status?: string;
+}
+
+export type CalendarRelevanceKind =
+  | 'deadline'
+  | 'decision'
+  | 'gap'
+  | 'dependency'
+  | 'work_session'
+  | 'stakeholder_meeting'
+  | 'other';
+
+export interface CalendarEventRelevance {
+  eventId: string;
+  relevant: boolean;
+  confidence: number;
+  reason: string;
+  matchedNodeIds: string[];
+  relevanceKind: CalendarRelevanceKind;
+}
+
+export interface CalendarRelevanceAssessment {
+  projectId: string;
+  projectSemanticVersion: string;
+  classifierVersion: string;
+  eventFingerprint: string;
+  assessedAt: string;
+  expiresAt?: string;
+  results: CalendarEventRelevance[];
+  /** Bounded normalized event details needed to rebuild Context Pack commitments without Google reads. */
+  relevantEvents?: SafeCalendarEvent[];
 }
 
 export interface GmailMessageSignal {

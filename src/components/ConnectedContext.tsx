@@ -10,13 +10,14 @@ import { authFetch } from '@/lib/auth/client';
 interface ConnectedContextProps {
   userId: string;
   project: Project;
+  projectId?: string;
   onImportSources: (signals: GoogleWorkspaceSignals) => Promise<{ imported: number; skipped: number }>;
   variant?: 'page' | 'drawer';
 }
 
 export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   userId,
-  project,
+  projectId,
   onImportSources,
   variant = 'page',
 }) => {
@@ -118,20 +119,15 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
   };
 
   const handleSync = async () => {
+    if (!projectId) {
+      setError('Select a workspace before syncing connected sources.');
+      return;
+    }
     setIsSyncing(true);
     setMessage('');
     setError('');
     try {
-      const semanticQuery = [
-        project.title,
-        project.goal,
-        ...project.nodes
-          .filter((node) => node.status === 'OPEN')
-          .sort((left, right) => right.impact - left.impact)
-          .slice(0, 5)
-          .map((node) => node.text),
-      ].filter(Boolean).join(' ');
-      const data = await mutate({ action: 'sync', query: semanticQuery });
+      const data = await mutate({ action: 'sync', projectId });
       if (data.signals) {
         const result = await onImportSources(data.signals as GoogleWorkspaceSignals);
         setMessage(result.imported > 0
@@ -195,6 +191,8 @@ export const ConnectedContext: React.FC<ConnectedContextProps> = ({
           {isSyncing ? 'Syncing connected sources…' : 'Sync connected sources'}
         </button>
       )}
+
+      {!isLoading && !projectId && <p className="text-xs text-slate-500">Select a workspace to sync connected sources.</p>}
 
       {message && <p className="text-xs text-emerald-300">{message}</p>}
       {error && <p role="alert" className="text-xs text-rose-300">{error}</p>}

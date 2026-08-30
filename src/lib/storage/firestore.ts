@@ -17,6 +17,7 @@ import {
   FirestoreSource,
   FocusAssessmentCacheRecord,
   AskSuggestionsCacheRecord,
+  CalendarRelevanceAssessmentCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
   DeveloperGenerationRun,
   DeveloperGenerationStep,
@@ -110,7 +111,7 @@ function normalizedPublicDemoDailyUsage(
   };
 }
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'calendarRelevanceAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -503,6 +504,21 @@ export class FirestoreStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.save(userId, 'askSuggestionAssessments', record);
+  }
+
+  async getCalendarRelevanceAssessment(userId: string, cacheId: string): Promise<CalendarRelevanceAssessmentCacheRecord | null> {
+    try {
+      const snapshot = await this.collection(userId, 'calendarRelevanceAssessments').doc(cacheId).get();
+      return snapshot.exists
+        ? this.fromFirestore<CalendarRelevanceAssessmentCacheRecord>(snapshot.data()!)
+        : null;
+    } catch (error) {
+      throw this.toStorageError(error);
+    }
+  }
+
+  async saveCalendarRelevanceAssessment(userId: string, record: CalendarRelevanceAssessmentCacheRecord): Promise<void> {
+    await this.save(userId, 'calendarRelevanceAssessments', record);
   }
 
   async getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null> {
@@ -1265,6 +1281,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'focusAssessments',
       'projectOverviewAssessments',
       'askSuggestionAssessments',
+      'calendarRelevanceAssessments',
       'projectSnapshots',
       'developerGenerationRuns',
       'developerGenerationSteps',

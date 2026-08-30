@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ContextSource } from '@/types/clarity';
 import { CalendarEventSignal, DriveFileSignal, GmailMessageSignal } from '@/types/google';
 
@@ -17,16 +18,24 @@ function sourceBase(id: string, filename: string, content: string): Omit<Context
 }
 
 export function calendarEventToSource(event: CalendarEventSignal): ContextSource {
+  const content = [
+    `Calendar event: ${event.title}.`,
+    `Starts ${event.start}.`,
+    `Ends ${event.end}.`,
+    event.location ? `Location ${event.location}.` : '',
+    event.description ?? '',
+  ].filter(Boolean).join(' ').trim();
   return {
     ...sourceBase(
       `gcal_${event.id}`,
       `calendar-${event.title}.txt`,
-      `Calendar event: ${event.title}. Starts ${event.start}. Ends ${event.end}. ${event.description ?? ''}`.trim()
+      content
     ),
     type: 'note',
     mime_type: 'application/vnd.google.calendar.event',
     storage_url: event.sourceUrl,
     extraction_summary: 'Read-only Google Calendar event signal.',
+    hash: createHash('sha256').update(content).digest('hex'),
   };
 }
 

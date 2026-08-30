@@ -54,4 +54,27 @@ describe('connected workspace import', () => {
       signals: { calendarEvents: [], gmailMessages: [], driveFiles: [], derivedSources: [source('new-source')] },
     }, { request: request as typeof fetch })).rejects.toThrow('Context Agent unavailable.');
   });
+
+  it('reprocesses a changed connector source while preserving its stable identity', async () => {
+    const project = createProjectFromInput({ name: 'Pilot', goal: 'Launch the pilot.' });
+    project.sources.push({ ...source('calendar-event'), hash: 'old-hash' });
+    const changed = { ...source('calendar-event'), content: 'Connected context calendar-event updated', hash: 'new-hash' };
+    const request = vi.fn(async (_url: string, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body)) as { sourceId: string; hash: string };
+      expect(input.sourceId).toBe('calendar-event');
+      expect(input.hash).toBe('new-hash');
+      const updated = JSON.parse(JSON.stringify(project));
+      updated.sources = [changed];
+      return new Response(JSON.stringify({ project: updated }), { status: 200 });
+    });
+
+    const result = await importWorkspaceSignalsIntoProject({
+      userId: 'settings-user',
+      project,
+      signals: { calendarEvents: [], gmailMessages: [], driveFiles: [], derivedSources: [changed] },
+    }, { request: request as typeof fetch });
+
+    expect(result).toMatchObject({ imported: 1, skipped: 0 });
+    expect(result.project.sources).toEqual([changed]);
+  });
 });

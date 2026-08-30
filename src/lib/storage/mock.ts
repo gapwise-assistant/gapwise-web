@@ -17,6 +17,7 @@ import {
   FirestoreSource,
   FocusAssessmentCacheRecord,
   AskSuggestionsCacheRecord,
+  CalendarRelevanceAssessmentCacheRecord,
   ProjectOverviewAssessmentCacheRecord,
   DeveloperGenerationRun,
   DeveloperGenerationStep,
@@ -69,6 +70,7 @@ interface MockDatabase {
       focusAssessments: FocusAssessmentCacheRecord[];
       projectOverviewAssessments: ProjectOverviewAssessmentCacheRecord[];
       askSuggestionAssessments: AskSuggestionsCacheRecord[];
+      calendarRelevanceAssessments: CalendarRelevanceAssessmentCacheRecord[];
       projectSnapshots: ProjectSnapshot[];
       developerGenerationRuns: DeveloperGenerationRun[];
       developerGenerationSteps: DeveloperGenerationStep[];
@@ -135,7 +137,7 @@ function normalizedPublicDemoDailyUsage(
   };
 }
 
-type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
+type MockCollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'calendarRelevanceAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
 
 const EMPTY_USER = {
   contexts: [],
@@ -155,6 +157,7 @@ const EMPTY_USER = {
   focusAssessments: [],
   projectOverviewAssessments: [],
   askSuggestionAssessments: [],
+  calendarRelevanceAssessments: [],
   projectSnapshots: [],
   developerGenerationRuns: [],
   developerGenerationSteps: [],
@@ -275,6 +278,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: current.focusAssessments ?? [],
       projectOverviewAssessments: current.projectOverviewAssessments ?? [],
       askSuggestionAssessments: current.askSuggestionAssessments ?? [],
+      calendarRelevanceAssessments: current.calendarRelevanceAssessments ?? [],
       projectSnapshots: current.projectSnapshots ?? [],
       developerGenerationRuns: current.developerGenerationRuns ?? [],
       developerGenerationSteps: current.developerGenerationSteps ?? [],
@@ -472,6 +476,15 @@ export class MockStorageProvider implements StorageProvider {
 
   async saveAskSuggestionsCache(userId: string, record: AskSuggestionsCacheRecord): Promise<void> {
     await this.upsert(userId, 'askSuggestionAssessments', { ...record, userId });
+  }
+
+  async getCalendarRelevanceAssessment(userId: string, cacheId: string): Promise<CalendarRelevanceAssessmentCacheRecord | null> {
+    return (await this.getUser(userId)).calendarRelevanceAssessments
+      ?.find((record) => record.id === cacheId) ?? null;
+  }
+
+  async saveCalendarRelevanceAssessment(userId: string, record: CalendarRelevanceAssessmentCacheRecord): Promise<void> {
+    await this.upsert(userId, 'calendarRelevanceAssessments', { ...record, userId });
   }
 
   async getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null> {
@@ -1023,6 +1036,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: [],
       projectOverviewAssessments: [],
       askSuggestionAssessments: [],
+      calendarRelevanceAssessments: [],
       projectSnapshots: [],
       developerGenerationRuns: [],
       developerGenerationSteps: [],
@@ -1057,6 +1071,7 @@ export class MockStorageProvider implements StorageProvider {
       focusAssessments: user?.focusAssessments ?? [],
       projectOverviewAssessments: user?.projectOverviewAssessments ?? [],
       askSuggestionAssessments: user?.askSuggestionAssessments ?? [],
+      calendarRelevanceAssessments: user?.calendarRelevanceAssessments ?? [],
       projectSnapshots: user?.projectSnapshots ?? [],
       developerGenerationRuns: user?.developerGenerationRuns ?? [],
       developerGenerationSteps: user?.developerGenerationSteps ?? [],

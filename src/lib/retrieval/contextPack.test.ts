@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createGoldenDemoProject, DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { buildContextPack, calendarEventsToCommitmentNodes } from '@/lib/retrieval/contextPack';
 import { buildContextPackForUser } from '@/lib/retrieval/contextPackServer';
@@ -504,6 +504,7 @@ describe('Context Pack retrieval and durable memory policy', () => {
             location: 'Remote',
           },
         ],
+        loadCalendarRelevance: async ({ events }) => ({ assessment: null, events }),
       }
     );
 
@@ -521,6 +522,46 @@ describe('Context Pack retrieval and durable memory policy', () => {
       expect.arrayContaining(['Source: Google Calendar', 'Event ID: cal_event_1'])
     );
     expect(pack.includedContextIds).toContain('gcal_commitment_cal_event_1');
+  });
+
+  it('uses the saved project-scoped Calendar assessment without reading Google Calendar', async () => {
+    const project = createGoldenDemoProject();
+    const scheduleCalendarRefresh = vi.fn().mockResolvedValue(undefined);
+    const pack = await buildContextPackForUser(
+      {
+        userId: 'demo-user',
+        query: 'What is coming up?',
+        project,
+        profile: DEFAULT_USER_PROFILE,
+        limits: { upcomingCommitments: 100 },
+      },
+      {
+        now: new Date('2026-08-11T20:00:00Z'),
+        listMemories: async () => [],
+        hasCalendarTokens: async () => true,
+        listCalendarEvents: async () => {
+          throw new Error('Project-scoped cache reads must not call Google Calendar');
+        },
+        loadCalendarRelevanceForProject: async () => ({
+          assessment: null,
+          stale: true,
+          events: [{
+            id: 'cached_event',
+            summary: 'Cached release review',
+            description: 'Discuss the project launch.',
+            start: '2026-08-12T10:00:00Z',
+            end: '2026-08-12T10:30:00Z',
+          }],
+        }),
+        scheduleCalendarRefresh,
+      },
+    );
+
+    expect(pack.upcomingCommitments.map((node) => node.id)).toContain('gcal_commitment_cached_event');
+    expect(scheduleCalendarRefresh).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'demo-user',
+      project,
+    }));
   });
 
   it('orders Calendar commitments soonest first and does not include birthday flooding', async () => {
@@ -549,6 +590,7 @@ describe('Context Pack retrieval and durable memory policy', () => {
             end: '2026-08-18T10:30:00Z',
           },
         ],
+        loadCalendarRelevance: async ({ events }) => ({ assessment: null, events }),
       }
     );
 
@@ -588,6 +630,10 @@ describe('Context Pack retrieval and durable memory policy', () => {
             end: '2026-08-12T13:00:00Z',
           },
         ],
+        loadCalendarRelevance: async ({ events }) => ({
+          assessment: null,
+          events: events.filter((event) => event.id === 'gapswise_review'),
+        }),
       }
     );
 

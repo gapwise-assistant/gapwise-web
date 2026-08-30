@@ -56,6 +56,7 @@ import { projectTitlePresentation } from '@/lib/projects/projectTitle';
 import type { QuickDemoResult } from '@/lib/demo/quickDemo';
 import type { SoftwareReleaseDemoResult } from '@/lib/demo/softwareReleaseDemo';
 import type { ResolutionValidationSubmission } from '@/types/resolutionValidation';
+import { graphQuestionIntent } from '@/lib/questions/answerIntent';
 
 type AppTab = AppDestination;
 
@@ -1237,6 +1238,7 @@ export default function Home() {
     const fallbackPresentation = localQuestionPresentation(questionContext);
     const decision = owner ? findDecisionForNode(owner, node.id) : null;
     const decisionWorkspace = owner ? buildDecisionWorkspace(owner, node.id) : null;
+    const effectiveIntent = graphQuestionIntent(node, intent);
     setAnswerTarget({
       nodeId: node.id,
       question: node.text,
@@ -1244,7 +1246,7 @@ export default function Home() {
       presentationSummary: presentation?.presentationSummary ?? fallbackPresentation.summary,
       reason: node.why_it_matters?.[0],
       projectId: owner?.id,
-      intent,
+      intent: effectiveIntent,
       decisionNodeId: decision?.id,
       decisionTitle: decision?.text,
       decisionSupport: decisionWorkspace ? {

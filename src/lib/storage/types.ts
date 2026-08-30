@@ -5,7 +5,7 @@ import { AskChatMessage, AskChatSession, AskResearchEvidence } from '@/types/ask
 import type { FocusAssessment } from '@/lib/focus/focusAssessment';
 import type { ProjectOverviewAssessment } from '@/lib/overview/projectOverviewAssessment';
 import type { ProjectSnapshot, ProjectSnapshotSummary } from '@/types/projectSnapshot';
-import type { GoogleIntegrationState } from '@/types/google';
+import type { CalendarRelevanceAssessment, GoogleIntegrationState } from '@/types/google';
 import type { ResolutionValidationMetadata } from '@/types/resolutionValidation';
 
 export interface BaseEntity {
@@ -140,6 +140,13 @@ export interface ProjectOverviewAssessmentCacheRecord {
     origin: 'branched_snapshot';
     sourceSnapshotId: string;
   };
+}
+
+export interface CalendarRelevanceAssessmentCacheRecord extends CalendarRelevanceAssessment {
+  id: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type AskSuggestionAssessmentStatus = 'preparing' | 'ready' | 'stale' | 'failed';
@@ -341,6 +348,8 @@ export interface StorageProvider {
   beginAskSuggestionsRefresh?(userId: string, record: AskSuggestionsCacheRecord): Promise<boolean>;
   publishAskSuggestionsCache?(userId: string, record: AskSuggestionsCacheRecord, generationId: string): Promise<boolean>;
   markAskSuggestionsStale?(userId: string, projectId: string, requestedSemanticProjectVersion: string): Promise<void>;
+  getCalendarRelevanceAssessment?(userId: string, cacheId: string): Promise<CalendarRelevanceAssessmentCacheRecord | null>;
+  saveCalendarRelevanceAssessment?(userId: string, record: CalendarRelevanceAssessmentCacheRecord): Promise<void>;
 
   getPublicDemoUsage(userId: string): Promise<PublicDemoUsage | null>;
   savePublicDemoUsage(userId: string, usage: PublicDemoUsage): Promise<void>;
