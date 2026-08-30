@@ -6,7 +6,7 @@ Gapwise keeps a project's facts, decisions, risks, and open questions connected.
 
 ## The problem
 
-Project context is usually split across notes, documents, meetings, and chat. A deadline may be in one file, a blocker in another, and the decision that connects them may never be written down. A normal task list does not explain what is missing or what that missing information affects.
+This is Gapwise, an agentic project assistant that brings context and wisdom to the gaps in your work. It identifies which missing answer, unresolved decision, or dependency matters most right now, and explains why. You set a goal and add notes, documents, or conversations. Gemini agents organize that information into a living understanding of the project. As you answer questions and make decisions, Gapwise updates the project and recommends the next useful focus.     
 
 Gapwise builds a persistent project graph from that context. It uses the graph to:
 
@@ -128,7 +128,7 @@ The public demo uses a restricted Partner profile. It has a fixed output limit, 
 
 ## Run locally
 
-The standard local setup does not require Docker. The web service runs with Node.js and the ADK service runs with `uv`.
+The web service runs with Node.js and the ADK service runs with `uv`.
 
 ### Prerequisites
 
@@ -277,7 +277,7 @@ The checked-in deployment builds two containers remotely and deploys them as:
 - `gapswise-web`, a public Cloud Run service for the product and APIs
 - `gapswise-agent`, a private Cloud Run service for Google ADK
 
-Local Docker is not required. Cloud Build reads [`Dockerfile`](./Dockerfile) and [`agent-service/Dockerfile`](./agent-service/Dockerfile), then stores the resulting images in Artifact Registry.
+Cloud Build reads [`Dockerfile`](./Dockerfile) and [`agent-service/Dockerfile`](./agent-service/Dockerfile), then stores the resulting images in Artifact Registry.
 
 ### Deployment layout
 
