@@ -102,6 +102,32 @@ This matters when the closest text is not the most useful information. For examp
 
 Gapwise uses four ADK roles. They share structured project context but have separate responsibilities.
 
+```mermaid
+flowchart LR
+    STATE[("Persistent Project State")]
+
+    GAP["Gap Agent"]
+    FOCUS["Most important gap"]
+
+    USER["User question"]
+    ROUTER["Ask Router"]
+    PARTNER["Partner Agent"]
+    WEB["Web Research Agent"]
+
+    ANSWER["Project answer"]
+
+    STATE --> GAP
+    GAP --> FOCUS
+
+    USER --> ROUTER
+    ROUTER -->|"Project context or graph reasoning"| PARTNER
+    ROUTER -->|"Current external information"| WEB
+
+    STATE --> PARTNER
+    PARTNER --> ANSWER
+    WEB --> ANSWER
+```
+
 | Agent | Responsibility |
 | --- | --- |
 | Gap Agent | Evaluates unresolved gaps and selects the one with the strongest decision value. |
