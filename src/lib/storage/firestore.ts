@@ -111,7 +111,7 @@ function normalizedPublicDemoDailyUsage(
   };
 }
 
-type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'calendarRelevanceAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations';
+type CollectionName = keyof ProjectCollections | 'feedback' | 'events' | 'memories' | 'askChats' | 'askMessages' | 'askResearch' | 'focusAssessments' | 'projectOverviewAssessments' | 'askSuggestionAssessments' | 'calendarRelevanceAssessments' | 'projectSnapshots' | 'developerGenerationRuns' | 'developerGenerationSteps' | 'googleIntegrations' | 'googleOAuthStates';
 
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -1286,6 +1286,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       'developerGenerationRuns',
       'developerGenerationSteps',
       'googleIntegrations',
+      'googleOAuthStates',
     ];
     for (const collectionName of collections) {
       const snapshot = await this.collection(userId, collectionName).get();

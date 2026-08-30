@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildCalendarAuthUrl, createOAuthState } from '@/lib/google/oauth';
+import { buildCalendarAuthUrl, createOAuthState, saveOAuthState } from '@/lib/google/oauth';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 import { requireAuthenticatedUserId } from '@/lib/auth/server';
 import { StorageError } from '@/lib/storage/types';
@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
 
     const state = createOAuthState(userId);
     const authUrl = buildCalendarAuthUrl(state);
+    await saveOAuthState(state);
     const response = request.headers.get('accept')?.includes('application/json')
       ? NextResponse.json({ url: authUrl })
       : NextResponse.redirect(authUrl);

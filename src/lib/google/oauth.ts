@@ -1,10 +1,11 @@
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { google, calendar_v3 } from 'googleapis';
 import { getFirestoreClient } from '@/lib/firebase-admin';
 import { GoogleIntegrationName } from '@/types/google';
 import { assertExternalServicesAllowed } from '@/lib/runtime/demoMode';
 
 const CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 export interface GoogleOAuthTokens {
   access_token?: string | null;
@@ -36,6 +37,49 @@ export function readOAuthState(value: string): { userId: string; nonce: string }
     throw new Error('Invalid Google OAuth state.');
   }
   return { userId: parsed.userId, nonce: parsed.nonce };
+}
+
+function oauthStateHash(state: string): string {
+  return createHash('sha256').update(state).digest('hex');
+}
+
+function oauthStateDocument(state: string) {
+  const { userId, nonce } = readOAuthState(state);
+  return getFirestoreClient()
+    .collection('users')
+    .doc(userId)
+    .collection('googleOAuthStates')
+    .doc(nonce);
+}
+
+/** Store OAuth state server-side because some reverse proxies do not forward callback cookies. */
+export async function saveOAuthState(state: string): Promise<void> {
+  await oauthStateDocument(state).create({
+    stateHash: oauthStateHash(state),
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/** Atomically consume a short-lived OAuth state so callbacks cannot be replayed. */
+export async function consumeOAuthState(state: string): Promise<boolean> {
+  let document;
+  try {
+    document = oauthStateDocument(state);
+  } catch {
+    return false;
+  }
+
+  return getFirestoreClient().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(document);
+    transaction.delete(document);
+    if (!snapshot.exists) return false;
+
+    const data = snapshot.data() as { stateHash?: unknown; createdAt?: unknown };
+    const createdAt = typeof data.createdAt === 'string' ? Date.parse(data.createdAt) : Number.NaN;
+    return data.stateHash === oauthStateHash(state)
+      && Number.isFinite(createdAt)
+      && Date.now() - createdAt <= OAUTH_STATE_MAX_AGE_MS;
+  });
 }
 
 export function getGoogleOAuthClient() {

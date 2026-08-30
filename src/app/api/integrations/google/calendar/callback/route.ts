@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createDemoConnectedState } from '@/lib/google/auth';
 import { updateIntegrationState } from '@/lib/google/state';
-import { exchangeCalendarCode, readOAuthState } from '@/lib/google/oauth';
+import { consumeOAuthState, exchangeCalendarCode, readOAuthState } from '@/lib/google/oauth';
 import { isDemoMode } from '@/lib/runtime/demoMode';
 
 export const runtime = 'nodejs';
@@ -35,7 +35,11 @@ export async function GET(request: NextRequest) {
     const code = request.nextUrl.searchParams.get('code');
     const state = request.nextUrl.searchParams.get('state');
     const cookieState = request.cookies.get('gapswise_google_oauth_state')?.value;
-    if (!code || !state || state !== cookieState) {
+    const cookieMatches = !cookieState || cookieState === state;
+    const stateWasStarted = code && state && cookieMatches
+      ? await consumeOAuthState(state)
+      : false;
+    if (!code || !state || !cookieMatches || !stateWasStarted) {
       appUrl.searchParams.set('googleCalendar', 'invalid_state');
       return NextResponse.redirect(appUrl);
     }
