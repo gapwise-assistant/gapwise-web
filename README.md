@@ -86,17 +86,16 @@ Every node keeps references to the source that produced it. Reconciliation check
 
 ### Retrieving context
 
-GraphRAG is the retrieval layer between the stored project and the agents. It combines text relevance with the relationships in the Project Graph.
+Gapwise uses a lightweight GraphRAG pipeline. RAG stands for Retrieval-Augmented Generation: Gapwise retrieves relevant project information before Gemini generates a response. The graph adds information that matters because of a dependency or consequence, even when it does not use the same words as the question.
 
 For each request, Gapwise:
 
-1. Finds a small set of graph nodes related to the question.
-2. Follows useful relationships such as `blocks`, `depends_on`, `informs`, and `affects`.
-3. Retrieves the original source excerpts attached to those nodes.
-4. Packages the selected nodes, relationship paths, and evidence into a bounded Context Pack.
-5. Gives that Context Pack to the appropriate agent.
+1. Selects up to five relevant graph nodes using lexical relevance.
+2. Follows useful relationships such as `blocks`, `depends_on`, `informs`, and `affects` for one or two hops.
+3. Retrieves the supporting excerpts from the original sources.
+4. Sends a bounded Context Pack of nodes, paths, and evidence to Gemini.
 
-Plain text retrieval finds information that uses similar words. GraphRAG also finds information that matters because it is connected. This lets an agent see prerequisites, consequences, and supporting evidence without loading the complete project history.
+This implementation does not require a vector database. It combines deterministic text matching with graph traversal and limits the result to the context needed for the request.
 
 ```mermaid
 flowchart LR
@@ -108,13 +107,13 @@ flowchart LR
     GEMINI --> ANSWER["Supported answer<br/>or next focus"]
 ```
 
-For example, a question about launch pricing may retrieve the pricing decision first. The graph can then show that pricing depends on an unresolved cost estimate, which is supported by a supplier document. The agent receives the full reasoning path:
+For example, a pricing question can retrieve this path:
 
 ```text
 Supplier evidence -> unresolved cost estimate -> blocks pricing decision -> affects launch
 ```
 
-This gives Ask and Today the evidence and sequence needed to explain why the cost estimate should be resolved before pricing.
+Ask and Today can then explain why the cost estimate should be resolved before pricing.
 
 ## Google ADK agents
 
@@ -339,6 +338,4 @@ gcloud builds submit . \
   --config=cloudbuild.yaml \
   --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='your-api-key',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='your-auth-domain',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='your-project-id',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='your-storage-bucket',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='your-sender-id',_NEXT_PUBLIC_FIREBASE_APP_ID='your-app-id',_GOOGLE_OAUTH_CLIENT_ID='your-oauth-client-id'
 ```
-
-
 

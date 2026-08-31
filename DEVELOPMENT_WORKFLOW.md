@@ -32,7 +32,7 @@ Cloud Build trigger for this repository with:
 - Event: push to a branch
 - Branch filter: `^main$`
 - Configuration: `cloudbuild.yaml`
-- Project: `gapwise-505217`
+- Project: `<GCP_PROJECT_ID>`
 - Region: global
 
 Provide the public Firebase substitutions and OAuth client ID in the trigger's
@@ -44,10 +44,9 @@ Cloud Run.
 The deployment pipeline:
 
 1. Builds and pushes the web and ADK images to Artifact Registry.
-2. Deploys the private `gapswise-agent` service.
-3. Deploys the public `gapswise-web` service.
-4. Uses the existing `gapswise-web-runtime` and `gapswise-agent-runtime`
-   service identities with ADC.
+2. Deploys the private agent service.
+3. Deploys the public web service.
+4. Uses the configured web and agent runtime service identities with ADC.
 5. Keeps minimum instances at `0` and maximum instances at `3`.
 
 The existing `roles/run.invoker` binding from the web runtime identity to the

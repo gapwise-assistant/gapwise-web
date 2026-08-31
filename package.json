@@ -17,8 +17,8 @@
     "test:clinicflow:phase3": "vitest run src/lib/evals/clinicflowPhase3.test.ts --reporter=verbose",
     "eval:career-gap": "CAREER_GAP_REPORT=1 vitest run src/lib/evals/careerGapReport.test.ts --reporter=verbose",
     "eval:career-gap:live": "RUN_LIVE_GAP_EVAL=true vitest run src/lib/evals/careerGapLiveReport.test.ts --reporter=verbose",
-    "test:google:firestore": "GOOGLE_CLOUD_PROJECT=gapwise-505217 FIRESTORE_DATABASE_ID='(default)' node scripts/firestore-smoke.mjs",
-    "test:google:storage": "GOOGLE_CLOUD_PROJECT=gapwise-505217 CLOUD_STORAGE_BUCKET=gapwise-505217-context node scripts/storage-smoke.mjs"
+    "test:google:firestore": "node scripts/firestore-smoke.mjs",
+    "test:google:storage": "node scripts/storage-smoke.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",

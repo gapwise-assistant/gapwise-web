@@ -26,11 +26,12 @@ Before you begin, ensure you have:
 - **Google Cloud SDK**: For GCP services - [Install](https://cloud.google.com/sdk/docs/install)
 
 Local development is configured to use existing Google Cloud ADC credentials with
-`GOOGLE_CLOUD_PROJECT=gapwise-505217` and Vertex AI in `global`. Live agent runs,
-integration tests, and evals require billing to be enabled for that project.
+`GOOGLE_CLOUD_PROJECT=<GCP_PROJECT_ID>` and Vertex AI in `global`. Live agent
+runs, integration tests, and evals require billing to be enabled for that
+project.
 
 The live agent model is configured through `GEMINI_MODEL`. Gapswise uses the
-Vertex-verified `gemini-3.5-flash-lite` model in `gapwise-505217/global` as its
+Vertex-verified `gemini-3.5-flash-lite` model in `<GCP_PROJECT_ID>/global` as its
 lowest-cost eligible default. Live startup validation rejects Gemini 2.x and
 3.0–3.4 selections instead of silently falling back. Set a supported Gemini 3.5+
 model explicitly when higher capability is worth the additional cost. Local

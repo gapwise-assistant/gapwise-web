@@ -5,11 +5,11 @@ const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
 const bucketName = process.env.CLOUD_STORAGE_BUCKET;
 
 if (!projectId) {
-  throw new Error('Set GOOGLE_CLOUD_PROJECT=gapwise-505217 before running the Cloud Storage smoke test.');
+  throw new Error('Set GOOGLE_CLOUD_PROJECT before running the Cloud Storage smoke test.');
 }
 
 if (!bucketName) {
-  throw new Error('Set CLOUD_STORAGE_BUCKET=gapwise-505217-context before running the Cloud Storage smoke test.');
+  throw new Error('Set CLOUD_STORAGE_BUCKET before running the Cloud Storage smoke test.');
 }
 
 const storage = new Storage({ projectId });

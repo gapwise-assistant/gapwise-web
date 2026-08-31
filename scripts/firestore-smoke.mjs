@@ -5,7 +5,7 @@ const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
 const databaseId = process.env.FIRESTORE_DATABASE_ID || '(default)';
 
 if (!projectId) {
-  throw new Error('Set GOOGLE_CLOUD_PROJECT=gapwise-505217 before running the Firestore smoke test.');
+  throw new Error('Set GOOGLE_CLOUD_PROJECT before running the Firestore smoke test.');
 }
 
 const app = initializeApp({

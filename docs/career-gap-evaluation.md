@@ -124,7 +124,7 @@ unless the Python opt-in is true.
 
 ### Recorded local proof — 2026-08-17
 
-Vertex AI model listing for `gapwise-505217/global` returned both exact IDs:
+Vertex AI model listing for `<GCP_PROJECT_ID>/global` returned both exact IDs:
 `publishers/google/models/gemini-3.5-flash-lite` and
 `publishers/google/models/gemini-3.5-flash`.
 

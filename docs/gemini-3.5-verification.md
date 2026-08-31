@@ -1,7 +1,7 @@
 # Gemini 3.5+ execution verification
 
 Gapwise's live default is `gemini-3.5-flash-lite`. This exact model identifier
-was listed by Vertex AI for project `gapwise-505217` in location `global` and is
+was listed by Vertex AI for the configured project in location `global` and is
 kept in `GEMINI_MODEL` (with the separate `GEMINI_EVAL_MODEL` setting for evals).
 Cloud Build passes the same explicit value to both live Cloud Run services.
 
@@ -16,7 +16,7 @@ gcloud services list --enabled --filter='config.name=aiplatform.googleapis.com'
 uv run --with google-genai python - <<'PY'
 from google import genai
 
-client = genai.Client(vertexai=True, project="gapwise-505217", location="global")
+client = genai.Client(vertexai=True, project="<GCP_PROJECT_ID>", location="global")
 models = {model.name.rsplit("/", 1)[-1] for model in client.models.list()}
 assert "gemini-3.5-flash-lite" in models, sorted(models)
 print("Vertex model available: gemini-3.5-flash-lite")
@@ -45,8 +45,8 @@ remain blocked.
    the exact model on the revision metadata with:
 
    ```bash
-   gcloud run services describe gapswise-agent --region=us-central1 \
-     --project=gapwise-505217 --format='yaml(status.latestReadyRevisionName,spec.template.spec.containers[0].env)'
+   gcloud run services describe <AGENT_SERVICE> --region=<REGION> \
+     --project=<GCP_PROJECT_ID> --format='yaml(status.latestReadyRevisionName,spec.template.spec.containers[0].env)'
    ```
 
    The developer trace/source metadata is the execution proof; the revision

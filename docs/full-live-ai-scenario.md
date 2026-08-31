@@ -22,7 +22,7 @@ Use two terminals.
 Terminal 1:
 
 ```bash
-cd /home/martelaxe/gapwise
+cd /path/to/gapwise
 npm run dev:ai
 ```
 
@@ -36,7 +36,7 @@ Mode: live · gemini-3.5-flash-lite · low thinking
 Terminal 2:
 
 ```bash
-cd /home/martelaxe/gapwise
+cd /path/to/gapwise
 CONFIRM_LIVE_AI_COST=true npm run scenario:ai
 ```
 
@@ -216,4 +216,3 @@ Mark the scenario successful only when all are true:
 - [ ] Response details and Decision Map activity prove model routing safely.
 - [ ] Fallback stays functional and is labeled Project analysis.
 - [ ] No project leaks context, chats, answers, or hidden state into another project.
-

@@ -56,7 +56,6 @@ temp
 .secrets
 secrets.local
 agent-service
-write_files.py
 out
 dist
 build
