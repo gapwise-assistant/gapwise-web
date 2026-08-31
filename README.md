@@ -86,7 +86,7 @@ Every node keeps references to the source that produced it. Reconciliation check
 
 ### Retrieving context
 
-Gapwise uses a lightweight GraphRAG pipeline. RAG stands for Retrieval-Augmented Generation: Gapwise retrieves relevant project information before Gemini generates a response. The graph adds information that matters because of a dependency or consequence, even when it does not use the same words as the question.
+Gapwise uses a lightweight GraphRAG(Retrieval-Augmented Generation) pipeline. : Gapwise retrieves relevant project information before Gemini generates a response. The graph adds information that matters because of a dependency or consequence, even when it does not use the same words as the question.
 
 For each request, Gapwise:
 
