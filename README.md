@@ -259,7 +259,6 @@ AGENT_GAP_MODEL=gemini-3.7-flash
 GAPSWISE_APP_URL=http://localhost:3000
 ```
 
-Firebase browser credentials are not required on localhost. Development requests use the local `demo-user` identity. Google Calendar is optional; its OAuth values can remain unset unless the integration is being tested.
 
 ### 5. Start both services
 
@@ -323,22 +322,6 @@ gcloud builds submit . \
   --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='your-api-key',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='your-auth-domain',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='your-project-id',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='your-storage-bucket',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='your-sender-id',_NEXT_PUBLIC_FIREBASE_APP_ID='your-app-id',_GOOGLE_OAUTH_CLIENT_ID='your-oauth-client-id'
 ```
 
-Firebase Hosting normally remains unchanged because it forwards requests to the web service. Deploy it only for initial setup or after changing [`firebase.json`](./firebase.json):
-
-```bash
-npx firebase-tools deploy --only hosting --project="$GOOGLE_CLOUD_PROJECT"
-```
-
-Production values come from Cloud Build substitutions, Cloud Run environment variables, workload identity, and Secret Manager. Production does not read `.env.local`, `agent-service/.env`, downloaded OAuth credentials, or service-account JSON files.
 
 
-### Judge login
 
-Gapwise supports a pre-created Firebase email/password account for judges. There is no public sign-up flow, and the password is never stored in this repository or in Cloud Build.
-
-1. Enable **Email/Password** in Firebase Authentication.
-2. Create the judge account in Firebase Authentication and mark its email as verified.
-3. Deploy with `_GAPSWISE_JUDGE_EMAIL` set to that exact email address.
-4. Give the judges the email and password through the hackathon's private credential field.
-
-The server verifies the Firebase ID token on every request. Only the configured, verified judge email receives the existing `owner` access tier, which has no public-demo usage limits. Any other account continues to use the restricted public-demo tier.
