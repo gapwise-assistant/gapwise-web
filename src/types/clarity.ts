@@ -231,9 +231,11 @@ export interface ContextProcessingLog {
     filename: string;
     type: ContextSource['type'];
     mime_type?: string;
+    size_bytes?: number;
     content: string;
     storage_url?: string;
     hash?: string;
+    media_part_included?: boolean;
     project_snapshot: string;
   };
   stages: ContextProcessingLogStage[];

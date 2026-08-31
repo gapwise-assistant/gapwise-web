@@ -68,6 +68,8 @@ export interface IngestSourceInput {
   mimeType?: string;
   sizeBytes?: number;
   storageUrl?: string;
+  /** Fingerprint of the uploaded attachment bytes, when a source has a file. */
+  attachmentHash?: string;
   hash?: string;
   origin?: ContextSource['origin'];
   /** Describes how the text should be interpreted by semantic extraction. */
@@ -868,7 +870,7 @@ export async function ingestContextSource(
     storage_url: input.storageUrl,
     mime_type: input.mimeType,
     size_bytes: input.sizeBytes,
-    hash: input.hash ?? (await hashText(`${input.filename}:${content}`)),
+    hash: input.attachmentHash ?? input.hash ?? (await hashText(`${input.filename}:${content}`)),
     origin: input.origin ?? 'user',
     extraction_summary: input.extractionSummary ?? summarizeExtraction({ type: input.type, content }),
     error_message: input.errorMessage ?? (content ? undefined : 'No extractable text or user description was provided.'),

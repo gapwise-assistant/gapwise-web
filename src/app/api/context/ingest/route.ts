@@ -4,10 +4,13 @@ import { z } from 'zod';
 import { DEFAULT_USER_PROFILE } from '@/lib/demo/seed';
 import { DEMO_PDF_EXTRACTION } from '@/lib/demo/localFixtures';
 import { processContextSource } from '@/lib/context/contextAnalysis';
+import { validateContextAttachment } from '@/lib/context/contextAttachments';
 import { hashText, ingestContextSource, IngestSourceInput } from '@/lib/context/ingestion';
 import { isDemoMode, isLocalhostRequest } from '@/lib/runtime/demoMode';
 import { loadGeneralContext, listProjects, saveGeneralContext, saveProject } from '@/lib/storage';
-import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
+import { getContextAssetsBucket } from '@/lib/storage/assets';
+import { assertStorageUrlBelongsToUser } from '@/lib/auth/server';
+import { parseGsUrl, uploadContextSourceAsset } from '@/lib/storage/gcsAssets';
 import { StorageError } from '@/lib/storage/types';
 import { GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { Project } from '@/types/clarity';
@@ -22,6 +25,8 @@ import { scheduleAskSuggestionsRefresh } from '@/lib/ask/suggestionsScheduler';
 import { semanticProjectVersion } from '@/lib/projects/semanticVersion';
 
 export const runtime = 'nodejs';
+
+const activeContextIngestions = new Map<string, Promise<Response>>();
 
 const sourceTypeSchema = z.enum(['text', 'pdf', 'image', 'note', 'voice']);
 const profileSchema = z.object({
@@ -53,11 +58,53 @@ const jsonSourceSchema = z.object({
 
 type SourceRequest = z.infer<typeof jsonSourceSchema>;
 
+function userFacingError(error: unknown, fallback: string): string {
+  if (error instanceof StorageError) {
+    if (['UNAUTHENTICATED', 'PERMISSION_DENIED', 'NOT_FOUND', 'VALIDATION_ERROR'].includes(error.code)) {
+      return error.message;
+    }
+    return fallback;
+  }
+  return fallback;
+}
+
 function jsonError(error: unknown, status = 500, extra: Record<string, unknown> = {}) {
   return NextResponse.json({
-    error: error instanceof Error ? error.message : 'Context ingestion failed.',
+    error: userFacingError(error, 'Context ingestion failed. Please try again.'),
     ...extra,
   }, { status });
+}
+
+function assertProvidedStorageUrlIsSafe(source: SourceRequest, userId: string): void {
+  const storageUrl = source.storageUrl?.trim();
+  if (!storageUrl) return;
+
+  if (source.origin === 'connector') {
+    let parsed: URL;
+    try {
+      parsed = new URL(storageUrl);
+    } catch {
+      throw new StorageError('The connected source URL is invalid.', 'VALIDATION_ERROR');
+    }
+    if (parsed.protocol !== 'https:' || !(parsed.hostname === 'google.com' || parsed.hostname.endsWith('.google.com'))) {
+      throw new StorageError('Connected source URLs must use a Google HTTPS source.', 'VALIDATION_ERROR');
+    }
+    return;
+  }
+
+  if (isDemoMode() && storageUrl.startsWith('local-demo://')) return;
+  if (!storageUrl.startsWith('gs://')) {
+    throw new StorageError('User-provided context assets must use an authenticated gs:// URL.', 'VALIDATION_ERROR');
+  }
+  const { bucket, objectName } = parseGsUrl(storageUrl);
+  if (bucket !== getContextAssetsBucket()) {
+    throw new StorageError('The context asset bucket does not match the configured bucket.', 'VALIDATION_ERROR');
+  }
+  assertStorageUrlBelongsToUser(storageUrl, userId);
+  const expectedPrefix = `users/${encodeURIComponent(userId)}/sources/`;
+  if (!objectName.startsWith(expectedPrefix)) {
+    throw new StorageError('The requested context asset does not belong to this user.', 'PERMISSION_DENIED');
+  }
 }
 
 function statusForError(error: unknown): number {
@@ -108,7 +155,7 @@ async function parseRequest(request: Request): Promise<{
     filename: String(form.get('filename') ?? file?.name ?? '').trim(),
     content: String(form.get('content') ?? ''),
     type: String(form.get('type') ?? 'pdf') as SourceRequest['type'],
-    mimeType: String(form.get('mimeType') ?? file?.type ?? 'application/pdf').trim(),
+    mimeType: String(form.get('mimeType') ?? file?.type ?? '').trim() || undefined,
     sizeBytes: file?.size,
     origin: 'user',
     calendarSyncRunId: String(form.get('calendarSyncRunId') ?? '').trim() || undefined,
@@ -119,12 +166,25 @@ async function parseRequest(request: Request): Promise<{
   };
   const parsed = jsonSourceSchema.safeParse(source);
   if (!parsed.success) throw new StorageError('Invalid context source request.', 'VALIDATION_ERROR');
-  if (!file || parsed.data.type !== 'pdf' || file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    throw new StorageError('A PDF file is required for multipart Context uploads.', 'VALIDATION_ERROR');
-  }
+  if (!file) throw new StorageError('A file is required for this multipart Context upload.', 'VALIDATION_ERROR');
   const bytes = Buffer.from(await file.arrayBuffer());
+  const attachment = validateContextAttachment({
+    type: parsed.data.type,
+    filename: parsed.data.filename || file.name,
+    mimeType: parsed.data.mimeType || file.type,
+    bytes,
+  });
+  const content = parsed.data.content || (parsed.data.type === 'text' || parsed.data.type === 'note'
+    ? new TextDecoder().decode(bytes)
+    : '');
   return {
-    source: { ...parsed.data, hash: hashBytes(bytes), sizeBytes: bytes.length },
+    source: {
+      ...parsed.data,
+      content,
+      mimeType: attachment.mimeType,
+      hash: hashBytes(bytes),
+      sizeBytes: attachment.sizeBytes,
+    },
     file,
     bytes,
   };
@@ -140,8 +200,40 @@ export async function POST(request: Request) {
   }
 
   const userId = await requireAuthenticatedUserId(request, parsed.source.userId);
+  const lockKey = `${userId}:${parsed.source.projectId}:${parsed.source.sourceId}`;
+  const previous = activeContextIngestions.get(lockKey);
+  if (previous) await previous.catch(() => undefined);
+
+  const operation = processParsedContextRequest(request, parsed, userId, started).catch((error) => {
+    console.error('[Context ingestion] request failed', {
+      userId,
+      projectId: parsed.source.projectId,
+      sourceId: parsed.source.sourceId,
+      error,
+    });
+    return jsonError(error, statusForError(error));
+  });
+  activeContextIngestions.set(lockKey, operation);
+  try {
+    return await operation;
+  } finally {
+    if (activeContextIngestions.get(lockKey) === operation) activeContextIngestions.delete(lockKey);
+  }
+}
+
+async function processParsedContextRequest(
+  request: Request,
+  parsed: { source: SourceRequest; file?: File; bytes?: Buffer },
+  userId: string,
+  started: number,
+): Promise<Response> {
   const source = { ...parsed.source, userId };
   const profile = await loadUserMemoryProfile(userId, DEFAULT_USER_PROFILE);
+  try {
+    assertProvidedStorageUrlIsSafe(source, userId);
+  } catch (error) {
+    return jsonError(error, statusForError(error));
+  }
   let target: { project: Project; isGeneral: boolean };
   try {
     target = await loadTarget(source.userId, source.projectId);
@@ -149,13 +241,42 @@ export async function POST(request: Request) {
     return jsonError(error, statusForError(error));
   }
 
-  const computedHash = source.hash ?? await hashText(`${source.filename}:${source.content}:${source.storageUrl ?? ''}`);
-  source.hash = computedHash;
+  // `hash` identifies the submitted attachment (or the complete JSON source
+  // when there is no file). For attachments, the extraction hash also
+  // includes the optional supporting text so changing that text is a real
+  // reprocessing request rather than a duplicate.
+  const sourceHash = source.hash ?? await hashText(`${source.filename}:${source.content}:${source.storageUrl ?? ''}`);
+  const extractionHash = parsed.bytes
+    ? await hashText(`${sourceHash}:${source.content}`)
+    : sourceHash;
+  source.hash = sourceHash;
+
+  // A browser reload can lose the in-memory source ID. A failed source with
+  // the same authenticated project, type, and attachment fingerprint is the
+  // same retryable attempt, even when the client generated a new ID.
+  const retrySource = target.project.sources.find((item) =>
+    item.type === source.type &&
+    item.hash === sourceHash &&
+    item.processing_status === 'failed' &&
+    (item.id === source.sourceId || source.origin !== 'connector')
+  );
+  if (retrySource) {
+    source.sourceId = retrySource.id;
+    if (!source.storageUrl && retrySource.storage_url) source.storageUrl = retrySource.storage_url;
+    assertProvidedStorageUrlIsSafe(source, userId);
+  }
   const forceReprocess = source.forceReprocess === true && process.env.NODE_ENV !== 'production';
   const duplicate = target.project.sources.find((item) =>
     item.type === source.type &&
-    item.hash === computedHash &&
-    item.extraction_hash === computedHash &&
+    item.hash === sourceHash &&
+    (
+      item.extraction_hash === extractionHash
+      // Sources written before supporting text was included in the
+      // extraction fingerprint used the attachment hash for both fields.
+      // Preserve that retry compatibility only when no supporting text was
+      // supplied; otherwise the request must be analyzed again.
+      || (!source.content.trim() && item.extraction_hash === sourceHash)
+    ) &&
     item.processing_status === 'completed' &&
     (source.origin !== 'connector' || item.id === source.sourceId)
   );
@@ -189,16 +310,16 @@ export async function POST(request: Request) {
   }
 
   let storageUrl = source.storageUrl;
-  if (parsed.file && parsed.bytes) {
+  if (parsed.file && parsed.bytes && !storageUrl) {
     try {
       if (isDemoMode()) {
         storageUrl = `local-demo://users/${source.userId}/sources/${source.sourceId}/${source.filename}`;
       } else {
-        const uploaded = await uploadContextSourcePdf({
+        const uploaded = await uploadContextSourceAsset({
           userId: source.userId,
           sourceId: source.sourceId,
           filename: source.filename,
-          contentType: source.mimeType || 'application/pdf',
+          contentType: source.mimeType || 'application/octet-stream',
           bytes: parsed.bytes,
         });
         storageUrl = uploaded.storageUrl;
@@ -208,7 +329,7 @@ export async function POST(request: Request) {
         ...source,
         storageUrl,
         processingStatus: 'failed',
-        errorMessage: error instanceof Error ? error.message : 'PDF upload failed.',
+        errorMessage: userFacingError(error, 'The attachment could not be uploaded. Please try again.'),
       }, profile);
       await saveTarget(source.userId, failed, target.isGeneral);
       return jsonError(error, statusForError(error), { project: failed });
@@ -218,12 +339,13 @@ export async function POST(request: Request) {
   const input: IngestSourceInput = {
     sourceId: source.sourceId,
     filename: source.filename,
-    content: source.content || (parsed.file ? source.filename : ''),
+    content: source.content,
     type: source.type,
     mimeType: source.mimeType,
     sizeBytes: source.sizeBytes,
     storageUrl,
-    hash: source.hash,
+    hash: extractionHash,
+    ...(parsed.bytes ? { attachmentHash: sourceHash } : {}),
     origin: source.origin,
   };
   if (isDemoMode() && source.type === 'pdf') {
@@ -247,6 +369,10 @@ export async function POST(request: Request) {
       label: 'Gap Agent after context ingestion',
     });
     result.project = refreshed.project;
+  }
+  if (result.error) {
+    const failedSource = result.project.sources.find((item) => item.id === source.sourceId);
+    if (failedSource) failedSource.error_message = 'Context could not be analyzed right now. Please try again.';
   }
   if (!result.skipped) await saveTarget(source.userId, result.project, target.isGeneral);
   if (!target.isGeneral && semanticStateChanged && !result.skipped && !result.error) {
@@ -296,8 +422,15 @@ export async function POST(request: Request) {
   }
 
   if (result.error) {
-    return NextResponse.json({
+    const safeError = 'Context could not be analyzed right now. Please try again.';
+    console.error('[Context ingestion] model processing failed', {
+      userId: source.userId,
+      projectId: source.projectId,
+      sourceId: source.sourceId,
       error: result.error,
+    });
+    return NextResponse.json({
+      error: safeError,
       project: result.project,
       sourceId: source.sourceId,
       storageUrl,

@@ -9,11 +9,14 @@ interface ContextSourceObjectInput {
   filename: string;
 }
 
-interface UploadContextSourcePdfInput extends ContextSourceObjectInput {
+export interface UploadContextSourceAssetInput extends ContextSourceObjectInput {
   bytes: Buffer;
   contentType: string;
   storage?: Storage;
 }
+
+/** @deprecated Use UploadContextSourceAssetInput for non-PDF Context files. */
+export type UploadContextSourcePdfInput = UploadContextSourceAssetInput;
 
 interface DeleteContextSourceObjectInput {
   storageUrl: string;
@@ -35,7 +38,7 @@ function assertPathPart(value: string, label: string): string {
 
 export function sanitizeObjectFilename(filename: string): string {
   const trimmed = assertPathPart(filename, 'filename');
-  const withoutPath = trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? 'source.pdf';
+  const withoutPath = trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? 'source';
   return withoutPath.replace(/[^a-zA-Z0-9._ -]/g, '_');
 }
 
@@ -77,7 +80,7 @@ function assertUserObjectName(objectName: string, userId: string): void {
   }
 }
 
-export async function uploadContextSourcePdf(input: UploadContextSourcePdfInput): Promise<{
+export async function uploadContextSourceAsset(input: UploadContextSourceAssetInput): Promise<{
   bucket: string;
   objectName: string;
   storageUrl: string;
@@ -98,7 +101,7 @@ export async function uploadContextSourcePdf(input: UploadContextSourcePdfInput)
     });
   } catch (error) {
     throw new StorageError(
-      error instanceof Error ? `Cloud Storage PDF upload failed: ${error.message}` : 'Cloud Storage PDF upload failed.',
+      error instanceof Error ? `Cloud Storage context asset upload failed: ${error.message}` : 'Cloud Storage context asset upload failed.',
       'UNAVAILABLE'
     );
   }
@@ -108,6 +111,19 @@ export async function uploadContextSourcePdf(input: UploadContextSourcePdfInput)
     objectName,
     storageUrl: makeGsUrl(bucket, objectName),
   };
+}
+
+/**
+ * Compatibility name retained for the legacy PDF-only storage endpoint and
+ * existing demo generators. The Context ingest route uses the generic asset
+ * function above for every uploaded attachment.
+ */
+export async function uploadContextSourcePdf(input: UploadContextSourcePdfInput): Promise<{
+  bucket: string;
+  objectName: string;
+  storageUrl: string;
+}> {
+  return uploadContextSourceAsset(input);
 }
 
 export async function deleteContextSourceObject(input: DeleteContextSourceObjectInput): Promise<void> {
@@ -123,7 +139,7 @@ export async function deleteContextSourceObject(input: DeleteContextSourceObject
     await storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
   } catch (error) {
     throw new StorageError(
-      error instanceof Error ? `Cloud Storage PDF delete failed: ${error.message}` : 'Cloud Storage PDF delete failed.',
+      error instanceof Error ? `Cloud Storage context asset delete failed: ${error.message}` : 'Cloud Storage context asset delete failed.',
       'UNAVAILABLE'
     );
   }

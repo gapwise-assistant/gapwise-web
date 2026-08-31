@@ -15,6 +15,7 @@ import {
 } from '@/lib/context/ingestion';
 import { projectForReasoning } from '@/lib/context/sourceState';
 import { serializeProcessingProjectSnapshot } from '@/lib/context/processingProjectSnapshot';
+import { defaultMimeTypeForSourceType } from '@/lib/context/contextAttachments';
 import { calculateClarityScore, selectTopGap } from '@/lib/prioritization';
 import { appendContextAddedHistory, appendNextActionCompletionHistory } from '@/lib/history/projectHistory';
 import { resolveSatisfiedNextActions } from '@/lib/actions/completion';
@@ -531,6 +532,9 @@ function analysisPrompt(input: AnalyzeContextInput, project: Project): string {
     `Project goal: ${project.goal}`,
     `New source filename: ${input.filename}`,
     `New context text or user-provided description: ${input.content.trim() || '(The source is provided as a file; inspect it.)'}`,
+    ...(input.storageUrl?.startsWith('gs://') ? [
+      'A private stored attachment is also provided. Inspect the attachment itself; treat the user-provided text above only as supporting context and distinguish what is present in the file from what the user added separately.',
+    ] : []),
     'Return only structured JSON with summary, relevance, operations, and relationships.',
     'operations are the only representation of project mutations. Do not additionally return persistable extracted nodes for the same semantic content.',
     'Use ADD_CONTEXT for one explicit source-asserted KNOWN, EVIDENCE, CONSTRAINT, PREFERENCE, RISK, or ASSUMPTION proposition.',
@@ -578,11 +582,11 @@ export async function analyzeContextItem(
     ? [...fields, 'grounding']
     : fields;
   const parts: Array<Record<string, unknown>> = [];
-  if (input.storageUrl?.startsWith('gs://')) {
+  if (input.storageUrl?.startsWith('gs://') && ['pdf', 'image', 'voice'].includes(input.type)) {
     parts.push({
       fileData: {
         fileUri: input.storageUrl,
-        mimeType: input.mimeType || 'application/pdf',
+        mimeType: input.mimeType || defaultMimeTypeForSourceType(input.type),
       },
     });
   }
@@ -740,8 +744,19 @@ export async function analyzeContextItem(
   };
 }
 
-function successfulSource(source: ContextSource, hash: string): boolean {
-  return source.hash === hash && source.extraction_hash === hash && source.processing_status === 'completed';
+function successfulSource(
+  source: ContextSource,
+  extractionHash: string,
+  attachmentHash?: string,
+  hasSupportingText = false,
+): boolean {
+  if (source.processing_status !== 'completed') return false;
+  if (attachmentHash && source.hash !== attachmentHash) return false;
+  if (source.extraction_hash === extractionHash) return true;
+  // Before attachment support was added, media sources used the byte hash as
+  // both the source and extraction hash. Preserve that compatibility only for
+  // requests without supporting text.
+  return Boolean(attachmentHash && !hasSupportingText && source.extraction_hash === attachmentHash);
 }
 
 function isRepeatableCanonicalNodeType(type: ClarityNode['type']): boolean {
@@ -794,9 +809,14 @@ function createProcessingLog(project: Project, input: IngestSourceInput, hash: s
       filename: input.filename,
       type: input.type,
       mime_type: input.mimeType,
+      size_bytes: input.sizeBytes,
       content: input.content,
       storage_url: input.storageUrl,
       hash,
+      media_part_included: Boolean(
+        input.storageUrl?.startsWith('gs://')
+        && ['pdf', 'image', 'voice'].includes(input.type),
+      ),
       project_snapshot: serializeProcessingProjectSnapshot(project),
     },
     stages: [],
@@ -821,7 +841,12 @@ export async function processContextSource(
     ? createProcessingLog(project, input, hash)
     : undefined;
   if (processingLog) processingLog.started_at = new Date(processStarted).toISOString();
-  const existing = project.sources.find((source) => successfulSource(source, hash));
+  const existing = project.sources.find((source) => successfulSource(
+    source,
+    hash,
+    input.attachmentHash,
+    Boolean(input.content.trim()),
+  ));
   if (existing && !options.forceReprocess) {
     return { project, skipped: true, modelUsed: existing.model_used };
   }
@@ -846,6 +871,7 @@ export async function processContextSource(
     let updated = await ingestContextSource(project, {
       ...input,
       hash,
+      attachmentHash: input.attachmentHash,
       extractionHash: hash,
       processingStatus: input.processingStatus ?? 'completed',
       relevance: input.relevance ?? 'relevant',
@@ -922,6 +948,7 @@ export async function processContextSource(
     let updated = await ingestContextSource(project, {
       ...input,
       hash,
+      attachmentHash: input.attachmentHash,
       extractionHash: hash,
       processingStatus: 'completed',
       extractionSummary: analysis.summary,
@@ -1051,6 +1078,7 @@ export async function processContextSource(
     const failed = await ingestContextSource(project, {
       ...input,
       hash,
+      attachmentHash: input.attachmentHash,
       processingStatus: 'failed',
       errorMessage: message,
       extractionHash: undefined,

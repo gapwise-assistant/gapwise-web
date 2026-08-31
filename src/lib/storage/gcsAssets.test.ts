@@ -5,6 +5,7 @@ import {
   deleteContextSourceObjectsForUser,
   makeGsUrl,
   sanitizeObjectFilename,
+  uploadContextSourceAsset,
   uploadContextSourcePdf,
 } from '@/lib/storage/gcsAssets';
 
@@ -78,6 +79,29 @@ describe('Cloud Storage context assets', () => {
       objectName: 'users/demo-user/sources/src_pdf/brief.pdf',
       storageUrl: makeGsUrl('gapwise-505217-context', 'users/demo-user/sources/src_pdf/brief.pdf'),
     });
+  });
+
+  it('uploads non-PDF context assets with their original bytes and content type', async () => {
+    process.env.CLOUD_STORAGE_BUCKET = 'gapwise-505217-context';
+    const save = vi.fn().mockResolvedValue(undefined);
+    const file = vi.fn(() => ({ save }));
+    const bucket = vi.fn(() => ({ file }));
+    const bytes = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+
+    await uploadContextSourceAsset({
+      userId: 'demo-user',
+      sourceId: 'src_voice',
+      filename: 'note.webm',
+      contentType: 'audio/webm',
+      bytes,
+      storage: { bucket } as any,
+    });
+
+    expect(file).toHaveBeenCalledWith('users/demo-user/sources/src_voice/note.webm');
+    expect(save).toHaveBeenCalledWith(bytes, expect.objectContaining({
+      contentType: 'audio/webm',
+      public: false,
+    }));
   });
 
   it('deletes only objects from the configured bucket', async () => {

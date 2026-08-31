@@ -6,7 +6,7 @@ import { processContextSource } from '@/lib/context/contextAnalysis';
 import { refreshProjectGapRuntime } from '@/lib/agents/gapRuntime';
 import { createProjectSnapshot } from '@/lib/history/projectSnapshots';
 import { listProjects, saveProject } from '@/lib/storage';
-import { uploadContextSourcePdf } from '@/lib/storage/gcsAssets';
+import { uploadContextSourceAsset } from '@/lib/storage/gcsAssets';
 import { POST } from './route';
 
 vi.mock('@/lib/context/contextAnalysis', () => ({
@@ -28,7 +28,15 @@ vi.mock('@/lib/storage', () => ({
   saveProject: vi.fn(),
 }));
 vi.mock('@/lib/storage/gcsAssets', () => ({
-  uploadContextSourcePdf: vi.fn(),
+  uploadContextSourceAsset: vi.fn(),
+  parseGsUrl: (storageUrl: string) => {
+    const withoutScheme = storageUrl.slice('gs://'.length);
+    const slashIndex = withoutScheme.indexOf('/');
+    return {
+      bucket: withoutScheme.slice(0, slashIndex),
+      objectName: withoutScheme.slice(slashIndex + 1),
+    };
+  },
 }));
 
 function jsonRequest(body: unknown): NextRequest {
@@ -43,6 +51,7 @@ describe('POST /api/context/ingest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.GAPSWISE_DEMO_MODE = 'false';
+    process.env.CLOUD_STORAGE_BUCKET = 'gapwise-505217-context';
     vi.mocked(refreshProjectGapRuntime).mockImplementation(async ({ project }: { project: ReturnType<typeof createProjectFromInput> }) => ({
       project,
       runtime: null,
@@ -103,7 +112,7 @@ describe('POST /api/context/ingest', () => {
     const project = createProjectFromInput({ name: 'PDF project', goal: 'Understand the uploaded document.' });
     const updated = { ...project, sources: [], nodes: project.nodes };
     vi.mocked(listProjects).mockResolvedValue([project]);
-    vi.mocked(uploadContextSourcePdf).mockResolvedValue({
+    vi.mocked(uploadContextSourceAsset).mockResolvedValue({
       bucket: 'gapwise-505217-context',
       objectName: 'users/demo-user/sources/src_pdf/file.pdf',
       storageUrl: 'gs://gapwise-505217-context/users/demo-user/sources/src_pdf/file.pdf',
@@ -118,12 +127,17 @@ describe('POST /api/context/ingest', () => {
     form.set('type', 'pdf');
     form.set('content', 'Document description');
     form.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
-    form.set('file', new File(['pdf bytes'], 'file.pdf', { type: 'application/pdf' }));
+    form.set('file', new File(['%PDF-1.7\n%%EOF'], 'file.pdf', { type: 'application/pdf' }));
 
     const response = await POST(new Request('http://localhost/api/context/ingest', { method: 'POST', body: form }));
 
     expect(response.status).toBe(200);
-    expect(uploadContextSourcePdf).toHaveBeenCalledWith(expect.objectContaining({ userId: 'demo-user', sourceId: 'src_pdf' }));
+    expect(uploadContextSourceAsset).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'demo-user',
+      sourceId: 'src_pdf',
+      contentType: 'application/pdf',
+      bytes: Buffer.from('%PDF-1.7\n%%EOF'),
+    }));
     expect(processContextSource).toHaveBeenCalledWith(
       project,
       expect.objectContaining({
@@ -133,6 +147,133 @@ describe('POST /api/context/ingest', () => {
       expect.any(Object),
       expect.any(Object)
     );
+  });
+
+  it('uploads image and voice attachments with their actual bytes and MIME types', async () => {
+    const project = createProjectFromInput({ name: 'Media project', goal: 'Understand uploaded media.' });
+    const updated = { ...project, sources: [], nodes: project.nodes };
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(uploadContextSourceAsset).mockImplementation(async ({ sourceId, filename, contentType }: { sourceId: string; filename: string; contentType: string }) => ({
+      bucket: 'gapwise-505217-context',
+      objectName: `users/demo-user/sources/${sourceId}/${filename}`,
+      storageUrl: `gs://gapwise-505217-context/users/demo-user/sources/${sourceId}/${filename}`,
+    }));
+    vi.mocked(processContextSource).mockResolvedValue({ project: updated, skipped: false, modelUsed: 'gemini-test' });
+
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    ]);
+    const imageForm = new FormData();
+    imageForm.set('userId', 'demo-user');
+    imageForm.set('projectId', project.id);
+    imageForm.set('sourceId', 'src_image');
+    imageForm.set('filename', 'brief.png');
+    imageForm.set('type', 'image');
+    imageForm.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+    imageForm.set('file', new File([png], 'brief.png', { type: 'image/png' }));
+
+    expect((await POST(new Request('http://localhost/api/context/ingest', { method: 'POST', body: imageForm }))).status).toBe(200);
+    expect(uploadContextSourceAsset).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: 'src_image', contentType: 'image/png', bytes: png,
+    }));
+    expect(processContextSource).toHaveBeenCalledWith(
+      project,
+      expect.objectContaining({ type: 'image', mimeType: 'image/png', storageUrl: expect.stringContaining('/src_image/brief.png') }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    vi.clearAllMocks();
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(uploadContextSourceAsset).mockResolvedValue({
+      bucket: 'gapwise-505217-context',
+      objectName: 'users/demo-user/sources/src_voice/note.webm',
+      storageUrl: 'gs://gapwise-505217-context/users/demo-user/sources/src_voice/note.webm',
+    });
+    vi.mocked(processContextSource).mockResolvedValue({ project: updated, skipped: false, modelUsed: 'gemini-test' });
+    const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00]);
+    const voiceForm = new FormData();
+    voiceForm.set('userId', 'demo-user');
+    voiceForm.set('projectId', project.id);
+    voiceForm.set('sourceId', 'src_voice');
+    voiceForm.set('filename', 'note.webm');
+    voiceForm.set('type', 'voice');
+    voiceForm.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+    voiceForm.set('file', new File([webm], 'note.webm', { type: 'audio/webm' }));
+
+    expect((await POST(new Request('http://localhost/api/context/ingest', { method: 'POST', body: voiceForm }))).status).toBe(200);
+    expect(uploadContextSourceAsset).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: 'src_voice', contentType: 'audio/webm', bytes: webm,
+    }));
+    expect(processContextSource).toHaveBeenCalledWith(
+      project,
+      expect.objectContaining({ type: 'voice', mimeType: 'audio/webm', storageUrl: expect.stringContaining('/src_voice/note.webm') }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects corrupt media before upload or Context Agent processing', async () => {
+    const project = createProjectFromInput({ name: 'Validation project', goal: 'Validate attachments.' });
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    const form = new FormData();
+    form.set('userId', 'demo-user');
+    form.set('projectId', project.id);
+    form.set('sourceId', 'src_bad_image');
+    form.set('filename', 'brief.png');
+    form.set('type', 'image');
+    form.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+    form.set('file', new File(['not an image'], 'brief.png', { type: 'image/png' }));
+
+    const response = await POST(new Request('http://localhost/api/context/ingest', { method: 'POST', body: form }));
+
+    expect(response.status).toBe(400);
+    expect(uploadContextSourceAsset).not.toHaveBeenCalled();
+    expect(processContextSource).not.toHaveBeenCalled();
+  });
+
+  it('decodes an attached text file when no supporting text is supplied', async () => {
+    const project = createProjectFromInput({ name: 'Text upload project', goal: 'Read a text attachment.' });
+    const updated = { ...project, sources: [], nodes: project.nodes };
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(uploadContextSourceAsset).mockResolvedValue({
+      bucket: 'gapwise-505217-context',
+      objectName: 'users/demo-user/sources/src_markdown/notes.md',
+      storageUrl: 'gs://gapwise-505217-context/users/demo-user/sources/src_markdown/notes.md',
+    });
+    vi.mocked(processContextSource).mockResolvedValue({ project: updated, skipped: false, modelUsed: 'gemini-test' });
+    const form = new FormData();
+    form.set('userId', 'demo-user');
+    form.set('projectId', project.id);
+    form.set('sourceId', 'src_markdown');
+    form.set('filename', 'notes.md');
+    form.set('type', 'text');
+    form.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+    form.set('file', new File(['The actual markdown attachment.'], 'notes.md', { type: 'text/markdown' }));
+
+    expect((await POST(new Request('http://localhost/api/context/ingest', { method: 'POST', body: form }))).status).toBe(200);
+    expect(processContextSource).toHaveBeenCalledWith(
+      project,
+      expect.objectContaining({ type: 'text', content: 'The actual markdown attachment.' }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects an arbitrary non-connector storage URL', async () => {
+    const project = createProjectFromInput({ name: 'Storage project', goal: 'Keep uploaded assets private.' });
+    vi.mocked(listProjects).mockResolvedValue([project]);
+
+    const response = await POST(jsonRequest({
+      userId: 'demo-user', projectId: project.id, sourceId: 'src_external', filename: 'notes.txt',
+      type: 'text', content: 'External asset reference.', storageUrl: 'https://attacker.example/file.txt',
+    }));
+
+    expect(response.status).toBe(400);
+    expect(processContextSource).not.toHaveBeenCalled();
+    expect(saveProject).not.toHaveBeenCalled();
   });
 
   it('does not allow a user to ingest into another user project', async () => {
@@ -191,5 +332,163 @@ describe('POST /api/context/ingest', () => {
     expect(createProjectSnapshot).not.toHaveBeenCalledWith(expect.objectContaining({
       trigger: expect.objectContaining({ historyEventId: 'older-event' }),
     }));
+  });
+
+  it('reuses a failed attachment source and object when a retry arrives with a new client ID', async () => {
+    const project = createProjectFromInput({ name: 'Retry project', goal: 'Retry failed context safely.' });
+    let storedProject = project;
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    ]);
+    const failedSource = {
+      id: 'src_retry',
+      filename: 'retry.png',
+      type: 'image' as const,
+      content: 'A retryable image.',
+      extracted_at: '2026-08-30T12:00:00.000Z',
+      derived_node_ids: [],
+      processing_status: 'failed' as const,
+      storage_url: 'gs://gapwise-505217-context/users/demo-user/sources/src_retry/retry.png',
+      mime_type: 'image/png',
+      size_bytes: png.length,
+      hash: undefined,
+      error_message: 'Temporary failure',
+    };
+    vi.mocked(listProjects).mockImplementation(async () => [storedProject]);
+    vi.mocked(saveProject).mockImplementation(async (_userId, nextProject) => {
+      storedProject = nextProject;
+      return nextProject;
+    });
+    vi.mocked(uploadContextSourceAsset).mockResolvedValue({
+      bucket: 'gapwise-505217-context',
+      objectName: 'users/demo-user/sources/src_retry/retry.png',
+      storageUrl: failedSource.storage_url,
+    });
+    vi.mocked(processContextSource).mockImplementation(async (currentProject, input) => {
+      if (vi.mocked(processContextSource).mock.calls.length === 1) {
+        return {
+          project: { ...currentProject, sources: [{ ...failedSource, hash: input.attachmentHash }] },
+          skipped: false,
+          error: 'Temporary model failure',
+        };
+      }
+      return {
+        project: {
+          ...currentProject,
+          sources: [{
+            ...failedSource,
+            content: input.content,
+            processing_status: 'completed' as const,
+            hash: input.attachmentHash,
+            extraction_hash: input.hash,
+            error_message: undefined,
+            processed_at: '2026-08-30T12:01:00.000Z',
+          }],
+        },
+        skipped: false,
+        modelUsed: 'gemini-test',
+      };
+    });
+
+    const makeRequest = (sourceId: string, content: string) => {
+      const form = new FormData();
+      form.set('userId', 'demo-user');
+      form.set('projectId', project.id);
+      form.set('sourceId', sourceId);
+      form.set('filename', 'retry.png');
+      form.set('type', 'image');
+      form.set('content', content);
+      form.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+      form.set('file', new File([png], 'retry.png', { type: 'image/png' }));
+      return new Request('http://localhost/api/context/ingest', { method: 'POST', body: form });
+    };
+
+    expect((await POST(makeRequest('src_retry', 'A retryable image.'))).status).toBe(503);
+    const retryResponse = await POST(makeRequest('src_retry_after_reload', 'A retryable image.'));
+    expect(retryResponse.status).toBe(200);
+    expect(uploadContextSourceAsset).toHaveBeenCalledTimes(1);
+    expect(processContextSource).toHaveBeenCalledTimes(2);
+    expect(processContextSource).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: project.id }),
+      expect.objectContaining({
+        sourceId: 'src_retry',
+        storageUrl: failedSource.storage_url,
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(storedProject.sources).toHaveLength(1);
+    expect(storedProject.sources[0]).toMatchObject({
+      id: 'src_retry',
+      processing_status: 'completed',
+      storage_url: failedSource.storage_url,
+    });
+    expect(storedProject.sources[0].error_message).toBeUndefined();
+  });
+
+  it('serializes concurrent identical submissions so only one upload and analysis run occurs', async () => {
+    const project = createProjectFromInput({ name: 'Concurrent project', goal: 'Avoid duplicate uploads.' });
+    let storedProject = project;
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    ]);
+    vi.mocked(listProjects).mockImplementation(async () => [storedProject]);
+    vi.mocked(saveProject).mockImplementation(async (_userId, nextProject) => {
+      storedProject = nextProject;
+      return nextProject;
+    });
+    vi.mocked(uploadContextSourceAsset).mockResolvedValue({
+      bucket: 'gapwise-505217-context',
+      objectName: 'users/demo-user/sources/src_concurrent/brief.png',
+      storageUrl: 'gs://gapwise-505217-context/users/demo-user/sources/src_concurrent/brief.png',
+    });
+    vi.mocked(processContextSource).mockImplementation(async (currentProject, input) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        project: {
+          ...currentProject,
+          sources: [{
+            id: input.sourceId!,
+            filename: input.filename,
+            type: input.type,
+            content: input.content,
+            extracted_at: '2026-08-30T12:00:00.000Z',
+            derived_node_ids: [],
+            processing_status: 'completed' as const,
+            storage_url: input.storageUrl,
+            mime_type: input.mimeType,
+            size_bytes: input.sizeBytes,
+            hash: input.attachmentHash,
+            extraction_hash: input.hash,
+          }],
+        },
+        skipped: false,
+        modelUsed: 'gemini-test',
+      };
+    });
+    const makeRequest = () => {
+      const form = new FormData();
+      form.set('userId', 'demo-user');
+      form.set('projectId', project.id);
+      form.set('sourceId', 'src_concurrent');
+      form.set('filename', 'brief.png');
+      form.set('type', 'image');
+      form.set('content', 'Same submission.');
+      form.set('profile', JSON.stringify(DEFAULT_USER_PROFILE));
+      form.set('file', new File([png], 'brief.png', { type: 'image/png' }));
+      return new Request('http://localhost/api/context/ingest', { method: 'POST', body: form });
+    };
+
+    const [first, second] = await Promise.all([POST(makeRequest()), POST(makeRequest())]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(uploadContextSourceAsset).toHaveBeenCalledTimes(1);
+    expect(processContextSource).toHaveBeenCalledTimes(1);
+    expect(storedProject.sources).toHaveLength(1);
   });
 });

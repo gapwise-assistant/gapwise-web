@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, Eye, FileArchive, FileText, Image, Info, Mic, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { ContextSource, Project, UserMemoryProfile } from '@/types/clarity';
 import { discardContextSource, makeId, restoreContextSource } from '@/lib/context/ingestion';
-import { makeLocalDemoStorageUrl } from '@/lib/storage/assets';
 import { AppScope } from '@/types/scope';
 import { contextTargetForScope, GENERAL_CONTEXT_ID } from '@/lib/scope/projectScope';
 import { authFetch } from '@/lib/auth/client';
@@ -89,6 +88,11 @@ function formatProcessingLog(value: unknown): string {
   }
 }
 
+function attachmentIdentity(file: File | null): string {
+  if (!file) return 'no-attachment';
+  return [file.name, file.size, file.lastModified, file.type].join(':');
+}
+
 function learnedNodesForSource(source: ContextSource, contexts: Project[]): Project['nodes'] {
   const learnedIds = new Set(source.derived_node_ids);
   return contexts
@@ -120,6 +124,8 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
   const [targetProjectId, setTargetProjectId] = useState(GENERAL_CONTEXT_ID);
   const [selectedSource, setSelectedSource] = useState<ContextSource | null>(null);
   const sourceDetailsRef = useRef<HTMLElement | null>(null);
+  const pendingSourceIdRef = useRef<string | null>(null);
+  const pendingSubmissionKeyRef = useRef<string | null>(null);
 
   useDismissibleModal(() => setSelectedSource(null), sourceDetailsRef, Boolean(selectedSource));
 
@@ -201,18 +207,30 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
     setStatusMessage('Adding context...');
     try {
       const fileText = selectedFile ? await readFileText(selectedFile) : '';
-      const content = pasteText.trim() || fileText || (selectedFile && sourceType === 'pdf' ? selectedFile.name : '');
+      const content = pasteText.trim() || fileText;
       if (!content) {
-        setErrorMessage(
-          selectedFile
-            ? 'Add a short description, transcript, or excerpt so Gapwise can understand this source.'
-            : 'Paste some context before adding.'
-        );
-        return;
+        if (!selectedFile) setErrorMessage('Paste some context before adding.');
+        else if (sourceType === 'text' || sourceType === 'note') {
+          setErrorMessage('The selected text file is empty.');
+        }
+        // Binary attachments can be analyzed without a caption or transcript.
+        if (selectedFile && sourceType !== 'text' && sourceType !== 'note') {
+          setErrorMessage('');
+        }
+        if (!selectedFile || sourceType === 'text' || sourceType === 'note') return;
       }
 
       const name = filenameInput.trim() || selectedFile?.name || `context_${Date.now()}.txt`;
-      const sourceId = makeId('src');
+      const submissionKey = [
+        targetProject.id,
+        sourceType,
+        attachmentIdentity(selectedFile),
+      ].join(':');
+      if (!pendingSourceIdRef.current || pendingSubmissionKeyRef.current !== submissionKey) {
+        pendingSourceIdRef.current = makeId('src');
+        pendingSubmissionKeyRef.current = submissionKey;
+      }
+      const sourceId = pendingSourceIdRef.current!;
       const requestBody = {
         userId,
         projectId: targetProject.id,
@@ -222,11 +240,10 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         type: sourceType,
         mimeType: selectedFile?.type || (sourceType === 'text' || sourceType === 'note' ? 'text/plain' : undefined),
         sizeBytes: selectedFile?.size,
-        storageUrl: selectedFile && sourceType !== 'pdf' ? makeLocalDemoStorageUrl(selectedFile.name) : undefined,
         profile,
       };
       let response: Response;
-      if (selectedFile && sourceType === 'pdf') {
+      if (selectedFile) {
         const formData = new FormData();
         Object.entries(requestBody).forEach(([key, value]) => {
           if (value === undefined) return;
@@ -249,6 +266,8 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
       setFilenameInput('');
       setSelectedFile(null);
       setSourceType('text');
+      pendingSourceIdRef.current = null;
+      pendingSubmissionKeyRef.current = null;
       setStatusMessage('Context added.');
       setActiveTab(sourceType === 'pdf' || selectedFile ? 'documents' : 'recent');
     } catch (error) {
@@ -589,7 +608,13 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
               <button
                 key={option.type}
                 type="button"
-                onClick={() => setSourceType(option.type)}
+                onClick={() => {
+                  if (sourceType !== option.type) {
+                    pendingSourceIdRef.current = null;
+                    pendingSubmissionKeyRef.current = null;
+                  }
+                  setSourceType(option.type);
+                }}
                 className={`min-h-11 rounded-lg border px-2 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors sm:min-h-0 sm:h-10 ${
                   sourceType === option.type
                     ? 'border-cyan-700 bg-cyan-950 text-cyan-200'
@@ -619,15 +644,20 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
             <span className="block text-xs font-semibold text-slate-400 mb-1">File</span>
             <input
               type="file"
-              accept=".txt,.md,.pdf,image/*,audio/*"
+              accept=".txt,.md,.pdf,.jpg,.jpeg,.png,.webp,.webm,.mp3,.m4a,.mp4,.wav"
               onChange={(event) => {
                 const file = event.target.files?.[0] ?? null;
+                if (pendingSubmissionKeyRef.current && !pendingSubmissionKeyRef.current.includes(attachmentIdentity(file))) {
+                  pendingSourceIdRef.current = null;
+                  pendingSubmissionKeyRef.current = null;
+                }
                 setSelectedFile(file);
                 if (file) {
                   setFilenameInput((current) => current || file.name);
-                  if (file.type === 'application/pdf') setSourceType('pdf');
-                  else if (file.type.startsWith('image/')) setSourceType('image');
-                  else if (file.type.startsWith('audio/')) setSourceType('voice');
+                  const filename = file.name.toLowerCase();
+                  if (file.type === 'application/pdf' || filename.endsWith('.pdf')) setSourceType('pdf');
+                  else if (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/.test(filename)) setSourceType('image');
+                  else if (file.type.startsWith('audio/') || /\.(webm|mp3|m4a|mp4|wav)$/.test(filename)) setSourceType('voice');
                   else setSourceType('text');
                 }
               }}
@@ -644,18 +674,18 @@ export const ContextInbox: React.FC<ContextInboxProps> = ({
         <label className="block">
           <span className="block text-xs font-semibold text-slate-400 mb-1">
             {sourceType === 'voice'
-              ? 'Transcript or voice note summary'
+              ? 'Optional transcript or context'
               : sourceType === 'image'
-                ? 'Visible text or image description'
+                ? 'Optional image context'
                 : sourceType === 'pdf'
-                  ? 'PDF excerpt or short description'
+                  ? 'Optional document context'
                   : 'Content'}
           </span>
           <textarea
             rows={7}
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
-            placeholder="Paste notes, extracted text, a transcript, or a concise description..."
+            placeholder="Paste notes, extracted text, or optional context for the attachment..."
             className="min-h-24 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-xs placeholder-slate-500 outline-none focus:border-cyan-500"
           />
         </label>
