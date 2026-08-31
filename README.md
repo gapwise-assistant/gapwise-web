@@ -6,7 +6,9 @@ Gapwise keeps a project's facts, decisions, risks, and open questions connected.
 
 ## The problem
 
-This is Gapwise, an agentic project assistant that brings context and wisdom to the gaps in your work. It identifies which missing answer, unresolved decision, or dependency matters most right now, and explains why. You set a goal and add notes, documents, or conversations. Gemini agents organize that information into a living understanding of the project. As you answer questions and make decisions, Gapwise updates the project and recommends the next useful focus.     
+Projects now collect information from documents, conversations, research, meetings, and generated content. The difficult part is turning all that context into direction.
+
+This is what Gapwise tries to solve, an agentic project assistant that brings context and wisdom to the gaps in your work. It identifies which missing answer, unresolved decision, or dependency matters most right now, and explains why. You set a goal and add notes, documents, or conversations. Gemini agents organize that information into a living understanding of the project. As you answer questions and make decisions, Gapwise updates the project and recommends the next useful focus.     
 
 Gapwise builds a persistent project graph from that context. It uses the graph to:
 
