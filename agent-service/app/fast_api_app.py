@@ -19,13 +19,11 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
-import google.auth
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
-from google.cloud import logging as google_cloud_logging
 from google.genai import types
 from pydantic import BaseModel, Field
 
@@ -40,15 +38,24 @@ load_dotenv()
 # Never export prompt/response bodies to ADK spans. Sanitized application
 # metadata is recorded explicitly below instead.
 os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] = "false"
-_, project_id = google.auth.default()
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
-startup_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+startup_logger = logger
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _log_struct(payload: dict[str, Any], severity: str = "INFO") -> None:
+    """Write safe structured metadata through the process logger.
+
+    Cloud Run collects standard Python logs automatically. Keeping this
+    boundary local means importing the FastAPI app never needs ADC or a live
+    Google Cloud Logging client.
+    """
+    level = getattr(logging, severity.upper(), logging.INFO)
+    logger.log(level, "structured_event=%s", payload)
 
 
 class WebResearchRequest(BaseModel):
@@ -158,7 +165,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     startup_logger.info("Live ADK model policy validated: %s", policy_summary)
     # The model identifiers are safe developer metadata; do not log prompts,
     # Context Packs, credentials, or model output.
-    logger.log_struct(
+    _log_struct(
         {"event": "live_model_policy_validated", "models": policy_summary},
         severity="INFO",
     )
@@ -215,7 +222,10 @@ app: FastAPI = get_fast_api_app(
     artifact_service_uri=services.ARTIFACT_SERVICE_URI,
     allow_origins=allow_origins,
     session_service_uri=services.SESSION_SERVICE_URI,
-    otel_to_cloud=True,
+    # ADK's GCP telemetry setup calls google.auth.default() while constructing
+    # the app. Cloud Run already collects standard Python logs, so keep app
+    # import independent of ADC and leave optional tracing to runtime config.
+    otel_to_cloud=False,
     lifespan=lifespan,
 )
 app.title = "agent-service"
@@ -232,7 +242,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     Returns:
         Success message
     """
-    logger.log_struct(feedback.model_dump(), severity="INFO")
+    _log_struct(feedback.model_dump(), severity="INFO")
     return {"status": "success"}
 
 
@@ -256,7 +266,7 @@ async def assess_gap(
 
     # Safe metadata only. Prompts, graph text, Context Packs, credentials, and
     # model output are deliberately excluded from logs.
-    logger.log_struct(
+    _log_struct(
         {
             "event": "gap_agent_completed",
             **response.metadata.model_dump(),
