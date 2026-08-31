@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import NextImage from 'next/image';
 import { ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react';
 import { Project, UserMemoryProfile } from '@/types/clarity';
 import { DurableMemory } from '@/types/contextPack';
@@ -583,21 +582,9 @@ export const Today: React.FC<TodayProps> = ({ userId, project, scope, memories, 
     <div className="mx-auto max-w-[1080px] space-y-5 px-3 py-4 sm:px-6 sm:py-6">
       <div className="border-b border-slate-800 pb-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="shrink-0 rounded-xl border border-cyan-800 bg-cyan-950 p-2.5 text-cyan-300">
-              <NextImage
-                src="/icons/g-logo.png"
-                alt=""
-                width={1299}
-                height={1211}
-                className="h-6 w-6 object-contain"
-                aria-hidden="true"
-              />
-            </div>
-            <div>
-              <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
-              <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">Which gap deserves attention now</h1>
-            </div>
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-400">TODAY</p>
+            <h1 className="text-xl font-extrabold text-slate-100 sm:text-2xl">Which gap deserves attention now</h1>
           </div>
 
           <button
