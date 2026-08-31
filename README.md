@@ -86,7 +86,17 @@ Every node keeps references to the source that produced it. Reconciliation check
 
 ### Retrieving context
 
-GraphRAG starts with the nodes most relevant to a request, follows useful graph relationships, and retrieves the supporting source excerpts. The resulting Context Pack is small enough to reason over without sending the complete project history on every request.
+GraphRAG is the retrieval layer between the stored project and the agents. It combines text relevance with the relationships in the Project Graph.
+
+For each request, Gapwise:
+
+1. Finds a small set of graph nodes related to the question.
+2. Follows useful relationships such as `blocks`, `depends_on`, `informs`, and `affects`.
+3. Retrieves the original source excerpts attached to those nodes.
+4. Packages the selected nodes, relationship paths, and evidence into a bounded Context Pack.
+5. Gives that Context Pack to the appropriate agent.
+
+Plain text retrieval finds information that uses similar words. GraphRAG also finds information that matters because it is connected. This lets an agent see prerequisites, consequences, and supporting evidence without loading the complete project history.
 
 ```mermaid
 flowchart LR
@@ -98,7 +108,13 @@ flowchart LR
     GEMINI --> ANSWER["Supported answer<br/>or next focus"]
 ```
 
-This matters when the closest text is not the most useful information. For example, a pricing decision may be important, but an unresolved cost question may block it. Graph traversal lets Gapwise recommend the cost question first and retain the path back to the pricing decision.
+For example, a question about launch pricing may retrieve the pricing decision first. The graph can then show that pricing depends on an unresolved cost estimate, which is supported by a supplier document. The agent receives the full reasoning path:
+
+```text
+Supplier evidence -> unresolved cost estimate -> blocks pricing decision -> affects launch
+```
+
+This gives Ask and Today the evidence and sequence needed to explain why the cost estimate should be resolved before pricing.
 
 ## Google ADK agents
 
@@ -323,7 +339,6 @@ gcloud builds submit . \
   --config=cloudbuild.yaml \
   --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY='your-api-key',_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='your-auth-domain',_NEXT_PUBLIC_FIREBASE_PROJECT_ID='your-project-id',_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='your-storage-bucket',_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='your-sender-id',_NEXT_PUBLIC_FIREBASE_APP_ID='your-app-id',_GOOGLE_OAUTH_CLIENT_ID='your-oauth-client-id'
 ```
-
 
 
 

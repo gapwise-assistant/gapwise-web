@@ -18,7 +18,7 @@ substitutions:
   _GAP_AGENT_MODE: live
   # Optional Firebase email/password account created specifically for judges.
   # The password remains in Firebase Authentication and is never stored here.
-  _GAPSWISE_JUDGE_EMAIL: ''
+  _GAPSWISE_JUDGE_EMAIL: judge_test@gapwise.app
   _NEXT_PUBLIC_FIREBASE_API_KEY: ''
   _NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ''
   _NEXT_PUBLIC_FIREBASE_PROJECT_ID: ''

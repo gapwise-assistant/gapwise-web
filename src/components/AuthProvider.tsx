@@ -70,23 +70,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return;
               }
               setIsReady(false);
-              void authFetch('/api/auth/access')
+              void authFetch('/api/auth/access', { cache: 'no-store' })
                 .then(async (response) => {
                   if (!response.ok) throw new Error('Access configuration could not be loaded.');
                   return response.json() as Promise<{ accessTier?: AccessTier; publicDemoMessagesRemaining?: number | null }>;
                 })
                 .then((access) => {
                   if (disposed) return;
-                  const tier = access.accessTier ?? (nextUser.isAnonymous ? 'public_demo' : 'public_demo');
+                  if (!access.accessTier) throw new Error('Access tier was not returned.');
+                  const tier = access.accessTier;
                   setAccessTier(tier);
                   setPublicDemoMessagesRemaining(typeof access.publicDemoMessagesRemaining === 'number' ? access.publicDemoMessagesRemaining : null);
+                  setError('');
                   setIsReady(true);
                 })
                 .catch(() => {
                   if (disposed) return;
-                  // Fail closed in the UI; server routes remain authoritative.
-                  setAccessTier(nextUser.isAnonymous ? 'public_demo' : 'public_demo');
-                  setPublicDemoMessagesRemaining(3);
+                  // Do not guess public-demo access when the server access
+                  // decision was unavailable. Server routes remain
+                  // authoritative, and the next authenticated session can
+                  // resolve the tier again.
+                  setAccessTier(null);
+                  setPublicDemoMessagesRemaining(null);
+                  setError('Account access could not be verified.');
                   setIsReady(true);
                 });
             });

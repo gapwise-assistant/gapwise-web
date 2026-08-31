@@ -10,6 +10,8 @@ describe('production public-demo build configuration', () => {
     expect(cloudbuild).toContain('_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY:');
     expect(cloudbuild).toContain('NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY=${_NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY}');
     expect(cloudbuild).toContain('GAPSWISE_FULL_ACCESS_EMAILS=martelaxe@gmail.com');
+    expect(cloudbuild).toContain('_GAPSWISE_JUDGE_EMAIL: judge_test@gapwise.app');
+    expect(cloudbuild).toContain('GAPSWISE_JUDGE_EMAIL=${_GAPSWISE_JUDGE_EMAIL}');
     expect(cloudbuild).toContain('GAPSWISE_PUBLIC_DAILY_DEMO_LIMIT=50');
     expect(cloudbuild).toContain('GAPSWISE_PUBLIC_DAILY_ASK_LIMIT=30');
     expect(cloudbuild).toContain('FIREBASE_APPCHECK_ENABLED=false');
